@@ -106,7 +106,7 @@ POST /runs/:id/signal
 | Runtime Abstraction | `src/runtime/` | `RuntimeProvider` interface, `RustRuntimeProvider` (gRPC), `ProtoRegistryService` |
 | Events | `src/events/` | Normalization (raw→canonical), transactional persistence, SSE publishing |
 | Projection | `src/projection/` | Applies canonical events to build UI read models (versioned) |
-| Dashboard | `src/dashboard/` | Aggregated KPIs and time-series chart data |
+| Dashboard | `src/dashboard/` | Aggregated KPIs, recent runs, runtime health, and time-series chart data |
 | Insights | `src/insights/` | Export bundles, run comparison |
 | Webhooks | `src/webhooks/` | Webhook registration, HMAC delivery, retry logic |
 | Audit | `src/audit/` | Administrative action logging |
@@ -131,7 +131,7 @@ Terminal states: `completed`, `failed`, `cancelled` (no outgoing transitions).
 
 ## Database Schema
 
-11 tables: `runs`, `runtime_sessions`, `run_events_raw`, `run_events_canonical`, `run_projections`, `run_artifacts`, `run_metrics`, `run_outbound_messages`, `audit_log`, `webhooks`, `webhook_deliveries`.
+11 tables: `runs` (includes `archived_at` timestamp for archive tracking), `runtime_sessions`, `run_events_raw`, `run_events_canonical`, `run_projections`, `run_artifacts`, `run_metrics`, `run_outbound_messages`, `audit_log`, `webhooks`, `webhook_deliveries`.
 
 Key relationships:
 - All run-related tables reference `runs.id` with `ON DELETE CASCADE`

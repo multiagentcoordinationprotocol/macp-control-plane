@@ -34,7 +34,25 @@ export class DashboardChartsDto {
   @ApiProperty() errorClasses!: ChartSeriesDto;
 }
 
+export class DashboardRunSummaryDto {
+  @ApiProperty() id!: string;
+  @ApiProperty() status!: string;
+  @ApiProperty() runtimeKind!: string;
+  @ApiPropertyOptional() sourceRef?: string;
+  @ApiPropertyOptional() startedAt?: string;
+  @ApiPropertyOptional() endedAt?: string;
+  @ApiProperty() createdAt!: string;
+}
+
+export class RuntimeHealthSummaryDto {
+  @ApiProperty() ok!: boolean;
+  @ApiProperty() runtimeKind!: string;
+  @ApiPropertyOptional() detail?: string;
+}
+
 export class DashboardOverviewDto {
   @ApiProperty() kpis!: DashboardKpisDto;
+  @ApiProperty({ type: [DashboardRunSummaryDto] }) recentRuns!: DashboardRunSummaryDto[];
+  @ApiProperty() runtimeHealth!: RuntimeHealthSummaryDto;
   @ApiProperty() charts!: DashboardChartsDto;
 }

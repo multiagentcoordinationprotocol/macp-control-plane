@@ -105,6 +105,7 @@ export interface Run {
   startedAt?: string;
   endedAt?: string;
   tags?: string[];
+  archivedAt?: string | null;
   source?: {
     kind?: string;
     ref?: string;

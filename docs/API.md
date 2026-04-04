@@ -104,7 +104,7 @@ Cancel a running session. Body: `{ "reason": "optional" }`
 Clone a run with optional overrides. Body: `{ "tags": [...], "context": {...} }`
 
 ### `POST /runs/:id/archive`
-Archive a run (excluded from default listings, retrievable with `includeArchived=true`).
+Archive a run. Sets `archivedAt` timestamp and adds `'archived'` tag. Excluded from default listings (retrievable with `includeArchived=true`).
 
 ### `DELETE /runs/:id`
 Delete a terminal run (completed, failed, or cancelled only).
@@ -237,7 +237,7 @@ Export full run bundle. Query: `includeCanonical` (default true), `includeRaw` (
 ## Dashboard
 
 ### `GET /dashboard/overview`
-Aggregated KPIs and time-series chart data for the UI dashboard.
+Single aggregated endpoint for the UI dashboard — KPIs, recent runs, runtime health, and chart data.
 
 | Param | Values | Default |
 |-------|--------|---------|
@@ -247,6 +247,10 @@ Returns:
 ```json
 {
   "kpis": { "totalRuns", "activeRuns", "completedRuns", "failedRuns", "cancelledRuns", "avgDurationMs" },
+  "recentRuns": [
+    { "id", "status", "runtimeKind", "sourceRef?", "startedAt?", "endedAt?", "createdAt" }
+  ],
+  "runtimeHealth": { "ok": true, "runtimeKind": "rust", "detail?": "..." },
   "charts": {
     "runVolume": { "labels": [...], "data": [...] },
     "latency": { "labels": [...], "data": [...] },
@@ -255,6 +259,8 @@ Returns:
   }
 }
 ```
+
+The `recentRuns` array contains up to 10 latest non-archived runs. The `runtimeHealth` reflects the current runtime connection status. Packs data should be fetched separately from the Examples Service.
 
 ---
 

@@ -328,7 +328,7 @@ export class RunManagerService {
       resource: 'run',
       resourceId: runId
     });
-    return this.runRepository.addTag(runId, 'archived');
+    return this.runRepository.archive(runId);
   }
 
   async getRun(runId: string) {
