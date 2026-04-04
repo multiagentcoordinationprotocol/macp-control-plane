@@ -256,6 +256,7 @@ export class RunInsightsService {
       startedAt: row.startedAt ?? undefined,
       endedAt: row.endedAt ?? undefined,
       tags: row.tags ?? undefined,
+      archivedAt: row.archivedAt ?? null,
       source: row.sourceKind ? { kind: row.sourceKind, ref: row.sourceRef ?? undefined } : undefined,
       metadata: row.metadata ?? undefined
     };

@@ -1,23 +1,33 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import { DatabaseService } from '../db/database.service';
+import { RunRepository } from '../storage/run.repository';
+import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 
 @Injectable()
 export class DashboardService {
-  constructor(private readonly database: DatabaseService) {}
+  private readonly logger = new Logger(DashboardService.name);
+
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly runRepository: RunRepository,
+    private readonly runtimeRegistry: RuntimeProviderRegistry
+  ) {}
 
   async getOverview(range: '24h' | '7d' | '30d' = '24h') {
     const interval = range === '24h' ? '24 hours' : range === '7d' ? '7 days' : '30 days';
     const bucket = range === '24h' ? '1 hour' : '1 day';
     const cutoff = sql`now() - interval '${sql.raw(interval)}'`;
 
-    const [kpis, volumeSeries, signalSeries, errorSeries, latencyStats] =
+    const [kpis, volumeSeries, signalSeries, errorSeries, latencyStats, recentRuns, runtimeHealth] =
       await Promise.all([
         this.getKpis(cutoff),
         this.getRunVolume(cutoff, bucket),
         this.getSignalVolume(cutoff, bucket),
         this.getErrorClasses(cutoff),
-        this.getLatencyStats(cutoff)
+        this.getLatencyStats(cutoff),
+        this.getRecentRuns(),
+        this.getRuntimeHealth()
       ]);
 
     return {
@@ -25,6 +35,8 @@ export class DashboardService {
         ...kpis,
         avgDurationMs: latencyStats.avgDurationMs
       },
+      recentRuns,
+      runtimeHealth,
       charts: {
         runVolume: volumeSeries,
         latency: latencyStats.series,
@@ -55,10 +67,7 @@ export class DashboardService {
     };
   }
 
-  private async getRunVolume(
-    cutoff: ReturnType<typeof sql>,
-    bucket: string
-  ) {
+  private async getRunVolume(cutoff: ReturnType<typeof sql>, bucket: string) {
     const result = await this.database.db.execute(sql`
       SELECT
         date_trunc(${bucket}, created_at) AS bucket,
@@ -74,10 +83,7 @@ export class DashboardService {
     };
   }
 
-  private async getSignalVolume(
-    cutoff: ReturnType<typeof sql>,
-    bucket: string
-  ) {
+  private async getSignalVolume(cutoff: ReturnType<typeof sql>, bucket: string) {
     const result = await this.database.db.execute(sql`
       SELECT
         date_trunc(${bucket}, ts::timestamptz) AS bucket,
@@ -123,13 +129,50 @@ export class DashboardService {
         AND created_at >= ${cutoff}
     `);
     const avgDurationMs =
-      (result.rows[0] as Record<string, number> | undefined)?.avgDurationMs ??
-      null;
+      (result.rows[0] as Record<string, number> | undefined)?.avgDurationMs ?? null;
 
-    // Latency per bucket — return empty series for now (UI charts need it)
     return {
       avgDurationMs,
       series: { labels: [] as string[], data: [] as number[] }
     };
+  }
+
+  private async getRecentRuns() {
+    const data = await this.runRepository.list({
+      limit: 10,
+      offset: 0,
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+      includeArchived: false,
+      includeSandbox: false
+    });
+    return data.map((row) => ({
+      id: row.id,
+      status: row.status,
+      runtimeKind: row.runtimeKind,
+      sourceRef: row.sourceRef ?? undefined,
+      startedAt: row.startedAt ?? undefined,
+      endedAt: row.endedAt ?? undefined,
+      createdAt: row.createdAt
+    }));
+  }
+
+  private async getRuntimeHealth() {
+    try {
+      const kinds = this.runtimeRegistry.listKinds();
+      if (kinds.length === 0) {
+        return { ok: false, runtimeKind: 'none', detail: 'No runtime providers registered' };
+      }
+      const provider = this.runtimeRegistry.get(kinds[0]);
+      const health = await provider.health();
+      return {
+        ok: health.ok,
+        runtimeKind: health.runtimeKind ?? kinds[0],
+        detail: health.detail ?? undefined
+      };
+    } catch (err) {
+      this.logger.warn(`Runtime health check failed: ${err instanceof Error ? err.message : String(err)}`);
+      return { ok: false, runtimeKind: 'unknown', detail: 'Runtime unreachable' };
+    }
   }
 }

@@ -33,7 +33,8 @@ export const runs = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
     endedAt: timestamp('ended_at', { withTimezone: true, mode: 'string' }),
-    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    archivedAt: timestamp('archived_at', { withTimezone: true, mode: 'string' })
   },
   (table) => ({
     runtimeSessionIdx: uniqueIndex('runs_runtime_session_id_unique').on(table.runtimeSessionId),

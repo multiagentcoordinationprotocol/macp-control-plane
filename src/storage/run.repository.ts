@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, desc, eq, gt, inArray, lt, sql, SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, sql, SQL } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { RunStatus } from '../contracts/control-plane';
 import { DatabaseService } from '../db/database.service';
@@ -196,7 +196,7 @@ export class RunRepository {
       conditions.push(sql`${runs.mode} != 'sandbox'`);
     }
     if (!filters.includeArchived) {
-      conditions.push(sql`NOT (${runs.tags} @> '["archived"]'::jsonb)`);
+      conditions.push(isNull(runs.archivedAt));
     }
 
     const sortCol = filters.sortBy === 'updatedAt' ? runs.updatedAt : runs.createdAt;
@@ -230,7 +230,7 @@ export class RunRepository {
     if (filters.createdBefore) conditions.push(lt(runs.createdAt, filters.createdBefore));
     if (!filters.includeSandbox) conditions.push(sql`${runs.mode} != 'sandbox'`);
     if (!filters.includeArchived) {
-      conditions.push(sql`NOT (${runs.tags} @> '["archived"]'::jsonb)`);
+      conditions.push(isNull(runs.archivedAt));
     }
     const result = await this.database.db
       .select({ count: sql<number>`count(*)::int` })
@@ -250,6 +250,17 @@ export class RunRepository {
           updated_at = now()
       WHERE id = ${id}
       AND NOT (tags @> ${JSON.stringify([tag])}::jsonb)
+    `);
+    return this.findByIdOrThrow(id);
+  }
+
+  async archive(id: string): Promise<typeof runs.$inferSelect> {
+    await this.database.db.execute(sql`
+      UPDATE runs
+      SET tags = CASE WHEN NOT (tags @> '["archived"]'::jsonb) THEN tags || '["archived"]'::jsonb ELSE tags END,
+          archived_at = COALESCE(archived_at, now()),
+          updated_at = now()
+      WHERE id = ${id}
     `);
     return this.findByIdOrThrow(id);
   }
