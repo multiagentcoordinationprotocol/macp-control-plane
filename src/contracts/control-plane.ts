@@ -314,6 +314,10 @@ export interface MetricsSummary {
   toolCallCount: number;
   decisionCount: number;
   streamReconnectCount: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
   firstEventAt?: string;
   lastEventAt?: string;
   durationMs?: number;

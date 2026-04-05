@@ -84,7 +84,10 @@ export class RunsController {
       offset: query.offset ?? 0,
       sortBy: query.sortBy ?? 'createdAt',
       sortOrder: query.sortOrder ?? 'desc',
-      includeArchived: query.includeArchived
+      includeArchived: query.includeArchived,
+      environment: query.environment,
+      scenarioRef: query.scenarioRef,
+      search: query.search
     });
   }
 

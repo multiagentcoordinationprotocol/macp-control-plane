@@ -17,4 +17,10 @@ export class DashboardController {
   ) {
     return this.dashboardService.getOverview(query.range ?? '24h');
   }
+
+  @Get('agents/metrics')
+  @ApiOperation({ summary: 'Aggregated per-agent metrics from canonical events.' })
+  async getAgentMetrics() {
+    return this.dashboardService.getAgentMetrics();
+  }
 }

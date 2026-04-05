@@ -55,4 +55,19 @@ export class ListRunsQueryDto {
   @IsOptional()
   @Transform(({ value }) => value === 'true' || value === true)
   includeArchived?: boolean;
+
+  @ApiPropertyOptional({ description: 'Filter by environment (from run metadata)' })
+  @IsOptional()
+  @IsString()
+  environment?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by scenario ref (from run metadata, supports partial match)' })
+  @IsOptional()
+  @IsString()
+  scenarioRef?: string;
+
+  @ApiPropertyOptional({ description: 'Search across run ID, tags, scenario ref, environment' })
+  @IsOptional()
+  @IsString()
+  search?: string;
 }

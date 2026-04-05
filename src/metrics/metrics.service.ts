@@ -7,6 +7,63 @@ function safeNumber(val: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/**
+ * Extract token usage from a canonical event.
+ *
+ * Agents include token usage in message payloads or metadata using
+ * the convention:
+ *   { "tokenUsage": { "promptTokens": N, "completionTokens": N, "model": "..." } }
+ *
+ * This can appear in:
+ *   - event.data.metadata.tokenUsage (sent via POST /runs/:id/messages metadata)
+ *   - event.data.decodedPayload.tokenUsage (embedded in proto payload)
+ *   - event.data.payloadDescriptor.tokenUsage (from payload descriptor)
+ *   - event.data.tokenUsage (direct)
+ */
+function extractTokenUsage(event: CanonicalEvent): {
+  promptTokens: number;
+  completionTokens: number;
+} | null {
+  const data = event.data as Record<string, unknown>;
+
+  // Check multiple possible locations
+  const candidates = [
+    data.tokenUsage,
+    (data.metadata as Record<string, unknown> | undefined)?.tokenUsage,
+    (data.decodedPayload as Record<string, unknown> | undefined)?.tokenUsage,
+    (data.payloadDescriptor as Record<string, unknown> | undefined)?.tokenUsage
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === 'object') {
+      const usage = candidate as Record<string, unknown>;
+      const prompt = safeNumber(usage.promptTokens ?? usage.prompt_tokens);
+      const completion = safeNumber(usage.completionTokens ?? usage.completion_tokens);
+      if (prompt > 0 || completion > 0) {
+        return { promptTokens: prompt, completionTokens: completion };
+      }
+    }
+  }
+
+  return null;
+}
+
+/** Default per-model cost rates (USD per 1M tokens). Configurable via env in future. */
+const MODEL_COSTS: Record<string, { prompt: number; completion: number }> = {
+  'gpt-4o': { prompt: 2.50, completion: 10.00 },
+  'gpt-4o-mini': { prompt: 0.15, completion: 0.60 },
+  'gpt-4-turbo': { prompt: 10.00, completion: 30.00 },
+  'claude-3-opus': { prompt: 15.00, completion: 75.00 },
+  'claude-3-sonnet': { prompt: 3.00, completion: 15.00 },
+  'claude-3-haiku': { prompt: 0.25, completion: 1.25 },
+  default: { prompt: 1.00, completion: 3.00 }
+};
+
+function estimateCost(promptTokens: number, completionTokens: number, model?: string): number {
+  const rates = MODEL_COSTS[model ?? ''] ?? MODEL_COSTS.default;
+  return (promptTokens * rates.prompt + completionTokens * rates.completion) / 1_000_000;
+}
+
 @Injectable()
 export class MetricsService {
   constructor(private readonly repository: MetricsRepository) {}
@@ -21,6 +78,10 @@ export class MetricsService {
       toolCallCount: 0,
       decisionCount: 0,
       streamReconnectCount: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      estimatedCostUsd: '0',
       counters: {},
       updatedAt: new Date().toISOString()
     };
@@ -34,6 +95,10 @@ export class MetricsService {
     let toolCallCount = safeNumber(current.toolCallCount);
     let decisionCount = safeNumber(current.decisionCount);
     let streamReconnectCount = safeNumber(current.streamReconnectCount);
+    let promptTokens = safeNumber(current.promptTokens);
+    let completionTokens = safeNumber(current.completionTokens);
+    let totalTokens = safeNumber(current.totalTokens);
+    let estimatedCostUsd = safeNumber(current.estimatedCostUsd);
     let sessionState = current.sessionState as string | undefined;
 
     for (const event of events) {
@@ -48,6 +113,25 @@ export class MetricsService {
       if (event.type === 'session.stream.opened' && event.data.status === 'reconnecting') streamReconnectCount += 1;
       if (event.type === 'session.state.changed' && typeof event.data.state === 'string') {
         sessionState = event.data.state;
+      }
+
+      // Extract token usage from any event that carries it
+      const usage = extractTokenUsage(event);
+      if (usage) {
+        promptTokens += usage.promptTokens;
+        completionTokens += usage.completionTokens;
+        totalTokens += usage.promptTokens + usage.completionTokens;
+
+        // Extract model name for cost estimation
+        const data = event.data as Record<string, unknown>;
+        const model =
+          (data.tokenUsage as Record<string, unknown> | undefined)?.model ??
+          ((data.metadata as Record<string, unknown> | undefined)?.tokenUsage as Record<string, unknown> | undefined)?.model;
+        estimatedCostUsd += estimateCost(
+          usage.promptTokens,
+          usage.completionTokens,
+          model ? String(model) : undefined
+        );
       }
     }
 
@@ -64,6 +148,10 @@ export class MetricsService {
       toolCallCount,
       decisionCount,
       streamReconnectCount,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      estimatedCostUsd: String(estimatedCostUsd),
       firstEventAt,
       lastEventAt,
       durationMs,
@@ -71,38 +159,39 @@ export class MetricsService {
       counters: {}
     });
 
-    return {
-      runId,
-      eventCount: safeNumber(persisted?.eventCount ?? eventCount),
-      messageCount: safeNumber(persisted?.messageCount ?? messageCount),
-      signalCount: safeNumber(persisted?.signalCount ?? signalCount),
-      proposalCount: safeNumber(persisted?.proposalCount ?? proposalCount),
-      toolCallCount: safeNumber(persisted?.toolCallCount ?? toolCallCount),
-      decisionCount: safeNumber(persisted?.decisionCount ?? decisionCount),
-      streamReconnectCount: safeNumber(persisted?.streamReconnectCount ?? streamReconnectCount),
-      firstEventAt: persisted?.firstEventAt as string | undefined,
-      lastEventAt: persisted?.lastEventAt as string | undefined,
-      durationMs: persisted?.durationMs as number | undefined,
-      sessionState: persisted?.sessionState as MetricsSummary['sessionState']
-    };
+    return this.toSummary(runId, persisted ?? {
+      eventCount, messageCount, signalCount, proposalCount,
+      toolCallCount, decisionCount, streamReconnectCount,
+      promptTokens, completionTokens, totalTokens,
+      estimatedCostUsd: String(estimatedCostUsd),
+      firstEventAt, lastEventAt, durationMs, sessionState
+    });
   }
 
   async get(runId: string): Promise<MetricsSummary | null> {
     const persisted = await this.repository.get(runId);
     if (!persisted) return null;
+    return this.toSummary(runId, persisted);
+  }
+
+  private toSummary(runId: string, row: Record<string, unknown>): MetricsSummary {
     return {
       runId,
-      eventCount: safeNumber(persisted.eventCount),
-      messageCount: safeNumber(persisted.messageCount),
-      signalCount: safeNumber(persisted.signalCount),
-      proposalCount: safeNumber(persisted.proposalCount),
-      toolCallCount: safeNumber(persisted.toolCallCount),
-      decisionCount: safeNumber(persisted.decisionCount),
-      streamReconnectCount: safeNumber(persisted.streamReconnectCount),
-      firstEventAt: persisted.firstEventAt as string | undefined,
-      lastEventAt: persisted.lastEventAt as string | undefined,
-      durationMs: persisted.durationMs as number | undefined,
-      sessionState: persisted.sessionState as MetricsSummary['sessionState']
+      eventCount: safeNumber(row.eventCount),
+      messageCount: safeNumber(row.messageCount),
+      signalCount: safeNumber(row.signalCount),
+      proposalCount: safeNumber(row.proposalCount),
+      toolCallCount: safeNumber(row.toolCallCount),
+      decisionCount: safeNumber(row.decisionCount),
+      streamReconnectCount: safeNumber(row.streamReconnectCount),
+      promptTokens: safeNumber(row.promptTokens),
+      completionTokens: safeNumber(row.completionTokens),
+      totalTokens: safeNumber(row.totalTokens),
+      estimatedCostUsd: safeNumber(row.estimatedCostUsd),
+      firstEventAt: row.firstEventAt as string | undefined,
+      lastEventAt: row.lastEventAt as string | undefined,
+      durationMs: row.durationMs as number | undefined,
+      sessionState: row.sessionState as MetricsSummary['sessionState']
     };
   }
 }

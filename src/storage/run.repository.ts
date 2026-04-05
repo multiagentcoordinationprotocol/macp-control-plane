@@ -176,28 +176,11 @@ export class RunRepository {
     sortOrder?: 'asc' | 'desc';
     includeSandbox?: boolean;
     includeArchived?: boolean;
+    environment?: string;
+    scenarioRef?: string;
+    search?: string;
   }) {
-    const conditions: SQL[] = [];
-
-    if (filters.status) {
-      conditions.push(eq(runs.status, filters.status));
-    }
-    if (filters.tags && filters.tags.length > 0) {
-      conditions.push(sql`${runs.tags} @> ${JSON.stringify(filters.tags)}::jsonb`);
-    }
-    if (filters.createdAfter) {
-      conditions.push(gt(runs.createdAt, filters.createdAfter));
-    }
-    if (filters.createdBefore) {
-      conditions.push(lt(runs.createdAt, filters.createdBefore));
-    }
-    // Phase 3.6: Exclude sandbox runs from default listing
-    if (!filters.includeSandbox) {
-      conditions.push(sql`${runs.mode} != 'sandbox'`);
-    }
-    if (!filters.includeArchived) {
-      conditions.push(isNull(runs.archivedAt));
-    }
+    const conditions = this.buildListConditions(filters);
 
     const sortCol = filters.sortBy === 'updatedAt' ? runs.updatedAt : runs.createdAt;
     const orderFn = filters.sortOrder === 'asc' ? asc : desc;
@@ -220,7 +203,29 @@ export class RunRepository {
     createdBefore?: string;
     includeSandbox?: boolean;
     includeArchived?: boolean;
+    environment?: string;
+    scenarioRef?: string;
+    search?: string;
   }): Promise<number> {
+    const conditions = this.buildListConditions(filters);
+    const result = await this.database.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(runs)
+      .where(conditions.length > 0 ? and(...conditions) : undefined);
+    return result[0]?.count ?? 0;
+  }
+
+  private buildListConditions(filters: {
+    status?: RunStatus;
+    tags?: string[];
+    createdAfter?: string;
+    createdBefore?: string;
+    includeSandbox?: boolean;
+    includeArchived?: boolean;
+    environment?: string;
+    scenarioRef?: string;
+    search?: string;
+  }): SQL[] {
     const conditions: SQL[] = [];
     if (filters.status) conditions.push(eq(runs.status, filters.status));
     if (filters.tags && filters.tags.length > 0) {
@@ -232,11 +237,22 @@ export class RunRepository {
     if (!filters.includeArchived) {
       conditions.push(isNull(runs.archivedAt));
     }
-    const result = await this.database.db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(runs)
-      .where(conditions.length > 0 ? and(...conditions) : undefined);
-    return result[0]?.count ?? 0;
+    if (filters.environment) {
+      conditions.push(sql`${runs.metadata}->>'environment' = ${filters.environment}`);
+    }
+    if (filters.scenarioRef) {
+      conditions.push(sql`${runs.metadata}->>'scenarioRef' ILIKE ${'%' + filters.scenarioRef + '%'}`);
+    }
+    if (filters.search) {
+      const term = `%${filters.search}%`;
+      conditions.push(sql`(
+        ${runs.id}::text ILIKE ${term}
+        OR ${runs.metadata}->>'scenarioRef' ILIKE ${term}
+        OR ${runs.metadata}->>'environment' ILIKE ${term}
+        OR ${runs.tags}::text ILIKE ${term}
+      )`);
+    }
+    return conditions;
   }
 
   async delete(id: string): Promise<void> {
