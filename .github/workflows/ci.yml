@@ -7,6 +7,18 @@ on:
     branches: [main]
 
 jobs:
+  proto-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ github.token }}
+      - name: Check proto sync with BSR
+        run: bash scripts/proto-check.sh
+        env:
+          BUF_TOKEN: ${{ secrets.BUF_TOKEN }}
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -42,7 +54,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test]
+    needs: [proto-check, lint, typecheck, test]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

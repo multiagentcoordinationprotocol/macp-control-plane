@@ -25,7 +25,7 @@ export class DashboardService {
         this.getRunVolume(cutoff, bucket),
         this.getSignalVolume(cutoff, bucket),
         this.getErrorClasses(cutoff),
-        this.getLatencyStats(cutoff),
+        this.getLatencyStats(cutoff, bucket),
         this.getRecentRuns(),
         this.getRuntimeHealth()
       ]);
@@ -47,23 +47,44 @@ export class DashboardService {
   }
 
   private async getKpis(cutoff: ReturnType<typeof sql>) {
-    const result = await this.database.db.execute(sql`
-      SELECT
-        count(*)::int AS "totalRuns",
-        count(*) FILTER (WHERE status IN ('queued','starting','binding_session','running'))::int AS "activeRuns",
-        count(*) FILTER (WHERE status = 'completed')::int AS "completedRuns",
-        count(*) FILTER (WHERE status = 'failed')::int AS "failedRuns",
-        count(*) FILTER (WHERE status = 'cancelled')::int AS "cancelledRuns"
-      FROM runs
-      WHERE created_at >= ${cutoff}
-    `);
-    const row = result.rows[0] as Record<string, number>;
+    const [runResult, signalResult, tokenResult] = await Promise.all([
+      this.database.db.execute(sql`
+        SELECT
+          count(*)::int AS "totalRuns",
+          count(*) FILTER (WHERE status IN ('queued','starting','binding_session','running'))::int AS "activeRuns",
+          count(*) FILTER (WHERE status = 'completed')::int AS "completedRuns",
+          count(*) FILTER (WHERE status = 'failed')::int AS "failedRuns",
+          count(*) FILTER (WHERE status = 'cancelled')::int AS "cancelledRuns"
+        FROM runs
+        WHERE created_at >= ${cutoff}
+      `),
+      this.database.db.execute(sql`
+        SELECT count(*)::int AS "totalSignals"
+        FROM run_events_canonical
+        WHERE type = 'signal.emitted'
+          AND ts::timestamptz >= ${cutoff}
+      `),
+      this.database.db.execute(sql`
+        SELECT
+          COALESCE(SUM(total_tokens), 0)::int AS "totalTokens",
+          COALESCE(SUM(estimated_cost_usd::numeric), 0)::float AS "totalCostUsd"
+        FROM run_metrics m
+        JOIN runs r ON r.id = m.run_id
+        WHERE r.created_at >= ${cutoff}
+      `)
+    ]);
+    const row = runResult.rows[0] as Record<string, number>;
+    const signalRow = signalResult.rows[0] as Record<string, number>;
+    const tokenRow = tokenResult.rows[0] as Record<string, number>;
     return {
       totalRuns: row.totalRuns ?? 0,
       activeRuns: row.activeRuns ?? 0,
       completedRuns: row.completedRuns ?? 0,
       failedRuns: row.failedRuns ?? 0,
-      cancelledRuns: row.cancelledRuns ?? 0
+      cancelledRuns: row.cancelledRuns ?? 0,
+      totalSignals: signalRow.totalSignals ?? 0,
+      totalTokens: tokenRow.totalTokens ?? 0,
+      totalCostUsd: Math.round((tokenRow.totalCostUsd ?? 0) * 100) / 100
     };
   }
 
@@ -118,22 +139,39 @@ export class DashboardService {
     };
   }
 
-  private async getLatencyStats(cutoff: ReturnType<typeof sql>) {
-    const result = await this.database.db.execute(sql`
-      SELECT
-        avg(EXTRACT(EPOCH FROM (ended_at::timestamptz - started_at::timestamptz)) * 1000)::int AS "avgDurationMs"
-      FROM runs
-      WHERE status = 'completed'
-        AND started_at IS NOT NULL
-        AND ended_at IS NOT NULL
-        AND created_at >= ${cutoff}
-    `);
+  private async getLatencyStats(cutoff: ReturnType<typeof sql>, bucket: string) {
+    const [avgResult, seriesResult] = await Promise.all([
+      this.database.db.execute(sql`
+        SELECT
+          avg(EXTRACT(EPOCH FROM (ended_at::timestamptz - started_at::timestamptz)) * 1000)::int AS "avgDurationMs"
+        FROM runs
+        WHERE status = 'completed'
+          AND started_at IS NOT NULL
+          AND ended_at IS NOT NULL
+          AND created_at >= ${cutoff}
+      `),
+      this.database.db.execute(sql`
+        SELECT
+          date_trunc(${bucket}, ended_at::timestamptz) AS bucket,
+          avg(EXTRACT(EPOCH FROM (ended_at::timestamptz - started_at::timestamptz)) * 1000)::int AS "avgMs"
+        FROM runs
+        WHERE status = 'completed'
+          AND started_at IS NOT NULL
+          AND ended_at IS NOT NULL
+          AND created_at >= ${cutoff}
+        GROUP BY 1
+        ORDER BY 1
+      `)
+    ]);
     const avgDurationMs =
-      (result.rows[0] as Record<string, number> | undefined)?.avgDurationMs ?? null;
+      (avgResult.rows[0] as Record<string, number> | undefined)?.avgDurationMs ?? null;
 
     return {
       avgDurationMs,
-      series: { labels: [] as string[], data: [] as number[] }
+      series: {
+        labels: seriesResult.rows.map((r: any) => String(r.bucket)),
+        data: seriesResult.rows.map((r: any) => Number(r.avgMs ?? 0))
+      }
     };
   }
 
@@ -154,6 +192,30 @@ export class DashboardService {
       startedAt: row.startedAt ?? undefined,
       endedAt: row.endedAt ?? undefined,
       createdAt: row.createdAt
+    }));
+  }
+
+  async getAgentMetrics() {
+    const result = await this.database.db.execute(sql`
+      SELECT
+        subject_id AS "participantId",
+        count(DISTINCT run_id)::int AS runs,
+        count(*) FILTER (WHERE type LIKE 'message.%')::int AS messages,
+        count(*) FILTER (WHERE type = 'signal.emitted')::int AS signals,
+        avg(CASE WHEN type = 'signal.emitted' AND (data->>'confidence') IS NOT NULL
+            THEN (data->>'confidence')::numeric ELSE NULL END)::float AS "averageConfidence"
+      FROM run_events_canonical
+      WHERE subject_kind = 'participant'
+        AND subject_id IS NOT NULL
+      GROUP BY subject_id
+      ORDER BY runs DESC
+    `);
+    return result.rows.map((r: any) => ({
+      participantId: String(r.participantId),
+      runs: Number(r.runs ?? 0),
+      signals: Number(r.signals ?? 0),
+      messages: Number(r.messages ?? 0),
+      averageConfidence: r.averageConfidence != null ? Number(r.averageConfidence) : 0
     }));
   }
 

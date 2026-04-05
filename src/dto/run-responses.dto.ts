@@ -100,6 +100,18 @@ export class MetricsSummaryDto implements MetricsSummary {
   @ApiProperty()
   streamReconnectCount!: number;
 
+  @ApiProperty()
+  promptTokens!: number;
+
+  @ApiProperty()
+  completionTokens!: number;
+
+  @ApiProperty()
+  totalTokens!: number;
+
+  @ApiProperty()
+  estimatedCostUsd!: number;
+
   @ApiPropertyOptional()
   firstEventAt?: string;
 

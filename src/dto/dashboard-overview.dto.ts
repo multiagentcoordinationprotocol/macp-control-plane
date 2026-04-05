@@ -19,6 +19,9 @@ export class DashboardKpisDto {
   @ApiProperty() completedRuns!: number;
   @ApiProperty() failedRuns!: number;
   @ApiProperty() cancelledRuns!: number;
+  @ApiProperty() totalSignals!: number;
+  @ApiProperty() totalTokens!: number;
+  @ApiProperty() totalCostUsd!: number;
   @ApiPropertyOptional() avgDurationMs?: number;
 }
 

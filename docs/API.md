@@ -73,6 +73,9 @@ List runs with filtering and pagination.
 | `sortBy` | string | createdAt | `createdAt` or `updatedAt` |
 | `sortOrder` | string | desc | `asc` or `desc` |
 | `includeArchived` | boolean | false | Include archived runs |
+| `environment` | string | — | Filter by metadata environment (exact match) |
+| `scenarioRef` | string | — | Filter by metadata scenario ref (partial ILIKE match) |
+| `search` | string | — | Search across run ID, tags, scenarioRef, environment |
 
 ### `GET /runs/:id`
 Fetch the run record.
@@ -246,7 +249,10 @@ Single aggregated endpoint for the UI dashboard — KPIs, recent runs, runtime h
 Returns:
 ```json
 {
-  "kpis": { "totalRuns", "activeRuns", "completedRuns", "failedRuns", "cancelledRuns", "avgDurationMs" },
+  "kpis": {
+    "totalRuns", "activeRuns", "completedRuns", "failedRuns", "cancelledRuns",
+    "totalSignals", "totalTokens", "totalCostUsd", "avgDurationMs"
+  },
   "recentRuns": [
     { "id", "status", "runtimeKind", "sourceRef?", "startedAt?", "endedAt?", "createdAt" }
   ],
@@ -260,7 +266,23 @@ Returns:
 }
 ```
 
-The `recentRuns` array contains up to 10 latest non-archived runs. The `runtimeHealth` reflects the current runtime connection status. Packs data should be fetched separately from the Examples Service.
+The `recentRuns` array contains up to 10 latest non-archived runs. The `runtimeHealth` reflects the current runtime connection status. `totalTokens` and `totalCostUsd` are aggregated from `run_metrics` for runs in the time range. Packs data should be fetched separately from the Examples Service.
+
+### `GET /dashboard/agents/metrics`
+Aggregated per-agent metrics derived from canonical events.
+
+Returns:
+```json
+[
+  {
+    "participantId": "fraud-agent",
+    "runs": 42,
+    "messages": 100,
+    "signals": 18,
+    "averageConfidence": 0.85
+  }
+]
+```
 
 ---
 
@@ -276,7 +298,34 @@ List artifacts (trace bundles, reports, logs).
 Create an artifact: `{ "kind": "json", "label": "...", "inline": {...} }`
 
 ### `GET /runs/:id/metrics`
-Metrics summary: event count, message count, signal count, proposal count, tool call count, duration.
+Metrics summary including token usage and estimated cost:
+```json
+{
+  "runId", "eventCount", "messageCount", "signalCount", "proposalCount",
+  "toolCallCount", "decisionCount", "streamReconnectCount",
+  "promptTokens", "completionTokens", "totalTokens", "estimatedCostUsd",
+  "firstEventAt?", "lastEventAt?", "durationMs?", "sessionState?"
+}
+```
+
+**Token usage convention:** Agents include token data in message metadata:
+```json
+POST /runs/:id/messages
+{
+  "from": "fraud-agent",
+  "messageType": "Evaluation",
+  "payload": { ... },
+  "metadata": {
+    "tokenUsage": {
+      "promptTokens": 150,
+      "completionTokens": 80,
+      "model": "gpt-4o-mini"
+    }
+  }
+}
+```
+
+The control plane extracts `tokenUsage` from event data/metadata during normalization and accumulates per-run totals. Cost is estimated using built-in per-model rates.
 
 ---
 

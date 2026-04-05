@@ -192,6 +192,10 @@ export const runMetrics = pgTable(
     lastEventAt: timestamp('last_event_at', { withTimezone: true, mode: 'string' }),
     durationMs: integer('duration_ms'),
     sessionState: varchar('session_state', { length: 64 }),
+    promptTokens: integer('prompt_tokens').notNull().default(0),
+    completionTokens: integer('completion_tokens').notNull().default(0),
+    totalTokens: integer('total_tokens').notNull().default(0),
+    estimatedCostUsd: text('estimated_cost_usd').notNull().default('0'),
     counters: jsonb('counters').$type<Record<string, unknown>>().notNull().default({}),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
   },

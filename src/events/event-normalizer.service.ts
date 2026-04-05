@@ -162,6 +162,24 @@ export class EventNormalizerService implements EventNormalizer {
       );
     }
 
+    // Handle ambient Progress messages (available across all modes when runtime advertises progress capability)
+    if (envelope.messageType === 'Progress' && decoded) {
+      const progressPayload = decoded as Record<string, unknown>;
+      canonical.push(
+        this.makeEvent(runId, ts, 'progress.reported', { kind: 'participant', id: envelope.sender }, {
+          modeName: envelope.mode,
+          messageType: envelope.messageType,
+          sender: envelope.sender,
+          decodedPayload: {
+            percentage: progressPayload.progress != null ? Number(progressPayload.progress) * 100 : undefined,
+            message: String(progressPayload.message ?? ''),
+            progressToken: progressPayload.progressToken,
+            total: progressPayload.total
+          }
+        }, envelope.messageType)
+      );
+    }
+
     return canonical;
   }
 

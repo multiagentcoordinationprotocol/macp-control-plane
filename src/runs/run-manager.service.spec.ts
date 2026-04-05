@@ -8,6 +8,8 @@ import { RunEventService } from '../events/run-event.service';
 import { AuditService } from '../audit/audit.service';
 import { TraceService } from '../telemetry/trace.service';
 import { WebhookService } from '../webhooks/webhook.service';
+import { MetricsService } from '../metrics/metrics.service';
+import { EventRepository } from '../storage/event.repository';
 import { ExecutionRequest, RunStateProjection } from '../contracts/control-plane';
 
 function makeExecutionRequest(overrides?: Partial<ExecutionRequest>): ExecutionRequest {
@@ -117,6 +119,18 @@ describe('RunManagerService', () => {
           provide: WebhookService,
           useValue: {
             fireEvent: jest.fn(),
+          },
+        },
+        {
+          provide: MetricsService,
+          useValue: {
+            get: jest.fn().mockResolvedValue(null),
+          },
+        },
+        {
+          provide: EventRepository,
+          useValue: {
+            listCanonicalByRun: jest.fn().mockResolvedValue([]),
           },
         },
       ],

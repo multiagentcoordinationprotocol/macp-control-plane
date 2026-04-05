@@ -1,9 +1,11 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { ExecutionRequest, RunStateProjection } from '../contracts/control-plane';
 import { AuditService } from '../audit/audit.service';
 import { TraceService } from '../telemetry/trace.service';
 import { ProjectionService } from '../projection/projection.service';
+import { MetricsService } from '../metrics/metrics.service';
+import { EventRepository } from '../storage/event.repository';
 import { RunEventService } from '../events/run-event.service';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
@@ -11,6 +13,8 @@ import { WebhookService } from '../webhooks/webhook.service';
 
 @Injectable()
 export class RunManagerService {
+  private readonly logger = new Logger(RunManagerService.name);
+
   constructor(
     private readonly runRepository: RunRepository,
     private readonly runtimeSessionRepository: RuntimeSessionRepository,
@@ -18,7 +22,9 @@ export class RunManagerService {
     private readonly runEventService: RunEventService,
     private readonly traceService: TraceService,
     private readonly auditService: AuditService,
-    private readonly webhookService: WebhookService
+    private readonly webhookService: WebhookService,
+    private readonly metricsService: MetricsService,
+    private readonly eventRepository: EventRepository
   ) {}
 
   async createRun(request: ExecutionRequest) {
@@ -213,6 +219,7 @@ export class RunManagerService {
       status: 'completed',
       timestamp: new Date().toISOString()
     });
+    void this.enrichRunMetadata(runId, run);
     return run;
   }
 
@@ -274,6 +281,7 @@ export class RunManagerService {
       timestamp: new Date().toISOString(),
       data: { error: message }
     });
+    void this.enrichRunMetadata(runId, run);
     return run;
   }
 
@@ -287,6 +295,9 @@ export class RunManagerService {
     sortBy?: 'createdAt' | 'updatedAt';
     sortOrder?: 'asc' | 'desc';
     includeArchived?: boolean;
+    environment?: string;
+    scenarioRef?: string;
+    search?: string;
   }) {
     const limit = filters.limit ?? 50;
     const offset = filters.offset ?? 0;
@@ -298,6 +309,9 @@ export class RunManagerService {
         createdAfter: filters.createdAfter,
         createdBefore: filters.createdBefore,
         includeArchived: filters.includeArchived,
+        environment: filters.environment,
+        scenarioRef: filters.scenarioRef,
+        search: filters.search,
       }),
     ]);
     return { data, total, limit, offset };
@@ -340,5 +354,42 @@ export class RunManagerService {
   async getState(runId: string): Promise<RunStateProjection> {
     await this.getRun(runId);
     return (await this.projectionService.get(runId)) ?? this.projectionService.empty(runId);
+  }
+
+  private async enrichRunMetadata(
+    runId: string,
+    run: { startedAt?: string | null; endedAt?: string | null; metadata?: Record<string, unknown> | null }
+  ) {
+    try {
+      const [metrics, events] = await Promise.all([
+        this.metricsService.get(runId),
+        this.eventRepository.listCanonicalByRun(runId, 0, 2000)
+      ]);
+
+      const decisionEvent = [...events].reverse().find((e) => e.type === 'decision.finalized');
+      const decisionData = decisionEvent?.data as Record<string, unknown> | undefined;
+      const decodedPayload = decisionData?.decodedPayload as Record<string, unknown> | undefined;
+
+      const durationMs =
+        run.startedAt && run.endedAt
+          ? new Date(run.endedAt).getTime() - new Date(run.startedAt).getTime()
+          : metrics?.durationMs ?? undefined;
+
+      const enrichment: Record<string, unknown> = {};
+      if (durationMs !== undefined) enrichment.durationMs = durationMs;
+      if (metrics?.eventCount) enrichment.eventCount = metrics.eventCount;
+      if (metrics?.signalCount) enrichment.signalCount = metrics.signalCount;
+      if (metrics?.decisionCount) enrichment.decisionCount = metrics.decisionCount;
+      if (decodedPayload?.action) enrichment.finalAction = String(decodedPayload.action);
+      if (decodedPayload?.confidence != null) enrichment.finalConfidence = Number(decodedPayload.confidence);
+
+      if (Object.keys(enrichment).length > 0) {
+        await this.runRepository.update(runId, {
+          metadata: { ...(run.metadata ?? {}), ...enrichment }
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to enrich metadata for run ${runId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }

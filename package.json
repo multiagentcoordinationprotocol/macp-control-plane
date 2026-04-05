@@ -20,7 +20,9 @@
     "drizzle:generate": "drizzle-kit generate",
     "drizzle:migrate": "drizzle-kit migrate",
     "drizzle:studio": "drizzle-kit studio",
-    "proto:sync": "bash scripts/proto-sync.sh"
+    "proto:sync": "bash scripts/proto-sync.sh bsr",
+    "proto:sync:runtime": "bash scripts/proto-sync.sh runtime",
+    "proto:check": "bash scripts/proto-check.sh"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.0",
