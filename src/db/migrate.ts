@@ -15,6 +15,7 @@ import { Client } from 'pg';
 
 const MIGRATIONS_TABLE = '_migrations';
 
+/* eslint-disable no-console -- migration CLI uses console for progress output */
 export async function runMigrations(databaseUrl: string): Promise<void> {
   const migrationsDir = path.resolve(__dirname, '..', '..', 'drizzle');
 

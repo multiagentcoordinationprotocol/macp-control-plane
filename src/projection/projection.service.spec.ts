@@ -59,6 +59,7 @@ describe('ProjectionService', () => {
         timeline: { latestSeq: 0, totalEvents: 0, recent: [] },
         trace: { spanCount: 0, linkedArtifacts: [] },
         outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
+        policy: { policyVersion: '', commitmentEvaluations: [] },
       });
     });
   });
@@ -515,6 +516,118 @@ describe('ProjectionService', () => {
       expect(result.trace.traceId).toBe('trace-1');
       expect(result.trace.lastSpanId).toBe('span-1');
       expect(result.trace.spanCount).toBe(1);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // policy projection
+  // -----------------------------------------------------------------------
+
+  describe('applyEvents — policy', () => {
+    it('policy.resolved sets policyVersion and resolvedAt', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'policy.resolved',
+        subject: { kind: 'policy', id: 'policy.fraud.majority' },
+        data: {
+          policyVersion: 'policy.fraud.majority',
+          decodedPayload: {
+            policyVersion: 'policy.fraud.majority',
+            description: 'Majority veto policy'
+          }
+        },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.policy.policyVersion).toBe('policy.fraud.majority');
+      expect(result.policy.policyDescription).toBe('Majority veto policy');
+      expect(result.policy.resolvedAt).toBe('2026-01-01T00:00:00Z');
+    });
+
+    it('policy.commitment.evaluated appends to commitmentEvaluations', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'policy.commitment.evaluated',
+        subject: { kind: 'policy', id: 'commit-1' },
+        data: {
+          decodedPayload: {
+            commitmentId: 'commit-1',
+            decision: 'allow',
+            reasons: ['quorum met', 'no blocking objections']
+          }
+        },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.policy.commitmentEvaluations).toHaveLength(1);
+      expect(result.policy.commitmentEvaluations[0]).toEqual({
+        commitmentId: 'commit-1',
+        decision: 'allow',
+        reasons: ['quorum met', 'no blocking objections'],
+        ts: '2026-01-01T00:00:00Z'
+      });
+    });
+
+    it('policy.commitment.evaluated with deny decision', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'policy.commitment.evaluated',
+        subject: { kind: 'policy', id: 'commit-2' },
+        data: {
+          decodedPayload: {
+            commitmentId: 'commit-2',
+            decision: 'deny',
+            reasons: ['voting threshold not met: 1 of 3 required']
+          }
+        },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.policy.commitmentEvaluations).toHaveLength(1);
+      expect(result.policy.commitmentEvaluations[0].decision).toBe('deny');
+      expect(result.policy.commitmentEvaluations[0].reasons).toEqual([
+        'voting threshold not met: 1 of 3 required'
+      ]);
+    });
+
+    it('commitmentEvaluations capped at 50 entries', () => {
+      const base = service.empty('run-1');
+      // Pre-fill 50 entries
+      base.policy.commitmentEvaluations = Array.from({ length: 50 }, (_, i) => ({
+        commitmentId: `commit-${i}`,
+        decision: 'allow' as const,
+        reasons: [],
+        ts: `2026-01-01T00:${String(i).padStart(2, '0')}:00Z`
+      }));
+
+      const event = makeEvent({
+        type: 'policy.commitment.evaluated',
+        subject: { kind: 'policy', id: 'commit-new' },
+        data: {
+          decodedPayload: {
+            commitmentId: 'commit-new',
+            decision: 'deny',
+            reasons: ['cap test']
+          }
+        },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.policy.commitmentEvaluations).toHaveLength(50);
+      expect(result.policy.commitmentEvaluations[49].commitmentId).toBe('commit-new');
+    });
+
+    it('empty projection has default policy state', () => {
+      const projection = service.empty('run-1');
+
+      expect(projection.policy).toEqual({
+        policyVersion: '',
+        commitmentEvaluations: []
+      });
     });
   });
 });

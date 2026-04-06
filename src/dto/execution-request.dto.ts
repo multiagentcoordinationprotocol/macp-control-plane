@@ -10,8 +10,6 @@ import {
   IsOptional,
   IsPositive,
   IsString,
-  IsUUID,
-  Min,
   ValidateNested
 } from 'class-validator';
 import { ExecutionRequest } from '../contracts/control-plane';

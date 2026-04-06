@@ -195,6 +195,7 @@ export interface RuntimeCapabilities {
   manifest?: { getManifest?: boolean };
   modeRegistry?: { listModes?: boolean; listChanged?: boolean };
   roots?: { listRoots?: boolean; listChanged?: boolean };
+  policyRegistry?: { registerPolicy?: boolean; listPolicies?: boolean; listChanged?: boolean };
 }
 
 export interface RuntimeProvider {
@@ -216,7 +217,52 @@ export interface RuntimeProvider {
   listModes(): Promise<RuntimeModeDescriptor[]>;
   listRoots(): Promise<RuntimeRootDescriptor[]>;
   health(): Promise<RuntimeHealth>;
+
+  // Governance policy lifecycle (RFC-MACP-0012)
+  registerPolicy(req: RuntimeRegisterPolicyRequest): Promise<RuntimeRegisterPolicyResult>;
+  unregisterPolicy(req: RuntimeUnregisterPolicyRequest): Promise<RuntimeUnregisterPolicyResult>;
+  getPolicy(req: RuntimeGetPolicyRequest): Promise<RuntimePolicyDescriptor>;
+  listPolicies(req?: RuntimeListPoliciesRequest): Promise<RuntimePolicyDescriptor[]>;
 }
+
+// ── Policy types (RFC-MACP-0012) ────────────────────────────────────
+
+export interface RuntimePolicyDescriptor {
+  policyId: string;
+  mode: string;
+  description: string;
+  rules: Buffer | string;
+  schemaVersion: number;
+  registeredAt?: string;
+}
+
+export interface RuntimeRegisterPolicyRequest {
+  descriptor: RuntimePolicyDescriptor;
+}
+
+export interface RuntimeRegisterPolicyResult {
+  ok: boolean;
+  error?: string;
+}
+
+export interface RuntimeUnregisterPolicyRequest {
+  policyId: string;
+}
+
+export interface RuntimeUnregisterPolicyResult {
+  ok: boolean;
+  error?: string;
+}
+
+export interface RuntimeGetPolicyRequest {
+  policyId: string;
+}
+
+export interface RuntimeListPoliciesRequest {
+  mode?: string;
+}
+
+// ── Credential types ────────────────────────────────────────────────
 
 export interface RuntimeCredentialResolver {
   resolve(req: {

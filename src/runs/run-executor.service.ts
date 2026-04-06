@@ -155,10 +155,28 @@ export class RunExecutorService {
     });
 
     if (!sendResult.ack.ok && sendResult.ack.error) {
+      const errorCode = sendResult.ack.error.code;
+
+      // Map runtime policy errors to specific error codes
+      if (errorCode === 'POLICY_DENIED') {
+        throw new AppException(
+          ErrorCode.POLICY_DENIED,
+          `Policy denied commitment: ${sendResult.ack.error.message}`,
+          403
+        );
+      }
+      if (errorCode === 'UNKNOWN_POLICY_VERSION') {
+        throw new AppException(
+          ErrorCode.UNKNOWN_POLICY_VERSION,
+          `Unknown policy version: ${sendResult.ack.error.message}`,
+          400
+        );
+      }
+
       throw new AppException(
         ErrorCode.MESSAGE_SEND_FAILED,
-        `Runtime rejected message: [${sendResult.ack.error.code}] ${sendResult.ack.error.message}`,
-        sendResult.ack.error.code === 'INVALID_SESSION_ID' ? 400 : 502
+        `Runtime rejected message: [${errorCode}] ${sendResult.ack.error.message}`,
+        errorCode === 'INVALID_SESSION_ID' ? 400 : 502
       );
     }
 
@@ -298,7 +316,7 @@ export class RunExecutorService {
     }
     // Clear idempotency key so clone creates a new run
     if (cloned.execution) {
-      delete (cloned.execution as any).idempotencyKey;
+      delete (cloned.execution as unknown as Record<string, unknown>).idempotencyKey;
     }
 
     return this.launch(cloned);
@@ -480,6 +498,24 @@ export class RunExecutorService {
         ]);
       }
     } catch (error) {
+      // Surface policy-specific errors with appropriate error codes
+      if (error instanceof Error) {
+        const msg = error.message ?? '';
+        if (msg.includes('UNKNOWN_POLICY_VERSION')) {
+          await this.runManager.markFailed(
+            runId,
+            new AppException(ErrorCode.UNKNOWN_POLICY_VERSION, `Unknown policy version: ${msg}`, 400)
+          );
+          return;
+        }
+        if (msg.includes('POLICY_DENIED')) {
+          await this.runManager.markFailed(
+            runId,
+            new AppException(ErrorCode.POLICY_DENIED, `Policy denied: ${msg}`, 403)
+          );
+          return;
+        }
+      }
       await this.runManager.markFailed(runId, error);
     }
   }

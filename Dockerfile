@@ -7,7 +7,6 @@ RUN npm ci --ignore-scripts
 
 COPY tsconfig.json tsconfig.build.json nest-cli.json ./
 COPY src/ src/
-COPY proto/ proto/
 
 RUN npm run build
 
@@ -22,7 +21,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci --ignore-scripts --omit=dev && npm cache clean --force
 
 COPY --from=builder /app/dist dist/
-COPY proto/ proto/
+COPY --from=builder /app/node_modules/@macp/proto node_modules/@macp/proto
 COPY drizzle/ drizzle/
 
 USER appuser

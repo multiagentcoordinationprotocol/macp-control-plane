@@ -316,6 +316,250 @@ describe('EventNormalizerService', () => {
     });
   });
 
+  describe('ambient Progress messages', () => {
+    // Note: deriveEventType('Progress') returns 'progress.reported', producing a generic
+    // progress event with subject={kind:'message'}. The ambient handler adds a SECOND
+    // progress.reported with subject={kind:'participant'} when decoded is truthy.
+
+    it('should emit ambient progress.reported with participant subject when decoded', () => {
+      const decoded = { progress: 0.5, message: 'halfway there', progressToken: 'tok-1', total: 100 };
+      protoRegistry.decodeKnown.mockReturnValue(decoded);
+
+      const envelope = makeEnvelope({ messageType: 'Progress', sender: 'agent-a' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      // Two progress.reported: one from deriveEventType, one from ambient handler
+      const progressEvents = events.filter((e) => e.type === 'progress.reported');
+      expect(progressEvents.length).toBeGreaterThanOrEqual(2);
+
+      // The ambient handler event has participant subject
+      const ambientProgress = progressEvents.find((e) => e.subject?.kind === 'participant');
+      expect(ambientProgress).toBeDefined();
+      expect(ambientProgress!.subject).toEqual({ kind: 'participant', id: 'agent-a' });
+      const payload = (ambientProgress!.data as Record<string, unknown>).decodedPayload as Record<string, unknown>;
+      expect(payload.percentage).toBe(50); // 0.5 * 100
+      expect(payload.message).toBe('halfway there');
+      expect(payload.progressToken).toBe('tok-1');
+      expect(payload.total).toBe(100);
+    });
+
+    it('should handle missing progress value as undefined percentage', () => {
+      const decoded = { message: 'working on it' };
+      protoRegistry.decodeKnown.mockReturnValue(decoded);
+
+      const envelope = makeEnvelope({ messageType: 'Progress', sender: 'agent-b' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-b']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const ambientProgress = events.find(
+        (e) => e.type === 'progress.reported' && e.subject?.kind === 'participant',
+      );
+      expect(ambientProgress).toBeDefined();
+      const payload = (ambientProgress!.data as Record<string, unknown>).decodedPayload as Record<string, unknown>;
+      expect(payload.percentage).toBeUndefined();
+      expect(payload.message).toBe('working on it');
+    });
+
+    it('should default empty message to empty string', () => {
+      const decoded = { progress: 0.75 };
+      protoRegistry.decodeKnown.mockReturnValue(decoded);
+
+      const envelope = makeEnvelope({ messageType: 'Progress', sender: 'agent-a' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const ambientProgress = events.find(
+        (e) => e.type === 'progress.reported' && e.subject?.kind === 'participant',
+      );
+      expect(ambientProgress).toBeDefined();
+      const payload = (ambientProgress!.data as Record<string, unknown>).decodedPayload as Record<string, unknown>;
+      expect(payload.message).toBe('');
+    });
+
+    it('should NOT emit ambient progress when decoded is undefined (only generic derive)', () => {
+      protoRegistry.decodeKnown.mockReturnValue(undefined);
+
+      const envelope = makeEnvelope({ messageType: 'Progress', sender: 'agent-a' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      // Generic derive still produces a progress.reported with message subject
+      const genericProgress = events.filter(
+        (e) => e.type === 'progress.reported' && e.subject?.kind === 'message',
+      );
+      expect(genericProgress.length).toBeGreaterThanOrEqual(1);
+
+      // But no ambient progress with participant subject
+      const ambientProgress = events.filter(
+        (e) => e.type === 'progress.reported' && e.subject?.kind === 'participant',
+      );
+      expect(ambientProgress).toHaveLength(0);
+    });
+
+    it('should convert progress=1 to percentage=100', () => {
+      const decoded = { progress: 1.0, message: 'done' };
+      protoRegistry.decodeKnown.mockReturnValue(decoded);
+
+      const envelope = makeEnvelope({ messageType: 'Progress', sender: 'agent-a' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const ambientProgress = events.find(
+        (e) => e.type === 'progress.reported' && e.subject?.kind === 'participant',
+      );
+      expect(ambientProgress).toBeDefined();
+      const payload = (ambientProgress!.data as Record<string, unknown>).decodedPayload as Record<string, unknown>;
+      expect(payload.percentage).toBe(100);
+    });
+  });
+
+  describe('policy lifecycle events', () => {
+    it('should emit policy.resolved for PolicyResolved messageType', () => {
+      const decoded = { policyId: 'policy.fraud.majority', policyVersion: 'policy.fraud.majority', description: 'Majority veto' };
+      protoRegistry.decodeKnown.mockReturnValue(decoded);
+
+      const envelope = makeEnvelope({ messageType: 'PolicyResolved', sender: 'runtime' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['runtime']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      // Find the specific policy handler event (subject.kind === 'policy'), not the generic derived event
+      const policyEvent = events.find((e) => e.type === 'policy.resolved' && e.subject?.kind === 'policy');
+      expect(policyEvent).toBeDefined();
+      expect(policyEvent!.subject).toEqual({ kind: 'policy', id: 'policy.fraud.majority' });
+      expect(policyEvent!.data.policyVersion).toBe('policy.fraud.majority');
+    });
+
+    it('should emit policy.commitment.evaluated for PolicyCommitmentEvaluated messageType', () => {
+      const decoded = { commitmentId: 'commit-1', decision: 'allow', reasons: ['quorum met'] };
+      protoRegistry.decodeKnown.mockReturnValue(decoded);
+
+      const envelope = makeEnvelope({ messageType: 'PolicyCommitmentEvaluated', sender: 'runtime' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['runtime']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const evalEvent = events.find((e) => e.type === 'policy.commitment.evaluated' && e.subject?.kind === 'policy');
+      expect(evalEvent).toBeDefined();
+      expect(evalEvent!.subject).toEqual({ kind: 'policy', id: 'commit-1' });
+    });
+
+    it('should emit policy.denied for PolicyDenied messageType', () => {
+      const decoded = { commitmentId: 'commit-1', reason: 'quorum not met' };
+      protoRegistry.decodeKnown.mockReturnValue(decoded);
+
+      const envelope = makeEnvelope({ messageType: 'PolicyDenied', sender: 'runtime' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['runtime']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const denyEvent = events.find((e) => e.type === 'policy.denied' && e.subject?.kind === 'policy');
+      expect(denyEvent).toBeDefined();
+      expect(denyEvent!.subject).toEqual({ kind: 'policy', id: 'commit-1' });
+    });
+
+    it('should emit policy.denied from send-ack with POLICY_DENIED error code', () => {
+      const raw: RawRuntimeEvent = {
+        kind: 'send-ack',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        ack: {
+          ok: false,
+          duplicate: false,
+          messageId: 'msg-1',
+          sessionId: 'session-1',
+          acceptedAtUnixMs: Date.now(),
+          sessionState: 'SESSION_STATE_OPEN',
+          error: {
+            code: 'POLICY_DENIED',
+            message: 'Voting quorum not met: 1 of 3 required'
+          }
+        },
+      };
+      const ctx = makeContext();
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      expect(events).toHaveLength(2); // message.sent + policy.denied
+      const messageSent = events.find((e) => e.type === 'message.sent');
+      const policyDenied = events.find((e) => e.type === 'policy.denied');
+      expect(messageSent).toBeDefined();
+      expect(policyDenied).toBeDefined();
+      expect(policyDenied!.subject).toEqual({ kind: 'policy', id: 'msg-1' });
+      expect(policyDenied!.data.errorCode).toBe('POLICY_DENIED');
+    });
+
+    it('should NOT emit policy.denied from send-ack with non-policy error', () => {
+      const raw: RawRuntimeEvent = {
+        kind: 'send-ack',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        ack: {
+          ok: false,
+          duplicate: false,
+          messageId: 'msg-1',
+          sessionId: 'session-1',
+          acceptedAtUnixMs: Date.now(),
+          sessionState: 'SESSION_STATE_OPEN',
+          error: {
+            code: 'INVALID_SESSION_ID',
+            message: 'Session not found'
+          }
+        },
+      };
+      const ctx = makeContext();
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      expect(events).toHaveLength(1); // only message.sent
+      expect(events[0].type).toBe('message.sent');
+    });
+  });
+
   describe('unknown event kinds', () => {
     it('should produce message.sent for send-ack kind', () => {
       const raw: RawRuntimeEvent = {

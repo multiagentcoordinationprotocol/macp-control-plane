@@ -30,7 +30,8 @@ export class ProjectionService {
       progress: row.progress as unknown as ProgressProjection ?? { entries: [] },
       timeline: row.timeline as unknown as RunStateProjection['timeline'],
       trace: row.traceSummary as unknown as RunStateProjection['trace'],
-      outboundMessages: (row as any).outboundMessages as OutboundMessageSummary ?? { total: 0, queued: 0, accepted: 0, rejected: 0 }
+      outboundMessages: (row as unknown as Record<string, unknown>).outboundMessages as OutboundMessageSummary ?? { total: 0, queued: 0, accepted: 0, rejected: 0 },
+      policy: (row as unknown as Record<string, unknown>).policy as RunStateProjection['policy'] ?? { policyVersion: '', commitmentEvaluations: [] }
     };
   }
 
@@ -202,6 +203,26 @@ export class ProjectionService {
           next.trace.linkedArtifacts = [...new Set([...next.trace.linkedArtifacts, artifactId])];
           break;
         }
+        case 'policy.resolved': {
+          const policyPayload = event.data.decodedPayload as Record<string, unknown> | undefined;
+          next.policy.policyVersion = String(policyPayload?.policyVersion ?? event.data.policyVersion ?? '');
+          next.policy.policyDescription = String(policyPayload?.description ?? '');
+          next.policy.resolvedAt = event.ts;
+          break;
+        }
+        case 'policy.commitment.evaluated': {
+          const evalPayload = event.data.decodedPayload as Record<string, unknown> | undefined;
+          next.policy.commitmentEvaluations = [
+            ...next.policy.commitmentEvaluations,
+            {
+              commitmentId: String(evalPayload?.commitmentId ?? event.subject?.id ?? ''),
+              decision: (evalPayload?.decision as 'allow' | 'deny') ?? 'allow',
+              reasons: (evalPayload?.reasons as string[]) ?? [],
+              ts: event.ts
+            }
+          ].slice(-50);
+          break;
+        }
         default:
           break;
       }
@@ -232,7 +253,8 @@ export class ProjectionService {
       progress: { entries: [] },
       timeline: { latestSeq: 0, totalEvents: 0, recent: [] },
       trace: { spanCount: 0, linkedArtifacts: [] },
-      outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 }
+      outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
+      policy: { policyVersion: '', commitmentEvaluations: [] }
     };
   }
 

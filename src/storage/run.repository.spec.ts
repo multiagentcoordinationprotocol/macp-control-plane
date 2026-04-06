@@ -1,28 +1,11 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { RunRepository } from './run.repository';
+import { RunStatus } from '../contracts/control-plane';
 import { DatabaseService } from '../db/database.service';
 
 // ---------------------------------------------------------------------------
 // Helpers: build a mock Drizzle fluent-API chain
 // ---------------------------------------------------------------------------
-function mockChain(terminal: jest.Mock) {
-  const chain: Record<string, jest.Mock> = {};
-  const handler: ProxyHandler<Record<string, jest.Mock>> = {
-    get(_target, prop: string) {
-      if (prop === 'then') return undefined; // prevent Promise-duck-typing
-      if (!chain[prop]) {
-        chain[prop] = jest.fn().mockReturnValue(new Proxy({}, handler));
-      }
-      return chain[prop];
-    }
-  };
-  // The very last method in the chain should resolve to `terminal`'s return.
-  // We achieve this by making every method return a Proxy *and* be thenable
-  // via `terminal`.
-  const proxy = new Proxy({}, handler);
-  return { proxy, chain, terminal };
-}
-
 function makeMockDb() {
   const insertValues = jest.fn().mockResolvedValue(undefined);
   const insertFn = jest.fn().mockReturnValue({ values: insertValues });
@@ -242,6 +225,50 @@ describe('RunRepository', () => {
 
       const result = await repo.markCompleted('run-1');
       expect(result).toEqual(fakeRun);
+    });
+  });
+
+  // ------ buildListConditions (via listCount) ------
+  describe('buildListConditions', () => {
+    function mockSelect(count: number) {
+      const selectChain = {
+        from: jest.fn().mockReturnValue({
+          where: jest.fn().mockResolvedValue([{ count }])
+        })
+      };
+      // listCount uses db.select().from().where() — add select to the mock
+      Object.assign(mockDb, { select: jest.fn().mockReturnValue(selectChain) });
+      return selectChain;
+    }
+
+    it('builds conditions for environment filter', async () => {
+      const chain = mockSelect(5);
+      const count = await repo.listCount({ environment: 'production' });
+      expect(count).toBe(5);
+      expect(chain.from).toHaveBeenCalled();
+    });
+
+    it('builds conditions for scenarioRef filter', async () => {
+      mockSelect(3);
+      const count = await repo.listCount({ scenarioRef: 'fraud-detection' });
+      expect(count).toBe(3);
+    });
+
+    it('builds conditions for search filter', async () => {
+      mockSelect(2);
+      const count = await repo.listCount({ search: 'agent-123' });
+      expect(count).toBe(2);
+    });
+
+    it('builds conditions for combined filters', async () => {
+      mockSelect(1);
+      const count = await repo.listCount({
+        status: 'completed' as RunStatus,
+        environment: 'staging',
+        scenarioRef: 'decision',
+        search: 'test'
+      });
+      expect(count).toBe(1);
     });
   });
 

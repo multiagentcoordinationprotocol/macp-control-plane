@@ -8,7 +8,7 @@ export class RequestLoggerMiddleware implements NestMiddleware {
   use(req: Request, res: Response, next: NextFunction): void {
     const start = Date.now();
     const { method, originalUrl } = req;
-    const requestId = (req as any).requestId ?? '-';
+    const requestId = (req as unknown as Record<string, unknown>).requestId ?? '-';
 
     res.on('finish', () => {
       const duration = Date.now() - start;

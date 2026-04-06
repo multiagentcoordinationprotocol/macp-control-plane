@@ -28,6 +28,7 @@ describe('RunEventService', () => {
     timeline: { latestSeq: 1, totalEvents: 1, recent: [] },
     trace: { spanCount: 0, linkedArtifacts: [] },
     outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
+    policy: { policyVersion: '', commitmentEvaluations: [] },
   };
 
   beforeEach(() => {

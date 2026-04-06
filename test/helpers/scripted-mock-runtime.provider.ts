@@ -5,14 +5,19 @@ import {
   RuntimeAck,
   RuntimeCancelResult,
   RuntimeCancelSessionRequest,
+  RuntimeGetPolicyRequest,
   RuntimeGetSessionRequest,
   RuntimeHealth,
   RuntimeInitializeRequest,
   RuntimeInitializeResult,
+  RuntimeListPoliciesRequest,
   RuntimeManifestResult,
   RuntimeModeDescriptor,
   RuntimeOpenSessionRequest,
+  RuntimePolicyDescriptor,
   RuntimeProvider,
+  RuntimeRegisterPolicyRequest,
+  RuntimeRegisterPolicyResult,
   RuntimeRootDescriptor,
   RuntimeSendRequest,
   RuntimeSendResult,
@@ -20,7 +25,9 @@ import {
   RuntimeSessionSnapshot,
   RuntimeStartSessionRequest,
   RuntimeStartSessionResult,
-  RuntimeStreamSessionRequest
+  RuntimeStreamSessionRequest,
+  RuntimeUnregisterPolicyRequest,
+  RuntimeUnregisterPolicyResult
 } from '../../src/contracts/runtime';
 
 export interface ScriptedEvent {
@@ -57,6 +64,7 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
   private sessionState: SessionState = 'SESSION_STATE_OPEN';
   private pendingTriggerEvents: ScriptedEvent[] = [];
   private eventEmitter: ((event: RawRuntimeEvent) => void) | null = null;
+  private policies = new Map<string, RuntimePolicyDescriptor>();
 
   constructor(script: RuntimeScript) {
     this.script = script;
@@ -343,6 +351,35 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
       runtimeKind: this.kind,
       detail: 'scripted mock runtime always healthy'
     };
+  }
+
+  async registerPolicy(req: RuntimeRegisterPolicyRequest): Promise<RuntimeRegisterPolicyResult> {
+    this.policies.set(req.descriptor.policyId, {
+      ...req.descriptor,
+      registeredAt: new Date().toISOString()
+    });
+    return { ok: true };
+  }
+
+  async unregisterPolicy(req: RuntimeUnregisterPolicyRequest): Promise<RuntimeUnregisterPolicyResult> {
+    this.policies.delete(req.policyId);
+    return { ok: true };
+  }
+
+  async getPolicy(req: RuntimeGetPolicyRequest): Promise<RuntimePolicyDescriptor> {
+    const policy = this.policies.get(req.policyId);
+    if (!policy) {
+      return { policyId: req.policyId, mode: '', description: 'not found', rules: Buffer.from('{}'), schemaVersion: 0 };
+    }
+    return policy;
+  }
+
+  async listPolicies(req?: RuntimeListPoliciesRequest): Promise<RuntimePolicyDescriptor[]> {
+    const all = Array.from(this.policies.values());
+    if (req?.mode) {
+      return all.filter((p) => p.mode === req.mode || p.mode === '*');
+    }
+    return all;
   }
 
   private makeAck(sessionId: string, messageId?: string): RuntimeAck {

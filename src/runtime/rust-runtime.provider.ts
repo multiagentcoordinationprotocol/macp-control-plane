@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- gRPC dynamic proto loading returns untyped objects */
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
@@ -26,7 +27,14 @@ import {
   RuntimeSessionSnapshot,
   RuntimeStartSessionRequest,
   RuntimeStartSessionResult,
-  RuntimeStreamSessionRequest
+  RuntimeStreamSessionRequest,
+  RuntimeRegisterPolicyRequest,
+  RuntimeRegisterPolicyResult,
+  RuntimeUnregisterPolicyRequest,
+  RuntimeUnregisterPolicyResult,
+  RuntimeGetPolicyRequest,
+  RuntimeListPoliciesRequest,
+  RuntimePolicyDescriptor
 } from '../contracts/runtime';
 import { AppException } from '../errors/app-exception';
 import { ErrorCode } from '../errors/error-codes';
@@ -65,11 +73,12 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       resetTimeoutMs: this.config.runtimeCircuitBreakerResetMs
     });
 
-    const repoRoot = path.resolve(__dirname, '..', '..');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { protoDir } = require('@macp/proto');
     const packageDefinition = protoLoader.loadSync(
       [
-        path.join(repoRoot, 'proto/macp/v1/core.proto'),
-        path.join(repoRoot, 'proto/macp/v1/envelope.proto')
+        path.join(protoDir, 'macp/v1/core.proto'),
+        path.join(protoDir, 'macp/v1/envelope.proto')
       ],
       {
         keepCase: false,
@@ -77,7 +86,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         enums: String,
         defaults: true,
         oneofs: true,
-        includeDirs: [path.join(repoRoot, 'proto')]
+        includeDirs: [protoDir]
       }
     );
     const descriptor = grpc.loadPackageDefinition(packageDefinition) as any;
@@ -521,6 +530,52 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         detail: error instanceof Error ? error.message : 'runtime unavailable'
       };
     }
+  }
+
+  // ── Governance policy lifecycle (RFC-MACP-0012) ──────────────────
+
+  async registerPolicy(req: RuntimeRegisterPolicyRequest): Promise<RuntimeRegisterPolicyResult> {
+    const descriptor = req.descriptor;
+    const response = await this.unary('RegisterPolicy', {
+      descriptor: {
+        policyId: descriptor.policyId,
+        mode: descriptor.mode,
+        description: descriptor.description,
+        rules: typeof descriptor.rules === 'string' ? Buffer.from(descriptor.rules) : descriptor.rules,
+        schemaVersion: descriptor.schemaVersion
+      }
+    });
+    return { ok: response.ok ?? false, error: response.error || undefined };
+  }
+
+  async unregisterPolicy(req: RuntimeUnregisterPolicyRequest): Promise<RuntimeUnregisterPolicyResult> {
+    const response = await this.unary('UnregisterPolicy', { policyId: req.policyId });
+    return { ok: response.ok ?? false, error: response.error || undefined };
+  }
+
+  async getPolicy(req: RuntimeGetPolicyRequest): Promise<RuntimePolicyDescriptor> {
+    const response = await this.unary('GetPolicy', { policyId: req.policyId });
+    const d = response.descriptor;
+    return {
+      policyId: d.policyId,
+      mode: d.mode,
+      description: d.description,
+      rules: d.rules,
+      schemaVersion: d.schemaVersion ?? 1,
+      registeredAt: d.registeredAt
+    };
+  }
+
+  async listPolicies(req?: RuntimeListPoliciesRequest): Promise<RuntimePolicyDescriptor[]> {
+    const response = await this.unary('ListPolicies', { mode: req?.mode ?? '' });
+    return (response.descriptors ?? []).map((d: any) => ({
+      policyId: d.policyId,
+      mode: d.mode,
+      description: d.description,
+      rules: d.rules,
+      schemaVersion: d.schemaVersion ?? 1,
+      registeredAt: d.registeredAt
+    }));
   }
 
   private async unary(

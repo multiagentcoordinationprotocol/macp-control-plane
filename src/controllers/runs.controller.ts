@@ -342,7 +342,7 @@ export class RunsController {
   async rebuildProjection(@Param('id', new ParseUUIDPipe()) id: string) {
     await this.runManager.getRun(id);
     const events = await this.eventRepository.listCanonicalByRun(id, 0, 100000);
-    return this.projectionService.rebuild(id, events as any);
+    return this.projectionService.rebuild(id, events as unknown as CanonicalEvent[]);
   }
 
   @Post(':id/archive')
