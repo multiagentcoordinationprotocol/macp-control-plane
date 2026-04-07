@@ -179,6 +179,13 @@ export class RunExecutorService {
           400
         );
       }
+      if (errorCode === 'SESSION_ALREADY_EXISTS') {
+        throw new AppException(
+          ErrorCode.SESSION_ALREADY_EXISTS,
+          `Session already exists: ${sendResult.ack.error.message}`,
+          409
+        );
+      }
 
       throw new AppException(
         ErrorCode.MESSAGE_SEND_FAILED,
@@ -526,6 +533,13 @@ export class RunExecutorService {
           await this.runManager.markFailed(
             runId,
             new AppException(ErrorCode.INVALID_POLICY_DEFINITION, `Invalid policy definition: ${msg}`, 400)
+          );
+          return;
+        }
+        if (msg.includes('SESSION_ALREADY_EXISTS') || msg.includes('SessionAlreadyExists')) {
+          await this.runManager.markFailed(
+            runId,
+            new AppException(ErrorCode.SESSION_ALREADY_EXISTS, `Session already exists: ${msg}`, 409)
           );
           return;
         }

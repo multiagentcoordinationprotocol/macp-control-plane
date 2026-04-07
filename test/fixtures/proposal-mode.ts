@@ -15,6 +15,7 @@ export function proposalModeRequest(
       modeName: 'macp.mode.proposal.v1',
       modeVersion: '1.0.0',
       configurationVersion: '1.0.0',
+      policyVersion: 'policy.default',
       ttlMs: 60000,
       participants: [
         { id: 'author', role: 'author' },
@@ -63,7 +64,7 @@ export function proposalAcceptScript(): RuntimeScript {
           'macp.mode.proposal.v1',
           'Commitment',
           'system',
-          { proposalId: 'prop-1', outcome: 'accepted', finalized: true }
+          { proposalId: 'prop-1', outcome: 'accepted', finalized: true, outcome_positive: true }
         )
       }
     ]
@@ -105,7 +106,7 @@ export function proposalCounterScript(): RuntimeScript {
           'macp.mode.proposal.v1',
           'Commitment',
           'system',
-          { proposalId: 'prop-2', outcome: 'accepted', finalized: true }
+          { proposalId: 'prop-2', outcome: 'accepted', finalized: true, outcome_positive: true }
         )
       }
     ]

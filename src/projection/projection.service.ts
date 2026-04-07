@@ -180,9 +180,16 @@ export class ProjectionService {
             confidence: safeOptionalNumber(payload?.confidence) ?? next.decision.current?.confidence,
             reasons: [String(payload?.reason ?? 'Commitment observed')],
             finalized: true,
-            proposalId: String(payload?.commitmentId ?? next.decision.current?.proposalId ?? '')
+            proposalId: String(payload?.commitmentId ?? next.decision.current?.proposalId ?? ''),
+            outcomePositive: payload?.outcomePositive != null
+              ? Boolean(payload.outcomePositive)
+              : payload?.outcome_positive != null
+                ? Boolean(payload.outcome_positive)
+                : true
           };
           next.run.status = 'completed';
+          // Propagate outcomePositive to policy projection
+          next.policy.outcomePositive = next.decision.current.outcomePositive;
           break;
         }
         case 'progress.reported': {

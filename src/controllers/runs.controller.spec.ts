@@ -285,6 +285,7 @@ describe('RunsController', () => {
         to: ['agent-2'],
         messageType: 'Signal',
         payload: { data: 'test' },
+        signalType: 'alert',
       };
       const result = await controller.sendSignal('run-1', body as any);
 

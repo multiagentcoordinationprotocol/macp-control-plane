@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -296,6 +297,10 @@ export class RunsController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ValidationPipe({ transform: true, whitelist: true })) body: SendSignalDto
   ) {
+    // Runtime requires non-empty signal_type when payload is present
+    if (body.payload && Object.keys(body.payload).length > 0 && !body.signalType) {
+      throw new BadRequestException('signalType is required when payload is non-empty');
+    }
     return this.runExecutor.sendSignal(id, body);
   }
 

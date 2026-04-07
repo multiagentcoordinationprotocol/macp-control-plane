@@ -356,7 +356,7 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
   async registerPolicy(req: RuntimeRegisterPolicyRequest): Promise<RuntimeRegisterPolicyResult> {
     this.policies.set(req.descriptor.policyId, {
       ...req.descriptor,
-      registeredAt: new Date().toISOString()
+      registeredAtUnixMs: Date.now()
     });
     return { ok: true };
   }

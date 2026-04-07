@@ -78,7 +78,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     const packageDefinition = protoLoader.loadSync(
       [
         path.join(protoDir, 'macp/v1/core.proto'),
-        path.join(protoDir, 'macp/v1/envelope.proto')
+        path.join(protoDir, 'macp/v1/envelope.proto'),
+        path.join(protoDir, 'macp/v1/policy.proto')
       ],
       {
         keepCase: false,
@@ -280,10 +281,34 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         grpcCall = streamMethod.call(this.client, metadata);
 
         grpcCall.on('data', (chunk: any) => {
-          const envelope = this.fromEnvelope(chunk.envelope);
+          const receivedAt = new Date().toISOString();
+
+          // StreamSessionResponse oneof: response.envelope | response.error
+          const responseBody = chunk.response ?? chunk;
+          if (responseBody.error) {
+            // Inline MACPError — non-terminal, stream stays open
+            const inlineError = responseBody.error;
+            buffer.push({
+              kind: 'stream-inline-error',
+              receivedAt,
+              inlineError: {
+                code: inlineError.code ?? 'UNKNOWN',
+                message: inlineError.message ?? '',
+                sessionId: inlineError.sessionId ?? '',
+                messageId: inlineError.messageId ?? ''
+              }
+            });
+            notify();
+            return;
+          }
+
+          const rawEnvelope = responseBody.envelope ?? chunk.envelope;
+          if (!rawEnvelope) return;
+
+          const envelope = this.fromEnvelope(rawEnvelope);
           const event: RawRuntimeEvent = {
             kind: 'stream-envelope',
-            receivedAt: new Date().toISOString(),
+            receivedAt,
             envelope
           };
 
@@ -537,7 +562,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   async registerPolicy(req: RuntimeRegisterPolicyRequest): Promise<RuntimeRegisterPolicyResult> {
     const descriptor = req.descriptor;
     const response = await this.unary('RegisterPolicy', {
-      descriptor: {
+      policyDescriptor: {
         policyId: descriptor.policyId,
         mode: descriptor.mode,
         description: descriptor.description,
@@ -555,14 +580,14 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
 
   async getPolicy(req: RuntimeGetPolicyRequest): Promise<RuntimePolicyDescriptor> {
     const response = await this.unary('GetPolicy', { policyId: req.policyId });
-    const d = response.descriptor;
+    const d = response.policyDescriptor ?? response.descriptor;
     return {
       policyId: d.policyId,
       mode: d.mode,
       description: d.description,
       rules: d.rules,
       schemaVersion: d.schemaVersion ?? 1,
-      registeredAt: d.registeredAt
+      registeredAtUnixMs: d.registeredAtUnixMs ? Number(d.registeredAtUnixMs) : undefined
     };
   }
 
@@ -574,7 +599,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       description: d.description,
       rules: d.rules,
       schemaVersion: d.schemaVersion ?? 1,
-      registeredAt: d.registeredAt
+      registeredAtUnixMs: d.registeredAtUnixMs ? Number(d.registeredAtUnixMs) : undefined
     }));
   }
 
@@ -685,7 +710,28 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     };
   }
 
-  private fromAck(ack: any): RuntimeAck {
+  private fromAck(ack: any, trailingMetadata?: grpc.Metadata): RuntimeAck {
+    let reasons: string[] | undefined;
+
+    // Parse structured reasons from error details bytes
+    if (ack?.error?.details) {
+      try {
+        const parsed = JSON.parse(Buffer.from(ack.error.details).toString('utf-8'));
+        if (Array.isArray(parsed.reasons)) reasons = parsed.reasons;
+      } catch { /* ignore parse errors */ }
+    }
+
+    // Also check gRPC trailing metadata for POLICY_DENIED binary details
+    if (!reasons && trailingMetadata) {
+      const detailsBin = trailingMetadata.get('macp-error-details-bin');
+      if (detailsBin && detailsBin.length > 0) {
+        try {
+          const parsed = JSON.parse(Buffer.from(detailsBin[0] as Buffer).toString('utf-8'));
+          if (Array.isArray(parsed.reasons)) reasons = parsed.reasons;
+        } catch { /* ignore parse errors */ }
+      }
+    }
+
     return {
       ok: Boolean(ack?.ok),
       duplicate: Boolean(ack?.duplicate),
@@ -701,7 +747,9 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
             messageId: ack.error.messageId,
             detailsBase64: ack.error.details
               ? Buffer.from(ack.error.details).toString('base64')
-              : undefined
+              : undefined,
+            details: ack.error.details ? Buffer.from(ack.error.details) : undefined,
+            reasons
           }
         : undefined
     };
@@ -716,7 +764,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       expiresAtUnixMs: metadata?.expiresAtUnixMs ? Number(metadata.expiresAtUnixMs) : undefined,
       modeVersion: metadata?.modeVersion,
       configurationVersion: metadata?.configurationVersion,
-      policyVersion: metadata?.policyVersion
+      policyVersion: metadata?.policyVersion,
+      initiator: metadata?.initiator ?? undefined
     };
   }
 

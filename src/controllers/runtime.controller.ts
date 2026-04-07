@@ -61,6 +61,38 @@ export class RuntimeController {
     rules: Record<string, unknown>;
     schemaVersion?: number;
   }) {
+    // Pre-validate before forwarding to runtime
+    if (!body.policyId || body.policyId.trim().length === 0) {
+      throw new BadRequestException('policyId is required');
+    }
+    if (body.policyId === 'policy.default') {
+      throw new BadRequestException('policy.default is reserved and cannot be registered');
+    }
+    const schemaVersion = body.schemaVersion ?? 1;
+    if (schemaVersion < 1) {
+      throw new BadRequestException('schemaVersion must be > 0');
+    }
+    if (!body.rules || typeof body.rules !== 'object' || Array.isArray(body.rules)) {
+      throw new BadRequestException('rules must be a JSON object');
+    }
+
+    // Mode-specific conditional validations
+    const rules = body.rules as Record<string, unknown>;
+    const voting = rules.voting as Record<string, unknown> | undefined;
+    if (voting?.algorithm === 'weighted' && (!voting.weights || typeof voting.weights !== 'object')) {
+      throw new BadRequestException('weighted voting algorithm requires a weights map');
+    }
+    if (voting?.algorithm === 'supermajority' && (typeof voting.threshold !== 'number' || voting.threshold <= 0.5)) {
+      throw new BadRequestException('supermajority voting requires threshold > 0.5');
+    }
+    const commitment = rules.commitment as Record<string, unknown> | undefined;
+    if (commitment?.authority === 'designated_role') {
+      const roles = commitment.designated_roles ?? commitment.designatedRoles;
+      if (!Array.isArray(roles) || roles.length === 0) {
+        throw new BadRequestException('designated_role authority requires non-empty designated_roles list');
+      }
+    }
+
     const provider = this.runtimeRegistry.get(this.config.runtimeKind);
     const result = await provider.registerPolicy({
       descriptor: {
@@ -68,7 +100,7 @@ export class RuntimeController {
         mode: body.mode,
         description: body.description,
         rules: Buffer.from(JSON.stringify(body.rules)),
-        schemaVersion: body.schemaVersion ?? 1
+        schemaVersion
       }
     });
     if (!result.ok && result.error?.includes('INVALID_POLICY_DEFINITION')) {

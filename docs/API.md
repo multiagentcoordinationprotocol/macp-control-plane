@@ -404,8 +404,9 @@ Unregister a governance policy. Returns: `{ "ok": true }`
 | Error Code | HTTP | When |
 |------------|------|------|
 | `UNKNOWN_POLICY_VERSION` | 400 | `policy_version` not found in registry at session start |
-| `POLICY_DENIED` | 403 | Commitment rejected because policy rules not satisfied |
+| `POLICY_DENIED` | 403 | Commitment rejected because policy rules not satisfied (includes structured `reasons` array) |
 | `INVALID_POLICY_DEFINITION` | 400 | Policy rules fail schema validation at registration, or policy mode doesn't match session mode at SessionStart |
+| `SESSION_ALREADY_EXISTS` | 409 | Duplicate session start attempt |
 
 ### Policy Projection
 

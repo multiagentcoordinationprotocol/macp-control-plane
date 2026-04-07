@@ -214,6 +214,7 @@ export interface DecisionProjection {
     reasons?: string[];
     finalized: boolean;
     proposalId?: string;
+    outcomePositive?: boolean;
   };
 }
 
@@ -261,6 +262,7 @@ export interface PolicyProjection {
   policyVersion: string;
   policyDescription?: string;
   resolvedAt?: string;
+  outcomePositive?: boolean;
   commitmentEvaluations: Array<{
     commitmentId: string;
     decision: 'allow' | 'deny';

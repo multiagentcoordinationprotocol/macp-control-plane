@@ -122,7 +122,7 @@ export class RunManagerService {
       modeName: request.session.modeName,
       modeVersion: request.session.modeVersion,
       configurationVersion: request.session.configurationVersion,
-      policyVersion: request.session.policyVersion,
+      policyVersion: request.session.policyVersion || 'policy.default',
       initiatorParticipantId: session.initiator,
       sessionState: session.ack.sessionState,
       lastSeenAt: new Date().toISOString(),
@@ -159,7 +159,7 @@ export class RunManagerService {
           modeName: request.session.modeName,
           modeVersion: request.session.modeVersion,
           configurationVersion: request.session.configurationVersion,
-          policyVersion: request.session.policyVersion,
+          policyVersion: request.session.policyVersion || 'policy.default',
           participants: request.session.participants.map((item) => item.id)
         }
       },

@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsIn,
@@ -172,6 +173,7 @@ export class SessionDescriptorDto {
   @ApiProperty({ type: () => [ParticipantRefDto] })
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayMaxSize(1000, { message: 'Maximum 1000 participants per session' })
   @ValidateNested({ each: true })
   @Type(() => ParticipantRefDto)
   participants!: ParticipantRefDto[];

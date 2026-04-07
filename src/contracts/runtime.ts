@@ -34,11 +34,13 @@ export interface RuntimeAck {
     sessionId?: string;
     messageId?: string;
     detailsBase64?: string;
+    details?: Buffer | Uint8Array;
+    reasons?: string[];
   };
 }
 
 export interface RawRuntimeEvent {
-  kind: 'stream-envelope' | 'session-snapshot' | 'send-ack' | 'stream-status';
+  kind: 'stream-envelope' | 'session-snapshot' | 'send-ack' | 'stream-status' | 'stream-inline-error';
   receivedAt: string;
   envelope?: RuntimeEnvelope;
   sessionSnapshot?: RuntimeSessionSnapshot;
@@ -46,6 +48,12 @@ export interface RawRuntimeEvent {
   streamStatus?: {
     status: 'opened' | 'reconnecting' | 'closed';
     detail?: string;
+  };
+  inlineError?: {
+    code: string;
+    message: string;
+    sessionId?: string;
+    messageId?: string;
   };
 }
 
@@ -118,6 +126,7 @@ export interface RuntimeSessionSnapshot {
   modeVersion?: string;
   configurationVersion?: string;
   policyVersion?: string;
+  initiator?: string;
 }
 
 export interface RuntimeCancelSessionRequest {
@@ -233,7 +242,7 @@ export interface RuntimePolicyDescriptor {
   description: string;
   rules: Buffer | string;
   schemaVersion: number;
-  registeredAt?: string;
+  registeredAtUnixMs?: number;
 }
 
 export interface RuntimeRegisterPolicyRequest {

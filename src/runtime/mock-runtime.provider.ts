@@ -176,7 +176,7 @@ export class MockRuntimeProvider implements RuntimeProvider {
         commitment: { authority: 'initiator_only', designated_roles: [], require_vote_quorum: false }
       })),
       schemaVersion: 1,
-      registeredAt: new Date().toISOString()
+      registeredAtUnixMs: Date.now()
     }]
   ]);
 
@@ -188,7 +188,7 @@ export class MockRuntimeProvider implements RuntimeProvider {
     if (this.policies.has(d.policyId)) {
       return { ok: false, error: `policy ${d.policyId} already registered` };
     }
-    this.policies.set(d.policyId, { ...d, registeredAt: new Date().toISOString() });
+    this.policies.set(d.policyId, { ...d, registeredAtUnixMs: Date.now() });
     return { ok: true };
   }
 

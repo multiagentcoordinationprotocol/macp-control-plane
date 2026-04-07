@@ -16,6 +16,7 @@ export function decisionModeRequest(
       modeName: 'macp.mode.decision.v1',
       modeVersion: '1.0.0',
       configurationVersion: '1.0.0',
+      policyVersion: 'policy.default',
       ttlMs: 60000,
       participants: [
         { id: 'proposer', role: 'proposer' },
@@ -85,6 +86,7 @@ export function decisionHappyScript(): RuntimeScript {
             proposalId: 'prop-1',
             outcome: 'approved',
             finalized: true,
+            outcome_positive: true,
             rationale: 'Consensus reached'
           }
         )
@@ -135,7 +137,7 @@ export function decisionObjectionScript(): RuntimeScript {
           'macp.mode.decision.v1',
           'Commitment',
           'system',
-          { proposalId: 'prop-2', outcome: 'approved', finalized: true }
+          { proposalId: 'prop-2', outcome: 'approved', finalized: true, outcome_positive: true }
         )
       }
     ]

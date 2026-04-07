@@ -66,6 +66,20 @@ export class EventNormalizerService implements EventNormalizer {
 
       // Emit policy.denied if the ack error code indicates a policy rejection
       if (!rawEvent.ack.ok && rawEvent.ack.error?.code === 'POLICY_DENIED') {
+        // Extract structured reasons from error details or binary metadata
+        let reasons: string[] = [];
+        if (rawEvent.ack.error.reasons && rawEvent.ack.error.reasons.length > 0) {
+          reasons = rawEvent.ack.error.reasons;
+        } else if (rawEvent.ack.error.details) {
+          try {
+            const parsed = JSON.parse(Buffer.from(rawEvent.ack.error.details).toString('utf-8'));
+            if (Array.isArray(parsed.reasons)) reasons = parsed.reasons;
+          } catch { /* ignore parse errors */ }
+        }
+        if (reasons.length === 0) {
+          reasons = [rawEvent.ack.error.message];
+        }
+
         ackEvents.push(
           this.makeEvent(
             runId,
@@ -77,7 +91,7 @@ export class EventNormalizerService implements EventNormalizer {
               sessionId: rawEvent.ack.sessionId,
               errorCode: rawEvent.ack.error.code,
               errorMessage: rawEvent.ack.error.message,
-              decodedPayload: { decision: 'deny', reasons: [rawEvent.ack.error.message] }
+              decodedPayload: { decision: 'deny', reasons }
             },
             'send-ack'
           )
@@ -85,6 +99,37 @@ export class EventNormalizerService implements EventNormalizer {
       }
 
       return ackEvents;
+    }
+
+    // Handle inline MACPError responses from the stream (non-terminal)
+    if (rawEvent.kind === 'stream-inline-error' && rawEvent.inlineError) {
+      const err = rawEvent.inlineError;
+      const events: CanonicalEvent[] = [
+        this.makeEvent(
+          runId,
+          ts,
+          'message.send_failed',
+          { kind: 'message', id: err.messageId || '' },
+          {
+            errorCode: err.code,
+            errorMessage: err.message,
+            sessionId: err.sessionId,
+            messageId: err.messageId
+          },
+          'stream-inline-error'
+        )
+      ];
+      // If it's a policy denial, also emit policy.denied
+      if (err.code === 'POLICY_DENIED') {
+        events.push(
+          this.makeEvent(runId, ts, 'policy.denied', { kind: 'policy', id: err.messageId || '' }, {
+            errorCode: err.code,
+            errorMessage: err.message,
+            decodedPayload: { decision: 'deny', reasons: [err.message] }
+          }, 'stream-inline-error')
+        );
+      }
+      return events;
     }
 
     if (rawEvent.kind !== 'stream-envelope' || !rawEvent.envelope) {
