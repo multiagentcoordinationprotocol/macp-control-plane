@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { AppConfigService } from '../config/app-config.service';
 import { RuntimeHealthResponseDto } from '../dto/run-responses.dto';
@@ -62,7 +62,7 @@ export class RuntimeController {
     schemaVersion?: number;
   }) {
     const provider = this.runtimeRegistry.get(this.config.runtimeKind);
-    return provider.registerPolicy({
+    const result = await provider.registerPolicy({
       descriptor: {
         policyId: body.policyId,
         mode: body.mode,
@@ -71,6 +71,10 @@ export class RuntimeController {
         schemaVersion: body.schemaVersion ?? 1
       }
     });
+    if (!result.ok && result.error?.includes('INVALID_POLICY_DEFINITION')) {
+      throw new BadRequestException(result.error);
+    }
+    return result;
   }
 
   @Get('policies')

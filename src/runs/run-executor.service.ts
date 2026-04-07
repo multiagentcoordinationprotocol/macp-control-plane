@@ -172,6 +172,13 @@ export class RunExecutorService {
           400
         );
       }
+      if (errorCode === 'INVALID_POLICY_DEFINITION') {
+        throw new AppException(
+          ErrorCode.INVALID_POLICY_DEFINITION,
+          `Invalid policy definition: ${sendResult.ack.error.message}`,
+          400
+        );
+      }
 
       throw new AppException(
         ErrorCode.MESSAGE_SEND_FAILED,
@@ -512,6 +519,13 @@ export class RunExecutorService {
           await this.runManager.markFailed(
             runId,
             new AppException(ErrorCode.POLICY_DENIED, `Policy denied: ${msg}`, 403)
+          );
+          return;
+        }
+        if (msg.includes('INVALID_POLICY_DEFINITION')) {
+          await this.runManager.markFailed(
+            runId,
+            new AppException(ErrorCode.INVALID_POLICY_DEFINITION, `Invalid policy definition: ${msg}`, 400)
           );
           return;
         }

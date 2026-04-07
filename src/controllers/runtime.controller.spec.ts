@@ -11,6 +11,7 @@ describe('RuntimeController', () => {
     listModes: jest.Mock;
     listRoots: jest.Mock;
     health: jest.Mock;
+    registerPolicy: jest.Mock;
   };
 
   beforeEach(() => {
@@ -19,6 +20,7 @@ describe('RuntimeController', () => {
       listModes: jest.fn(),
       listRoots: jest.fn(),
       health: jest.fn(),
+      registerPolicy: jest.fn(),
     };
 
     mockConfig = {
@@ -112,6 +114,66 @@ describe('RuntimeController', () => {
 
       expect(result).toEqual(healthResult);
       expect(result.ok).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // registerPolicy
+  // ===========================================================================
+  describe('registerPolicy', () => {
+    it('returns ok result on successful registration', async () => {
+      mockProvider.registerPolicy.mockResolvedValue({ ok: true });
+
+      const result = await controller.registerPolicy({
+        policyId: 'policy.test',
+        mode: 'macp.mode.decision.v1',
+        description: 'Test policy',
+        rules: { voting: { algorithm: 'majority' } },
+        schemaVersion: 1
+      });
+
+      expect(result).toEqual({ ok: true });
+      expect(mockProvider.registerPolicy).toHaveBeenCalledWith({
+        descriptor: expect.objectContaining({
+          policyId: 'policy.test',
+          mode: 'macp.mode.decision.v1'
+        })
+      });
+    });
+
+    it('throws BadRequestException on INVALID_POLICY_DEFINITION', async () => {
+      mockProvider.registerPolicy.mockResolvedValue({
+        ok: false,
+        error: 'INVALID_POLICY_DEFINITION: rules do not match decision mode schema'
+      });
+
+      await expect(
+        controller.registerPolicy({
+          policyId: 'policy.bad',
+          mode: 'macp.mode.decision.v1',
+          description: 'Bad policy',
+          rules: { invalid: true },
+          schemaVersion: 1
+        })
+      ).rejects.toThrow('INVALID_POLICY_DEFINITION');
+    });
+
+    it('returns error result for non-validation errors', async () => {
+      mockProvider.registerPolicy.mockResolvedValue({
+        ok: false,
+        error: 'policy policy.dup already registered'
+      });
+
+      const result = await controller.registerPolicy({
+        policyId: 'policy.dup',
+        mode: '*',
+        description: 'Duplicate',
+        rules: {},
+        schemaVersion: 1
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain('already registered');
     });
   });
 });
