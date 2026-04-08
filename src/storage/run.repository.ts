@@ -131,6 +131,12 @@ export class RunRepository {
     });
   }
 
+  async markBindingSession(id: string, runtimeSessionId: string) {
+    return this.transitionTo(id, 'binding_session', {
+      runtimeSessionId
+    });
+  }
+
   async markRunning(id: string, runtimeSessionId?: string) {
     return this.transitionTo(id, 'running', {
       runtimeSessionId

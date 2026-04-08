@@ -469,7 +469,7 @@ describe('ProjectionService', () => {
       const result = await service.applyAndPersist('run-1', [event]);
 
       expect(mockProjectionRepository.get).toHaveBeenCalledWith('run-1');
-      expect(mockProjectionRepository.upsert).toHaveBeenCalledWith('run-1', expect.any(Object), 1);
+      expect(mockProjectionRepository.upsert).toHaveBeenCalledWith('run-1', expect.any(Object), 1, 3, undefined);
       expect(result.run.status).toBe('starting');
     });
   });

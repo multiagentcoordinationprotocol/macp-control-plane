@@ -39,10 +39,74 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test -- --coverage --passWithNoTests
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
+
+  integration-test:
+    runs-on: ubuntu-latest
+    needs: [test]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: macp_control_plane_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+          --tmpfs /var/lib/postgresql/data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Run migrations
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5433/macp_control_plane_test
+        run: npx ts-node src/db/migrate.ts
+      - name: Run integration tests
+        env:
+          CI: true
+          DATABASE_URL: postgres://postgres:postgres@localhost:5433/macp_control_plane_test
+          NODE_ENV: development
+          AUTH_API_KEYS: test-key-ci
+          OTEL_ENABLED: false
+          LOG_LEVEL: warn
+          RUNTIME_ALLOW_INSECURE: true
+          RUN_RECOVERY_ENABLED: false
+          INTEGRATION_RUNTIME: mock
+        run: npm run test:integration
+
+  check-env-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for leaked secrets in tracked files
+        run: |
+          # Fail if any tracked file contains common secret patterns
+          # (API keys, tokens, passwords in plain text)
+          PATTERNS='(sk-proj-|sk-[a-zA-Z0-9]{20,}|AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|password\s*=\s*["\x27][^"\x27]{8,})'
+          if git ls-files | xargs grep -lPn "$PATTERNS" -- 2>/dev/null | grep -v '.env.example' | grep -v 'node_modules'; then
+            echo "::error::Potential secrets found in tracked files. Review the matches above."
+            exit 1
+          fi
+          echo "No leaked secrets detected."
 
   build:
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test]
+    needs: [lint, typecheck, test, check-env-secrets]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -55,6 +119,7 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     needs: [build]
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: write

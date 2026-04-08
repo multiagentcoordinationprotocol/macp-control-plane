@@ -43,6 +43,7 @@ import {
   RunStateResponseDto
 } from '../dto/run-responses.dto';
 import { StreamHubService, StreamHubMessage } from '../events/stream-hub.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { ReplayService } from '../replay/replay.service';
 import { EventRepository } from '../storage/event.repository';
 import { RunExecutorService } from '../runs/run-executor.service';
@@ -59,7 +60,8 @@ export class RunsController {
     private readonly streamHub: StreamHubService,
     private readonly config: AppConfigService,
     private readonly projectionService: ProjectionService,
-    private readonly outboundMessageRepository: OutboundMessageRepository
+    private readonly outboundMessageRepository: OutboundMessageRepository,
+    private readonly instrumentation: InstrumentationService
   ) {}
 
   @Post('validate')
@@ -142,6 +144,7 @@ export class RunsController {
     const heartbeatMs = query.heartbeatMs ?? this.config.streamSseHeartbeatMs;
 
     return new Observable<MessageEvent>((subscriber) => {
+      this.instrumentation.activeSseConnections.inc();
       const buffer: StreamHubMessage[] = [];
       let backfillDone = false;
       let highSeq = afterSeq;
@@ -224,6 +227,7 @@ export class RunsController {
       void runBackfill();
 
       return () => {
+        this.instrumentation.activeSseConnections.dec();
         clearInterval(heartbeatTimer);
         liveSub.unsubscribe();
       };
@@ -301,6 +305,7 @@ export class RunsController {
     if (body.payload && Object.keys(body.payload).length > 0 && !body.signalType) {
       throw new BadRequestException('signalType is required when payload is non-empty');
     }
+    this.instrumentation.signalsTotal.inc({ signal_type: body.signalType ?? body.messageType ?? 'unknown' });
     return this.runExecutor.sendSignal(id, body);
   }
 

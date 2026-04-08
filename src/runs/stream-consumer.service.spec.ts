@@ -6,6 +6,7 @@ import { RuntimeSessionRepository } from '../storage/runtime-session.repository'
 import { RunManagerService } from './run-manager.service';
 import { StreamHubService } from '../events/stream-hub.service';
 import { AppConfigService } from '../config/app-config.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 
 describe('StreamConsumerService', () => {
   let service: StreamConsumerService;
@@ -61,6 +62,7 @@ describe('StreamConsumerService', () => {
       runManager,
       streamHub,
       config,
+      { activeStreams: { inc: jest.fn(), dec: jest.fn() }, streamReconnectsTotal: { inc: jest.fn() } } as unknown as InstrumentationService,
     );
   });
 

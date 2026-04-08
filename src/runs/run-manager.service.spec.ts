@@ -6,6 +6,7 @@ import { RuntimeSessionRepository } from '../storage/runtime-session.repository'
 import { ProjectionService } from '../projection/projection.service';
 import { RunEventService } from '../events/run-event.service';
 import { AuditService } from '../audit/audit.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { TraceService } from '../telemetry/trace.service';
 import { WebhookService } from '../webhooks/webhook.service';
 import { MetricsService } from '../metrics/metrics.service';
@@ -132,6 +133,12 @@ describe('RunManagerService', () => {
           provide: EventRepository,
           useValue: {
             listCanonicalByRun: jest.fn().mockResolvedValue([]),
+          },
+        },
+        {
+          provide: InstrumentationService,
+          useValue: {
+            runStateTotal: { inc: jest.fn() },
           },
         },
       ],

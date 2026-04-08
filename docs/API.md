@@ -88,12 +88,13 @@ Fetch the projected run state for UI rendering. Returns:
   "run": { "runId", "status", "modeName", "runtimeSessionId", "startedAt", "endedAt" },
   "participants": [{ "participantId", "role", "status", "latestSummary" }],
   "graph": { "nodes": [...], "edges": [...] },
-  "decision": { "current": { "action", "confidence", "finalized", "proposalId" } },
+  "decision": { "current": { "action", "confidence", "finalized", "proposalId", "outcomePositive" } },
   "signals": { "signals": [{ "id", "name", "severity", "sourceParticipantId", "confidence" }] },
   "progress": { "entries": [{ "participantId", "percentage", "message" }] },
   "timeline": { "latestSeq", "totalEvents", "recent": [...] },
   "trace": { "traceId", "spanCount", "linkedArtifacts" },
-  "outboundMessages": { "total", "queued", "accepted", "rejected" }
+  "outboundMessages": { "total", "queued", "accepted", "rejected" },
+  "policy": { "policyVersion", "policyDescription", "resolvedAt", "commitmentEvaluations": [...] }
 }
 ```
 
@@ -511,6 +512,28 @@ Prometheus metrics (text format).
 | `tool.called` | Tool invocation |
 | `tool.completed` | Tool result |
 | `artifact.created` | Artifact linked |
+| `policy.resolved` | Policy resolved at session start |
+| `policy.commitment.evaluated` | Commitment evaluated against policy rules |
+| `policy.denied` | Commitment rejected by policy (includes reasons) |
+
+---
+
+## Data Retention
+
+The control plane includes an optional periodic cleanup service that purges old data from PostgreSQL. When enabled, it runs on a configurable interval and deletes:
+
+- **Terminal runs** (completed, failed, cancelled) older than `DATA_RETENTION_TTL_DAYS` — cascade deletes events, projections, metrics, sessions, artifacts, and outbound messages
+- **Audit log** entries older than TTL
+- **Webhook deliveries** older than TTL
+
+Uses PostgreSQL advisory locks for multi-instance safety (only one instance runs retention at a time).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATA_RETENTION_ENABLED` | `false` | Enable periodic data purge |
+| `DATA_RETENTION_TTL_DAYS` | `30` | Days to keep data (min 1) |
+| `DATA_RETENTION_INTERVAL_HOURS` | `24` | Hours between retention sweeps |
+| `DATA_RETENTION_BATCH_SIZE` | `500` | Max runs deleted per batch |
 
 ## Error Response Format
 

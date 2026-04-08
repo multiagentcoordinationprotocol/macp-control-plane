@@ -21,6 +21,13 @@ export class ProjectionService {
   async get(runId: string): Promise<RunStateProjection | null> {
     const row = await this.projectionRepository.get(runId);
     if (!row) return null;
+
+    // Schema version migration: if stored schema is older, mark as needing rebuild
+    const storedSchemaVersion = (row as unknown as Record<string, unknown>).schemaVersion as number | undefined;
+    if (storedSchemaVersion != null && storedSchemaVersion < PROJECTION_SCHEMA_VERSION) {
+      this.logger.warn(`projection for run ${runId} has schema v${storedSchemaVersion}, current is v${PROJECTION_SCHEMA_VERSION} — returning stale data (rebuild recommended)`);
+    }
+
     return {
       run: row.runSummary as unknown as RunSummaryProjection,
       participants: row.participants as unknown as ParticipantProjection[],
@@ -35,11 +42,11 @@ export class ProjectionService {
     };
   }
 
-  async applyAndPersist(runId: string, events: CanonicalEvent[]): Promise<RunStateProjection> {
+  async applyAndPersist(runId: string, events: CanonicalEvent[], tx?: unknown): Promise<RunStateProjection> {
     const current = (await this.get(runId)) ?? this.empty(runId);
     const next = this.applyEvents(current, events);
     const version = (events.at(-1)?.seq ?? current.timeline.latestSeq) || 0;
-    await this.projectionRepository.upsert(runId, next, version);
+    await this.projectionRepository.upsert(runId, next, version, PROJECTION_SCHEMA_VERSION, tx as Parameters<typeof this.projectionRepository.upsert>[4]);
     return next;
   }
 
@@ -245,7 +252,7 @@ export class ProjectionService {
   async rebuild(runId: string, events: CanonicalEvent[]): Promise<RunStateProjection> {
     const projection = this.applyEvents(this.empty(runId), events);
     const version = events.at(-1)?.seq ?? 0;
-    await this.projectionRepository.upsert(runId, projection, version);
+    await this.projectionRepository.upsert(runId, projection, version, PROJECTION_SCHEMA_VERSION);
     this.logger.log(`projection rebuilt for run ${runId} at schema version ${PROJECTION_SCHEMA_VERSION}`);
     return projection;
   }

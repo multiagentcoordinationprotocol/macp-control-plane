@@ -1,5 +1,6 @@
 import { EventNormalizerService } from './event-normalizer.service';
 import { ProtoRegistryService } from '../runtime/proto-registry.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { RawRuntimeEvent, NormalizeContext } from '../contracts/runtime';
 import { ExecutionRequest } from '../contracts/control-plane';
 
@@ -46,7 +47,10 @@ describe('EventNormalizerService', () => {
       getKnownTypeName: jest.fn().mockReturnValue(undefined),
     } as unknown as jest.Mocked<ProtoRegistryService>;
 
-    service = new EventNormalizerService(protoRegistry);
+    service = new EventNormalizerService(
+      protoRegistry,
+      { inboundMessagesTotal: { inc: jest.fn() } } as unknown as InstrumentationService,
+    );
   });
 
   describe('stream-status events', () => {

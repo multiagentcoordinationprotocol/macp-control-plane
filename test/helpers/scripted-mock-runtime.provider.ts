@@ -70,6 +70,14 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
     this.script = script;
   }
 
+  /** Stub for HealthController readyz — mock is always CLOSED */
+  getCircuitBreakerState(): string {
+    return 'CLOSED';
+  }
+
+  /** Stub for HealthController */
+  resetCircuitBreaker(): void {}
+
   /** Replace the script (useful for per-test configuration) */
   setScript(script: RuntimeScript): void {
     this.script = script;

@@ -193,6 +193,28 @@ describe('RunRepository', () => {
     });
   });
 
+  // ------ markBindingSession ------
+  describe('markBindingSession', () => {
+    it('transitions to binding_session status with runtimeSessionId', async () => {
+      const fakeRun = { id: 'run-1', status: 'binding_session', runtimeSessionId: 'session-abc' };
+      mockDb._update.returning.mockResolvedValue([fakeRun]);
+
+      const result = await repo.markBindingSession('run-1', 'session-abc');
+
+      expect(mockDb._update.set).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'binding_session', runtimeSessionId: 'session-abc' })
+      );
+      expect(result).toEqual(fakeRun);
+    });
+
+    it('throws ConflictException when transitioning from completed to binding_session', async () => {
+      mockDb._update.returning.mockResolvedValue([]);
+      mockDb._select.limit.mockResolvedValue([{ id: 'run-1', status: 'completed' }]);
+
+      await expect(repo.markBindingSession('run-1', 'session-abc')).rejects.toThrow(ConflictException);
+    });
+  });
+
   // ------ invalid transition ------
   describe('transitionTo (invalid transition)', () => {
     it('throws ConflictException when transitioning from completed to running', async () => {

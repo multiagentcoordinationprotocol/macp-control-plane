@@ -9,6 +9,7 @@ import { AppException } from '../errors/app-exception';
 import { ErrorCode } from '../errors/error-codes';
 import { ProtoRegistryService } from '../runtime/proto-registry.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { TraceService } from '../telemetry/trace.service';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
@@ -30,12 +31,18 @@ export class RunExecutorService {
     private readonly artifactService: ArtifactService,
     private readonly streamConsumer: StreamConsumerService,
     private readonly streamHub: StreamHubService,
-    private readonly config: AppConfigService
+    private readonly config: AppConfigService,
+    private readonly instrumentation: InstrumentationService
   ) {}
 
   async validate(request: ExecutionRequest) {
     const errors: string[] = [];
     const warnings: string[] = [];
+
+    if (!request.session) {
+      errors.push('session is required');
+      return { valid: false, errors, warnings, runtime: { reachable: false, supportedModes: [] } };
+    }
 
     if (!request.session.participants || request.session.participants.length === 0) {
       errors.push('session.participants must contain at least one participant');
@@ -212,6 +219,7 @@ export class RunExecutorService {
       }
     ]);
 
+    this.instrumentation.outboundMessagesTotal.inc({ category: 'message', status: 'sent' });
     return { messageId: sendResult.envelope.messageId, ack: sendResult.ack };
   }
 

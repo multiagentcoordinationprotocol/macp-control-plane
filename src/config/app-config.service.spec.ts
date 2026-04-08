@@ -240,4 +240,38 @@ describe('AppConfigService', () => {
       expect(config.replayMaxDelayMs).toBe(-100);
     });
   });
+
+  describe('production validation', () => {
+    beforeEach(() => {
+      process.env.NODE_ENV = 'production';
+      process.env.RUNTIME_TLS = 'true';
+      process.env.RUNTIME_BEARER_TOKEN = 'secret';
+      process.env.RUNTIME_USE_DEV_HEADER = 'false';
+      process.env.AUTH_API_KEYS = 'key1,key2';
+    });
+
+    it('should throw if AUTH_API_KEYS is empty in production', () => {
+      process.env.AUTH_API_KEYS = '';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('AUTH_API_KEYS must be set in production');
+    });
+
+    it('should throw if DATA_RETENTION_TTL_DAYS < 1 when retention enabled', () => {
+      process.env.DATA_RETENTION_ENABLED = 'true';
+      process.env.DATA_RETENTION_TTL_DAYS = '0';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('DATA_RETENTION_TTL_DAYS must be >= 1');
+    });
+
+    it('should throw if DB_POOL_MAX < 2', () => {
+      process.env.DB_POOL_MAX = '1';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('DB_POOL_MAX must be >= 2');
+    });
+
+    it('should not throw when all production config is valid', () => {
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).not.toThrow();
+    });
+  });
 });

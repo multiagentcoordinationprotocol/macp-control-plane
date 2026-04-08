@@ -38,6 +38,7 @@ import {
 } from '../contracts/runtime';
 import { AppException } from '../errors/app-exception';
 import { ErrorCode } from '../errors/error-codes';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { CircuitBreaker } from './circuit-breaker';
 import { ProtoRegistryService } from './proto-registry.service';
 import { RuntimeCredentialResolverService } from './runtime-credential-resolver.service';
@@ -56,7 +57,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   constructor(
     private readonly config: AppConfigService,
     private readonly credentialResolver: RuntimeCredentialResolverService,
-    private readonly protoRegistry: ProtoRegistryService
+    private readonly protoRegistry: ProtoRegistryService,
+    private readonly instrumentation: InstrumentationService
   ) {}
 
   getCircuitBreakerState() {
@@ -70,7 +72,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   onModuleInit(): void {
     this.circuitBreaker = new CircuitBreaker({
       failureThreshold: this.config.runtimeCircuitBreakerThreshold,
-      resetTimeoutMs: this.config.runtimeCircuitBreakerResetMs
+      resetTimeoutMs: this.config.runtimeCircuitBreakerResetMs,
+      instrumentation: this.instrumentation
     });
 
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -113,8 +116,9 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         cancellation: { cancelSession: true },
         progress: { progress: true },
         manifest: { getManifest: true },
-        modeRegistry: { listModes: true, listChanged: true },
-        roots: { listRoots: true, listChanged: true },
+        modeRegistry: { listModes: true, listChanged: false },
+        roots: { listRoots: true, listChanged: false },
+        policyRegistry: { registerPolicy: true, listPolicies: true, listChanged: false },
         experimental: { features: {} }
       }
     }, undefined, opts);
@@ -136,7 +140,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         progress: response.capabilities.progress,
         manifest: response.capabilities.manifest,
         modeRegistry: response.capabilities.modeRegistry,
-        roots: response.capabilities.roots
+        roots: response.capabilities.roots,
+        policyRegistry: response.capabilities.policyRegistry
       } : undefined
     };
   }
@@ -609,21 +614,35 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     metadata?: grpc.Metadata,
     opts?: GrpcCallOptions
   ): Promise<any> {
-    return this.circuitBreaker.execute(() => {
-      const clientMethod = this.getClientMethod(method);
-      const deadline = opts?.deadline ?? new Date(Date.now() + this.config.runtimeRequestTimeoutMs);
-      return new Promise((resolve, reject) => {
-        const callback = (error: grpc.ServiceError | null, response: any) => {
-          if (error) return reject(error);
-          resolve(response);
-        };
-        if (metadata) {
-          clientMethod.call(this.client, request, metadata, { deadline }, callback);
-        } else {
-          clientMethod.call(this.client, request, { deadline }, callback);
-        }
+    const start = Date.now();
+    try {
+      const result = await this.circuitBreaker.execute(() => {
+        const clientMethod = this.getClientMethod(method);
+        const deadline = opts?.deadline ?? new Date(Date.now() + this.config.runtimeRequestTimeoutMs);
+        return new Promise((resolve, reject) => {
+          const callback = (error: grpc.ServiceError | null, response: any) => {
+            if (error) return reject(error);
+            resolve(response);
+          };
+          if (metadata) {
+            clientMethod.call(this.client, request, metadata, { deadline }, callback);
+          } else {
+            clientMethod.call(this.client, request, { deadline }, callback);
+          }
+        });
       });
-    });
+      this.instrumentation.grpcCallDuration.observe(
+        { method, status: 'ok' },
+        (Date.now() - start) / 1000
+      );
+      return result;
+    } catch (error) {
+      this.instrumentation.grpcCallDuration.observe(
+        { method, status: 'error' },
+        (Date.now() - start) / 1000
+      );
+      throw error;
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { createHmac } from 'node:crypto';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { WebhookDeliveryRepository } from './webhook-delivery.repository';
 import { WebhookRepository } from './webhook.repository';
 
@@ -17,7 +18,8 @@ export class WebhookService {
 
   constructor(
     private readonly webhookRepository: WebhookRepository,
-    private readonly deliveryRepository: WebhookDeliveryRepository
+    private readonly deliveryRepository: WebhookDeliveryRepository,
+    private readonly instrumentation: InstrumentationService
   ) {}
 
   async register(input: { url: string; events: string[]; secret: string }) {
@@ -104,6 +106,7 @@ export class WebhookService {
         }
 
         await this.deliveryRepository.markDelivered(deliveryId, response.status);
+        this.instrumentation.webhookDeliveriesTotal.inc({ status: 'delivered' });
         return;
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -111,6 +114,9 @@ export class WebhookService {
           `webhook delivery to ${url} failed (attempt ${attempt}/${maxAttempts}): ${errorMessage}`
         );
         await this.deliveryRepository.markFailed(deliveryId, attempt, errorMessage);
+        if (attempt >= maxAttempts) {
+          this.instrumentation.webhookDeliveriesTotal.inc({ status: 'failed' });
+        }
         if (attempt < maxAttempts) {
           const backoffMs = 1000 * 2 ** (attempt - 1);
           await new Promise((resolve) => setTimeout(resolve, backoffMs));

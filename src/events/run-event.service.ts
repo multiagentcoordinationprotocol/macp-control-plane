@@ -26,7 +26,7 @@ export class RunEventService {
   ): Promise<CanonicalEvent[]> {
     if (partialEvents.length === 0) return [];
 
-    const events = await this.database.db.transaction(async (tx) => {
+    const { events, projection } = await this.database.db.transaction(async (tx) => {
       const startSeq = await this.runRepository.allocateSequence(runId, partialEvents.length);
       const prepared = partialEvents.map((event, index) => ({
         ...event,
@@ -36,10 +36,10 @@ export class RunEventService {
         schemaVersion: PROJECTION_SCHEMA_VERSION
       }));
       await this.eventRepository.appendCanonical(prepared, tx);
-      return prepared;
+      const proj = await this.projectionService.applyAndPersist(runId, prepared, tx);
+      return { events: prepared, projection: proj };
     });
 
-    const projection = await this.projectionService.applyAndPersist(runId, events);
     await this.metricsService.recordEvents(runId, events);
     events.forEach((event) => this.streamHub.publishEvent(event));
     this.streamHub.publishSnapshot(runId, projection);
@@ -53,7 +53,7 @@ export class RunEventService {
   ): Promise<CanonicalEvent[]> {
     const total = 1 + canonicalEvents.length;
 
-    const normalized = await this.database.db.transaction(async (tx) => {
+    const { normalized, projection } = await this.database.db.transaction(async (tx) => {
       const startSeq = await this.runRepository.allocateSequence(runId, total);
       await this.eventRepository.appendRaw(runId, startSeq, rawEvent, tx);
       const prepared = canonicalEvents.map((event, index) => ({
@@ -62,10 +62,10 @@ export class RunEventService {
         id: event.id || randomUUID()
       }));
       await this.eventRepository.appendCanonical(prepared, tx);
-      return prepared;
+      const proj = await this.projectionService.applyAndPersist(runId, prepared, tx);
+      return { normalized: prepared, projection: proj };
     });
 
-    const projection = await this.projectionService.applyAndPersist(runId, normalized);
     await this.metricsService.recordEvents(runId, normalized);
     normalized.forEach((event) => this.streamHub.publishEvent(event));
     this.streamHub.publishSnapshot(runId, projection);

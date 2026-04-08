@@ -252,6 +252,7 @@ describe('Decision Mode (integration)', () => {
       from: 'evaluator',
       to: ['proposer'],
       messageType: 'Signal',
+      signalType: 'progress',
       payload: {
         signalType: 'progress',
         data: 'Starting fraud risk analysis',
@@ -266,6 +267,7 @@ describe('Decision Mode (integration)', () => {
       from: 'evaluator',
       to: ['proposer'],
       messageType: 'Signal',
+      signalType: 'completed',
       payload: {
         signalType: 'completed',
         data: 'Fraud evaluation submitted',
@@ -280,6 +282,7 @@ describe('Decision Mode (integration)', () => {
       from: 'voter',
       to: ['proposer'],
       messageType: 'Signal',
+      signalType: 'attention',
       payload: {
         signalType: 'attention',
         data: 'Urgent review required',
@@ -326,6 +329,7 @@ describe('Decision Mode (integration)', () => {
       from: 'evaluator',
       to: ['proposer'],
       messageType: 'Signal',
+      signalType: 'progress',
       payload: {
         signalType: 'progress',
         data: 'Analyzing fraud patterns',
@@ -374,6 +378,7 @@ describe('Decision Mode (integration)', () => {
       from: 'evaluator',
       to: ['proposer'],
       messageType: 'Signal',
+      signalType: 'done',
       payload: { signalType: 'done', data: 'Evaluation complete' }
     });
     await sleep(500);

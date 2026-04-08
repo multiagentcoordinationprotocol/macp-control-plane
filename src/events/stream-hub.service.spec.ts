@@ -1,13 +1,16 @@
 import { StreamHubService, StreamHubMessage } from './stream-hub.service';
+import { MemoryStreamHubStrategy } from './memory-stream-hub.strategy';
 import { CanonicalEvent, RunStateProjection } from '../contracts/control-plane';
 import { Subscription } from 'rxjs';
 
 describe('StreamHubService', () => {
   let service: StreamHubService;
+  let strategy: MemoryStreamHubStrategy;
 
   beforeEach(() => {
     jest.useFakeTimers();
-    service = new StreamHubService();
+    strategy = new MemoryStreamHubStrategy();
+    service = new StreamHubService(strategy);
   });
 
   afterEach(() => {
@@ -93,8 +96,8 @@ describe('StreamHubService', () => {
       subs.push(service.stream('run-1').subscribe());
       subs.push(service.stream('run-1').subscribe());
 
-      // Access the private subscriberCounts map via bracket notation for testing
-      const counts = (service as any).subscriberCounts as Map<string, number>;
+      // Access the private subscriberCounts map on the strategy for testing
+      const counts = (strategy as any).subscriberCounts as Map<string, number>;
       expect(counts.get('run-1')).toBe(2);
 
       subs[0].unsubscribe();
@@ -124,8 +127,8 @@ describe('StreamHubService', () => {
       const sub = service.stream('run-1').subscribe();
       service.complete('run-1');
 
-      const subjects = (service as any).subjects as Map<string, unknown>;
-      const counts = (service as any).subscriberCounts as Map<string, number>;
+      const subjects = (strategy as any).subjects as Map<string, unknown>;
+      const counts = (strategy as any).subscriberCounts as Map<string, number>;
       expect(subjects.has('run-1')).toBe(false);
       expect(counts.has('run-1')).toBe(false);
 
@@ -137,7 +140,7 @@ describe('StreamHubService', () => {
       sub.unsubscribe();
 
       // A cleanup timer should now be scheduled
-      const timers = (service as any).cleanupTimers as Map<
+      const timers = (strategy as any).cleanupTimers as Map<
         string,
         ReturnType<typeof setTimeout>
       >;
@@ -158,7 +161,7 @@ describe('StreamHubService', () => {
       sub.unsubscribe();
 
       // The subject should still exist before the timer fires
-      const subjects = (service as any).subjects as Map<string, unknown>;
+      const subjects = (strategy as any).subjects as Map<string, unknown>;
       expect(subjects.has('run-1')).toBe(true);
 
       // Advance time by 60 seconds (the cleanup delay)
@@ -181,7 +184,7 @@ describe('StreamHubService', () => {
       const sub2 = service.stream('run-1').subscribe();
 
       // The cleanup timer should have been cancelled
-      const timers = (service as any).cleanupTimers as Map<
+      const timers = (strategy as any).cleanupTimers as Map<
         string,
         ReturnType<typeof setTimeout>
       >;
@@ -191,7 +194,7 @@ describe('StreamHubService', () => {
       jest.advanceTimersByTime(60_000);
 
       // Subject should still exist because we have an active subscriber
-      const subjects = (service as any).subjects as Map<string, unknown>;
+      const subjects = (strategy as any).subjects as Map<string, unknown>;
       expect(subjects.has('run-1')).toBe(true);
 
       sub2.unsubscribe();
@@ -275,9 +278,9 @@ describe('StreamHubService', () => {
       expect(completions).toContain('run-2');
 
       // All internal maps should be cleared
-      const subjects = (service as any).subjects as Map<string, unknown>;
-      const counts = (service as any).subscriberCounts as Map<string, number>;
-      const timers = (service as any).cleanupTimers as Map<
+      const subjects = (strategy as any).subjects as Map<string, unknown>;
+      const counts = (strategy as any).subscriberCounts as Map<string, number>;
+      const timers = (strategy as any).cleanupTimers as Map<
         string,
         ReturnType<typeof setTimeout>
       >;

@@ -144,7 +144,7 @@ describe('RunEventService', () => {
       const result = await service.emitControlPlaneEvents('run-1', partialEvents);
 
       // Projection should be applied
-      expect(projectionService.applyAndPersist).toHaveBeenCalledWith('run-1', result);
+      expect(projectionService.applyAndPersist).toHaveBeenCalledWith('run-1', expect.any(Array), mockTx);
 
       // Metrics should be recorded
       expect(metricsService.recordEvents).toHaveBeenCalledWith('run-1', result);
@@ -236,7 +236,7 @@ describe('RunEventService', () => {
       const result = await service.persistRawAndCanonical('run-1', rawEvent, canonicalEvents);
 
       // Projection should be applied
-      expect(projectionService.applyAndPersist).toHaveBeenCalledWith('run-1', result);
+      expect(projectionService.applyAndPersist).toHaveBeenCalledWith('run-1', expect.any(Array), mockTx);
 
       // Metrics should be recorded
       expect(metricsService.recordEvents).toHaveBeenCalledWith('run-1', result);

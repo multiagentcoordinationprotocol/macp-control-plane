@@ -4,10 +4,14 @@ import { CanonicalEvent, CanonicalEventType } from '../contracts/control-plane';
 import { EventNormalizer, NormalizeContext, RawRuntimeEvent } from '../contracts/runtime';
 import { PROJECTION_SCHEMA_VERSION } from '../projection/projection.service';
 import { ProtoRegistryService } from '../runtime/proto-registry.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 
 @Injectable()
 export class EventNormalizerService implements EventNormalizer {
-  constructor(private readonly protoRegistry: ProtoRegistryService) {}
+  constructor(
+    private readonly protoRegistry: ProtoRegistryService,
+    private readonly instrumentation: InstrumentationService
+  ) {}
 
   normalize(runId: string, rawEvent: RawRuntimeEvent, ctx: NormalizeContext): CanonicalEvent[] {
     const ts = rawEvent.receivedAt;
@@ -154,6 +158,10 @@ export class EventNormalizerService implements EventNormalizer {
       );
     }
 
+    this.instrumentation.inboundMessagesTotal.inc({
+      mode: envelope.mode || 'unknown',
+      message_type: envelope.messageType || 'unknown'
+    });
     canonical.push(
       this.makeEvent(
         runId,

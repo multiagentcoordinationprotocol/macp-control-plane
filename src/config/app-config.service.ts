@@ -83,6 +83,12 @@ export class AppConfigService implements OnModuleInit {
   readonly streamHubStrategy = process.env.STREAM_HUB_STRATEGY ?? 'memory';
   readonly redisUrl = process.env.REDIS_URL ?? '';
 
+  // Data retention
+  readonly dataRetentionEnabled = readBoolean('DATA_RETENTION_ENABLED', false);
+  readonly dataRetentionTtlDays = readNumber('DATA_RETENTION_TTL_DAYS', 30);
+  readonly dataRetentionIntervalHours = readNumber('DATA_RETENTION_INTERVAL_HOURS', 24);
+  readonly dataRetentionBatchSize = readNumber('DATA_RETENTION_BATCH_SIZE', 500);
+
   readonly logLevel = process.env.LOG_LEVEL ?? 'info';
   readonly otelEnabled = readBoolean('OTEL_ENABLED', false);
   readonly otelServiceName = process.env.OTEL_SERVICE_NAME ?? 'macp-control-plane';
@@ -113,6 +119,41 @@ export class AppConfigService implements OnModuleInit {
     if (this.otelEnabled && !this.otelExporterOtlpEndpoint) {
       this.logger.warn(
         'OTEL_ENABLED is true but OTEL_EXPORTER_OTLP_ENDPOINT is not set — traces will be discarded'
+      );
+    }
+
+    // Warn if using memory StreamHub in production (SSE events won't sync across instances)
+    if (this.streamHubStrategy === 'memory') {
+      this.logger.warn(
+        'STREAM_HUB_STRATEGY=memory in production — SSE events will not sync across multiple instances. Set STREAM_HUB_STRATEGY=redis for multi-instance deployments.'
+      );
+    }
+
+    // Fail-fast if no API keys configured in production (auth silently disabled)
+    if (this.authApiKeys.length === 0) {
+      throw new Error(
+        'AUTH_API_KEYS must be set in production. Empty value disables authentication.'
+      );
+    }
+
+    // Guard against misconfigured retention TTL
+    if (this.dataRetentionEnabled && this.dataRetentionTtlDays < 1) {
+      throw new Error(
+        'DATA_RETENTION_TTL_DAYS must be >= 1 when retention is enabled'
+      );
+    }
+
+    // Guard against connection pool starvation
+    if (this.dbPoolMax < 2) {
+      throw new Error(
+        'DB_POOL_MAX must be >= 2 to avoid connection pool starvation'
+      );
+    }
+
+    // Warn about aggressive gRPC timeout
+    if (this.runtimeRequestTimeoutMs < 5000) {
+      this.logger.warn(
+        `RUNTIME_REQUEST_TIMEOUT_MS=${this.runtimeRequestTimeoutMs} is very low — gRPC calls may time out prematurely`
       );
     }
   }

@@ -19,8 +19,9 @@ interface RedisHubMessage extends StreamHubMessage {
 export class RedisStreamHubStrategy implements StreamHubStrategy {
   private readonly logger = new Logger(RedisStreamHubStrategy.name);
   private readonly localSubject = new Subject<RedisHubMessage>();
-  private publisher: { publish: (channel: string, message: string) => Promise<number> } | null = null;
-  private subscriber: { subscribe: (channel: string, cb?: (err: Error | null) => void) => void; on: (event: string, cb: (...args: unknown[]) => void) => void } | null = null;
+  private readonly completedRuns = new Set<string>();
+  private publisher: { publish: (channel: string, message: string) => Promise<number>; quit: () => Promise<string> } | null = null;
+  private subscriber: { subscribe: (channel: string, cb?: (err: Error | null) => void) => void; on: (event: string, cb: (...args: unknown[]) => void) => void; quit: () => Promise<string> } | null = null;
   private readonly channel = 'macp:stream-hub';
 
   constructor(redisUrl: string) {
@@ -47,6 +48,10 @@ export class RedisStreamHubStrategy implements StreamHubStrategy {
         try {
           const parsed = JSON.parse(message as string) as RedisHubMessage;
           this.localSubject.next(parsed);
+          // Track remote completions
+          if (parsed.event === 'complete') {
+            this.completedRuns.add(parsed._runId);
+          }
         } catch (err) {
           this.logger.warn(`Failed to parse Redis message: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -75,6 +80,7 @@ export class RedisStreamHubStrategy implements StreamHubStrategy {
   }
 
   complete(runId: string): void {
+    this.completedRuns.add(runId);
     const msg: RedisHubMessage = {
       _runId: runId,
       event: 'complete',
@@ -87,6 +93,17 @@ export class RedisStreamHubStrategy implements StreamHubStrategy {
     return this.localSubject.asObservable().pipe(
       filter((msg) => msg._runId === runId)
     );
+  }
+
+  destroy(): void {
+    this.localSubject.complete();
+    this.completedRuns.clear();
+    if (this.publisher) {
+      void this.publisher.quit().catch(() => {});
+    }
+    if (this.subscriber) {
+      void this.subscriber.quit().catch(() => {});
+    }
   }
 
   private publish(msg: RedisHubMessage): void {

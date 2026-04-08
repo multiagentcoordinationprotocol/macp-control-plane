@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { randomUUID } from 'node:crypto';
 import { ExecutionRequest, RunStateProjection } from '../contracts/control-plane';
 import { AuditService } from '../audit/audit.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { TraceService } from '../telemetry/trace.service';
 import { ProjectionService } from '../projection/projection.service';
 import { MetricsService } from '../metrics/metrics.service';
@@ -24,7 +25,8 @@ export class RunManagerService {
     private readonly auditService: AuditService,
     private readonly webhookService: WebhookService,
     private readonly metricsService: MetricsService,
-    private readonly eventRepository: EventRepository
+    private readonly eventRepository: EventRepository,
+    private readonly instrumentation: InstrumentationService
   ) {}
 
   async createRun(request: ExecutionRequest) {
@@ -47,6 +49,7 @@ export class RunManagerService {
       tags.push('sandbox');
     }
 
+    this.instrumentation.runStateTotal.inc({ status: 'queued' });
     const record = await this.runRepository.create({
       id: runId,
       status: 'queued',
@@ -85,6 +88,7 @@ export class RunManagerService {
   }
 
   async markStarted(runId: string, request: ExecutionRequest) {
+    this.instrumentation.runStateTotal.inc({ status: 'starting' });
     const run = await this.runRepository.markStarted(runId);
     await this.runEventService.emitControlPlaneEvents(runId, [
       {
@@ -111,10 +115,7 @@ export class RunManagerService {
     session: { runtimeSessionId: string; initiator: string; ack: { sessionState: string } },
     capabilities?: Record<string, unknown>
   ) {
-    const run = await this.runRepository.update(runId, {
-      status: 'binding_session',
-      runtimeSessionId: session.runtimeSessionId
-    });
+    const run = await this.runRepository.markBindingSession(runId, session.runtimeSessionId);
     await this.runtimeSessionRepository.upsert({
       runId,
       runtimeKind: request.runtime.kind,
@@ -170,6 +171,7 @@ export class RunManagerService {
   }
 
   async markRunning(runId: string, runtimeSessionId: string) {
+    this.instrumentation.runStateTotal.inc({ status: 'running' });
     const run = await this.runRepository.markRunning(runId, runtimeSessionId);
     await this.runEventService.emitControlPlaneEvents(runId, [
       {
@@ -195,7 +197,9 @@ export class RunManagerService {
 
   async markCompleted(runId: string) {
     const current = await this.getRun(runId);
-    if (current.status === 'completed') return current;
+    const terminalStatuses = ['completed', 'failed', 'cancelled'];
+    if (terminalStatuses.includes(current.status)) return current;
+    this.instrumentation.runStateTotal.inc({ status: 'completed' });
     const run = await this.runRepository.markCompleted(runId);
     this.traceService.endRunTrace(runId, 'completed');
     await this.runEventService.emitControlPlaneEvents(runId, [
@@ -225,7 +229,9 @@ export class RunManagerService {
 
   async markCancelled(runId: string) {
     const current = await this.getRun(runId);
-    if (current.status === 'cancelled') return current;
+    const terminalStatuses = ['completed', 'failed', 'cancelled'];
+    if (terminalStatuses.includes(current.status)) return current;
+    this.instrumentation.runStateTotal.inc({ status: 'cancelled' });
     const run = await this.runRepository.markCancelled(runId);
     this.traceService.endRunTrace(runId, 'cancelled');
     await this.runEventService.emitControlPlaneEvents(runId, [
@@ -254,7 +260,9 @@ export class RunManagerService {
 
   async markFailed(runId: string, error: unknown) {
     const current = await this.getRun(runId);
-    if (current.status === 'failed') return current;
+    const terminalStatuses = ['completed', 'failed', 'cancelled'];
+    if (terminalStatuses.includes(current.status)) return current;
+    this.instrumentation.runStateTotal.inc({ status: 'failed' });
     const message = error instanceof Error ? error.message : String(error);
     const run = await this.runRepository.markFailed(runId, 'RUN_FAILED', message);
     this.traceService.endRunTrace(runId, 'failed', message);

@@ -2,6 +2,7 @@ import { RunRecoveryService } from './run-recovery.service';
 import { AppConfigService } from '../config/app-config.service';
 import { DatabaseService } from '../db/database.service';
 import { RunEventService } from '../events/run-event.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
 import { RunManagerService } from './run-manager.service';
@@ -39,7 +40,8 @@ describe('RunRecoveryService', () => {
       mockSessionRepo as unknown as RuntimeSessionRepository,
       mockRunManager as unknown as RunManagerService,
       mockStreamConsumer as unknown as StreamConsumerService,
-      mockEventService as unknown as RunEventService
+      mockEventService as unknown as RunEventService,
+      { recoveryTotal: { inc: jest.fn() } } as unknown as InstrumentationService
     );
   });
 
@@ -51,7 +53,8 @@ describe('RunRecoveryService', () => {
       mockSessionRepo as unknown as RuntimeSessionRepository,
       mockRunManager as unknown as RunManagerService,
       mockStreamConsumer as unknown as StreamConsumerService,
-      mockEventService as unknown as RunEventService
+      mockEventService as unknown as RunEventService,
+      { recoveryTotal: { inc: jest.fn() } } as unknown as InstrumentationService
     );
     await disabledService.onApplicationBootstrap();
     expect(mockRunRepo.listActiveRuns).not.toHaveBeenCalled();

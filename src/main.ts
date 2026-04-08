@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import * as express from 'express';
 import { AppModule } from './app.module';
+import { PinoLogger } from './common/pino-logger';
 import { AppConfigService } from './config/app-config.service';
 import { runMigrations } from './db/migrate';
 import { GlobalExceptionFilter } from './errors/exception.filter';
@@ -21,7 +22,8 @@ async function bootstrap() {
     otlpEndpoint: config.otelExporterOtlpEndpoint || undefined
   });
 
-  const app = await NestFactory.create(AppModule, { cors: false });
+  const pinoLogger = new PinoLogger(config.logLevel, config.isDevelopment);
+  const app = await NestFactory.create(AppModule, { cors: false, logger: pinoLogger });
   app.use(express.json({ limit: '1mb' }));
   app.useGlobalFilters(new GlobalExceptionFilter());
   app.enableCors({ origin: config.corsOrigin, credentials: true });
