@@ -87,6 +87,7 @@ export class RunsController {
       offset: query.offset ?? 0,
       sortBy: query.sortBy ?? 'createdAt',
       sortOrder: query.sortOrder ?? 'desc',
+      includeSandbox: query.includeSandbox,
       includeArchived: query.includeArchived,
       environment: query.environment,
       scenarioRef: query.scenarioRef,

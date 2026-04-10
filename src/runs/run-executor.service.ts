@@ -521,38 +521,44 @@ export class RunExecutorService {
       }
     } catch (error) {
       // Surface policy-specific errors with appropriate error codes
-      if (error instanceof Error) {
-        const msg = error.message ?? '';
-        if (msg.includes('UNKNOWN_POLICY_VERSION')) {
-          await this.runManager.markFailed(
-            runId,
-            new AppException(ErrorCode.UNKNOWN_POLICY_VERSION, `Unknown policy version: ${msg}`, 400)
-          );
-          return;
+      try {
+        if (error instanceof Error) {
+          const msg = error.message ?? '';
+          if (msg.includes('UNKNOWN_POLICY_VERSION')) {
+            await this.runManager.markFailed(
+              runId,
+              new AppException(ErrorCode.UNKNOWN_POLICY_VERSION, `Unknown policy version: ${msg}`, 400)
+            );
+            return;
+          }
+          if (msg.includes('POLICY_DENIED')) {
+            await this.runManager.markFailed(
+              runId,
+              new AppException(ErrorCode.POLICY_DENIED, `Policy denied: ${msg}`, 403)
+            );
+            return;
+          }
+          if (msg.includes('INVALID_POLICY_DEFINITION')) {
+            await this.runManager.markFailed(
+              runId,
+              new AppException(ErrorCode.INVALID_POLICY_DEFINITION, `Invalid policy definition: ${msg}`, 400)
+            );
+            return;
+          }
+          if (msg.includes('SESSION_ALREADY_EXISTS') || msg.includes('SessionAlreadyExists')) {
+            await this.runManager.markFailed(
+              runId,
+              new AppException(ErrorCode.SESSION_ALREADY_EXISTS, `Session already exists: ${msg}`, 409)
+            );
+            return;
+          }
         }
-        if (msg.includes('POLICY_DENIED')) {
-          await this.runManager.markFailed(
-            runId,
-            new AppException(ErrorCode.POLICY_DENIED, `Policy denied: ${msg}`, 403)
-          );
-          return;
-        }
-        if (msg.includes('INVALID_POLICY_DEFINITION')) {
-          await this.runManager.markFailed(
-            runId,
-            new AppException(ErrorCode.INVALID_POLICY_DEFINITION, `Invalid policy definition: ${msg}`, 400)
-          );
-          return;
-        }
-        if (msg.includes('SESSION_ALREADY_EXISTS') || msg.includes('SessionAlreadyExists')) {
-          await this.runManager.markFailed(
-            runId,
-            new AppException(ErrorCode.SESSION_ALREADY_EXISTS, `Session already exists: ${msg}`, 409)
-          );
-          return;
-        }
+        await this.runManager.markFailed(runId, error);
+      } catch (markFailedError) {
+        this.logger.error(
+          `failed to mark run ${runId} as failed (run may have been deleted): ${markFailedError instanceof Error ? markFailedError.message : String(markFailedError)}`
+        );
       }
-      await this.runManager.markFailed(runId, error);
     }
   }
 

@@ -51,6 +51,11 @@ export class ListRunsQueryDto {
   @IsIn(['asc', 'desc'])
   sortOrder?: 'asc' | 'desc';
 
+  @ApiPropertyOptional({ description: 'Include sandbox runs in listing', default: false })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  includeSandbox?: boolean;
+
   @ApiPropertyOptional({ description: 'Include archived runs in listing', default: false })
   @IsOptional()
   @Transform(({ value }) => value === 'true' || value === true)

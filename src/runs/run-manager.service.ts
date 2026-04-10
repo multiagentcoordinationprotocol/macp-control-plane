@@ -302,6 +302,7 @@ export class RunManagerService {
     offset?: number;
     sortBy?: 'createdAt' | 'updatedAt';
     sortOrder?: 'asc' | 'desc';
+    includeSandbox?: boolean;
     includeArchived?: boolean;
     environment?: string;
     scenarioRef?: string;
