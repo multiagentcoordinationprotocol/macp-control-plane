@@ -5,6 +5,7 @@ import { AppConfigService } from '../config/app-config.service';
 import { EventNormalizerService } from '../events/event-normalizer.service';
 import { RunEventService } from '../events/run-event.service';
 import { StreamHubService } from '../events/stream-hub.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
 import { RunManagerService } from './run-manager.service';
@@ -29,7 +30,8 @@ export class StreamConsumerService implements OnModuleDestroy {
     private readonly runtimeSessionRepository: RuntimeSessionRepository,
     private readonly runManager: RunManagerService,
     private readonly streamHub: StreamHubService,
-    private readonly config: AppConfigService
+    private readonly config: AppConfigService,
+    private readonly instrumentation: InstrumentationService
   ) {}
 
   async onModuleDestroy(): Promise<void> {
@@ -57,7 +59,9 @@ export class StreamConsumerService implements OnModuleDestroy {
       lastProcessedSeq: params.resumeFromSeq ?? 0
     };
     this.active.set(params.runId, marker);
+    this.instrumentation.activeStreams.inc();
     void this.consumeLoop(marker, params).finally(() => {
+      this.instrumentation.activeStreams.dec();
       this.active.delete(params.runId);
     });
   }
@@ -179,6 +183,7 @@ export class StreamConsumerService implements OnModuleDestroy {
       }
 
       retries += 1;
+      this.instrumentation.streamReconnectsTotal.inc();
       if (retries > maxRetries) {
         await this.finalizeRun(params.runId, marker, 'failed', new Error('polling exhausted without terminal session state'));
         return;

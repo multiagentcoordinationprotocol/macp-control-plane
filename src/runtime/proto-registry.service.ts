@@ -54,8 +54,8 @@ export class ProtoRegistryService implements OnModuleInit {
   private root!: protobuf.Root;
 
   onModuleInit(): void {
-    const repoRoot = path.resolve(__dirname, '..', '..');
-    const protoRoot = path.join(repoRoot, 'proto');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { protoDir: protoRoot } = require('@multiagentcoordinationprotocol/proto');
     const protoFiles = [
       path.join(protoRoot, 'macp/v1/core.proto'),
       path.join(protoRoot, 'macp/v1/envelope.proto'),

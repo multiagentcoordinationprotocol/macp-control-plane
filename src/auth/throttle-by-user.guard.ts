@@ -3,9 +3,9 @@ import { ThrottlerGuard } from '@nestjs/throttler';
 
 @Injectable()
 export class ThrottleByUserGuard extends ThrottlerGuard {
-  protected async getTracker(req: Record<string, any>): Promise<string> {
+  protected async getTracker(req: Record<string, unknown>): Promise<string> {
     // Use actor identity from auth guard if available, fall back to IP
-    return req.actorId ?? req.ip ?? 'anonymous';
+    return String(req.actorId ?? req.ip ?? 'anonymous');
   }
 
   protected getRequestResponse(context: ExecutionContext) {

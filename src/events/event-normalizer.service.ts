@@ -4,10 +4,14 @@ import { CanonicalEvent, CanonicalEventType } from '../contracts/control-plane';
 import { EventNormalizer, NormalizeContext, RawRuntimeEvent } from '../contracts/runtime';
 import { PROJECTION_SCHEMA_VERSION } from '../projection/projection.service';
 import { ProtoRegistryService } from '../runtime/proto-registry.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 
 @Injectable()
 export class EventNormalizerService implements EventNormalizer {
-  constructor(private readonly protoRegistry: ProtoRegistryService) {}
+  constructor(
+    private readonly protoRegistry: ProtoRegistryService,
+    private readonly instrumentation: InstrumentationService
+  ) {}
 
   normalize(runId: string, rawEvent: RawRuntimeEvent, ctx: NormalizeContext): CanonicalEvent[] {
     const ts = rawEvent.receivedAt;
@@ -46,7 +50,7 @@ export class EventNormalizerService implements EventNormalizer {
     }
 
     if (rawEvent.kind === 'send-ack' && rawEvent.ack) {
-      return [
+      const ackEvents: CanonicalEvent[] = [
         this.makeEvent(
           runId,
           ts,
@@ -63,6 +67,73 @@ export class EventNormalizerService implements EventNormalizer {
           'send-ack'
         )
       ];
+
+      // Emit policy.denied if the ack error code indicates a policy rejection
+      if (!rawEvent.ack.ok && rawEvent.ack.error?.code === 'POLICY_DENIED') {
+        // Extract structured reasons from error details or binary metadata
+        let reasons: string[] = [];
+        if (rawEvent.ack.error.reasons && rawEvent.ack.error.reasons.length > 0) {
+          reasons = rawEvent.ack.error.reasons;
+        } else if (rawEvent.ack.error.details) {
+          try {
+            const parsed = JSON.parse(Buffer.from(rawEvent.ack.error.details).toString('utf-8'));
+            if (Array.isArray(parsed.reasons)) reasons = parsed.reasons;
+          } catch { /* ignore parse errors */ }
+        }
+        if (reasons.length === 0) {
+          reasons = [rawEvent.ack.error.message];
+        }
+
+        ackEvents.push(
+          this.makeEvent(
+            runId,
+            ts,
+            'policy.denied',
+            { kind: 'policy', id: rawEvent.ack.messageId },
+            {
+              messageId: rawEvent.ack.messageId,
+              sessionId: rawEvent.ack.sessionId,
+              errorCode: rawEvent.ack.error.code,
+              errorMessage: rawEvent.ack.error.message,
+              decodedPayload: { decision: 'deny', reasons }
+            },
+            'send-ack'
+          )
+        );
+      }
+
+      return ackEvents;
+    }
+
+    // Handle inline MACPError responses from the stream (non-terminal)
+    if (rawEvent.kind === 'stream-inline-error' && rawEvent.inlineError) {
+      const err = rawEvent.inlineError;
+      const events: CanonicalEvent[] = [
+        this.makeEvent(
+          runId,
+          ts,
+          'message.send_failed',
+          { kind: 'message', id: err.messageId || '' },
+          {
+            errorCode: err.code,
+            errorMessage: err.message,
+            sessionId: err.sessionId,
+            messageId: err.messageId
+          },
+          'stream-inline-error'
+        )
+      ];
+      // If it's a policy denial, also emit policy.denied
+      if (err.code === 'POLICY_DENIED') {
+        events.push(
+          this.makeEvent(runId, ts, 'policy.denied', { kind: 'policy', id: err.messageId || '' }, {
+            errorCode: err.code,
+            errorMessage: err.message,
+            decodedPayload: { decision: 'deny', reasons: [err.message] }
+          }, 'stream-inline-error')
+        );
+      }
+      return events;
     }
 
     if (rawEvent.kind !== 'stream-envelope' || !rawEvent.envelope) {
@@ -87,6 +158,10 @@ export class EventNormalizerService implements EventNormalizer {
       );
     }
 
+    this.instrumentation.inboundMessagesTotal.inc({
+      mode: envelope.mode || 'unknown',
+      message_type: envelope.messageType || 'unknown'
+    });
     canonical.push(
       this.makeEvent(
         runId,
@@ -162,6 +237,44 @@ export class EventNormalizerService implements EventNormalizer {
       );
     }
 
+    // Handle policy lifecycle events from the runtime
+    if (envelope.messageType === 'PolicyResolved' && decoded) {
+      const policyPayload = decoded as Record<string, unknown>;
+      canonical.push(
+        this.makeEvent(runId, ts, 'policy.resolved', { kind: 'policy', id: String(policyPayload.policyId ?? policyPayload.policyVersion ?? '') }, {
+          modeName: envelope.mode,
+          messageType: envelope.messageType,
+          sender: envelope.sender,
+          policyVersion: policyPayload.policyVersion ?? policyPayload.policyId,
+          decodedPayload: policyPayload
+        }, envelope.messageType)
+      );
+    }
+
+    if (envelope.messageType === 'PolicyCommitmentEvaluated' && decoded) {
+      const evalPayload = decoded as Record<string, unknown>;
+      canonical.push(
+        this.makeEvent(runId, ts, 'policy.commitment.evaluated', { kind: 'policy', id: String(evalPayload.commitmentId ?? '') }, {
+          modeName: envelope.mode,
+          messageType: envelope.messageType,
+          sender: envelope.sender,
+          decodedPayload: evalPayload
+        }, envelope.messageType)
+      );
+    }
+
+    if (envelope.messageType === 'PolicyDenied' || (decoded && (decoded as Record<string, unknown>).policyDenied === true)) {
+      const denyPayload = (decoded ?? {}) as Record<string, unknown>;
+      canonical.push(
+        this.makeEvent(runId, ts, 'policy.denied', { kind: 'policy', id: String(denyPayload.commitmentId ?? denyPayload.policyId ?? '') }, {
+          modeName: envelope.mode,
+          messageType: envelope.messageType,
+          sender: envelope.sender,
+          decodedPayload: denyPayload
+        }, envelope.messageType)
+      );
+    }
+
     // Handle ambient Progress messages (available across all modes when runtime advertises progress capability)
     if (envelope.messageType === 'Progress' && decoded) {
       const progressPayload = decoded as Record<string, unknown>;
@@ -216,6 +329,9 @@ export class EventNormalizerService implements EventNormalizer {
     }
 
     if (messageType === 'Progress') return 'progress.reported';
+    if (messageType === 'PolicyResolved') return 'policy.resolved';
+    if (messageType === 'PolicyCommitmentEvaluated') return 'policy.commitment.evaluated';
+    if (messageType === 'PolicyDenied') return 'policy.denied';
     if (/^Tool(Call|Request)$/i.test(messageType)) return 'tool.called';
     if (/^Tool(Result|Completed|Output)$/i.test(messageType)) return 'tool.completed';
     return null;

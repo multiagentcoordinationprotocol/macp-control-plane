@@ -15,6 +15,7 @@ export function handoffModeRequest(
       modeName: 'macp.mode.handoff.v1',
       modeVersion: '1.0.0',
       configurationVersion: '1.0.0',
+      policyVersion: 'policy.default',
       ttlMs: 60000,
       participants: [
         { id: 'source', role: 'source_agent' },
@@ -77,7 +78,7 @@ export function handoffAcceptScript(): RuntimeScript {
           'macp.mode.handoff.v1',
           'Commitment',
           'system',
-          { outcome: 'handoff_completed', finalized: true }
+          { outcome: 'handoff_completed', finalized: true, outcome_positive: true }
         )
       }
     ]

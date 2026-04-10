@@ -234,6 +234,88 @@ describe('MetricsService', () => {
       expect(result.sessionState).toBe('SESSION_STATE_RESOLVED');
     });
 
+    it('extracts token usage from event data.payloadDescriptor.tokenUsage', async () => {
+      const events = [
+        makeEvent({
+          type: 'message.received',
+          data: {
+            payloadDescriptor: {
+              tokenUsage: {
+                promptTokens: 300,
+                completionTokens: 150
+              }
+            }
+          }
+        })
+      ];
+
+      const result = await service.recordEvents('run-1', events);
+
+      expect(result.promptTokens).toBe(300);
+      expect(result.completionTokens).toBe(150);
+      expect(result.totalTokens).toBe(450);
+    });
+
+    it('handles negative token values via safeNumber (returns 0)', async () => {
+      const events = [
+        makeEvent({
+          type: 'message.sent',
+          data: {
+            tokenUsage: {
+              promptTokens: -100,
+              completionTokens: -50
+            }
+          }
+        })
+      ];
+
+      const result = await service.recordEvents('run-1', events);
+
+      // safeNumber converts to number, -100 is finite so it passes through
+      // The extraction logic requires > 0 for either prompt or completion
+      expect(result.promptTokens).toBe(0);
+      expect(result.completionTokens).toBe(0);
+    });
+
+    it('handles NaN token values gracefully', async () => {
+      const events = [
+        makeEvent({
+          type: 'message.sent',
+          data: {
+            tokenUsage: {
+              promptTokens: 'not-a-number',
+              completionTokens: undefined
+            }
+          }
+        })
+      ];
+
+      const result = await service.recordEvents('run-1', events);
+
+      // NaN fails the > 0 check, so no tokens extracted
+      expect(result.promptTokens).toBe(0);
+      expect(result.completionTokens).toBe(0);
+    });
+
+    it('prefers first matching token location (data.tokenUsage over metadata)', async () => {
+      const events = [
+        makeEvent({
+          type: 'message.sent',
+          data: {
+            tokenUsage: { promptTokens: 100, completionTokens: 50 },
+            metadata: {
+              tokenUsage: { promptTokens: 200, completionTokens: 100 }
+            }
+          }
+        })
+      ];
+
+      const result = await service.recordEvents('run-1', events);
+
+      expect(result.promptTokens).toBe(100);
+      expect(result.completionTokens).toBe(50);
+    });
+
     it('tracks stream reconnection count', async () => {
       const events = [
         makeEvent({

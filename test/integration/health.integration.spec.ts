@@ -1,4 +1,3 @@
-import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { TestClient } from '../helpers/test-client';
 
@@ -15,15 +14,19 @@ describe('Health Probes (integration)', () => {
     await ctx.app.close();
   });
 
-  it('GET /healthz returns 200 with status ok', async () => {
-    const result = await client.healthz();
-    expect(result).toHaveProperty('status', 'ok');
+  it('GET /healthz returns 200 with ok=true', async () => {
+    const result = await client.healthz() as Record<string, unknown>;
+    expect(result).toHaveProperty('ok', true);
+    expect(result).toHaveProperty('service', 'macp-control-plane');
   });
 
   it('GET /readyz returns 200 with subsystem statuses', async () => {
-    const result = await client.readyz();
-    expect(result).toHaveProperty('status');
-    expect(result).toHaveProperty('checks');
+    const result = await client.readyz() as Record<string, unknown>;
+    expect(result).toHaveProperty('ok');
+    expect(result).toHaveProperty('database');
+    expect(result).toHaveProperty('runtime');
+    expect(result).toHaveProperty('streamConsumer');
+    expect(result).toHaveProperty('circuitBreaker');
   });
 
   it('GET /metrics returns Prometheus text format', async () => {

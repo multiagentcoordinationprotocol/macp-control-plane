@@ -1,11 +1,15 @@
 import { Logger } from '@nestjs/common';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 
 export type CircuitBreakerState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+
+const STATE_VALUES: Record<CircuitBreakerState, number> = { CLOSED: 0, HALF_OPEN: 1, OPEN: 2 };
 
 export interface CircuitBreakerConfig {
   failureThreshold: number;
   resetTimeoutMs: number;
   onStateChange?: (state: CircuitBreakerState, event: 'success' | 'failure') => void;
+  instrumentation?: InstrumentationService;
 }
 
 export class CircuitBreaker {
@@ -22,6 +26,7 @@ export class CircuitBreaker {
       if (elapsed >= this.config.resetTimeoutMs) {
         this.state = 'HALF_OPEN';
         this.logger.log('Circuit breaker transitioned to HALF_OPEN');
+        this.reportStateGauge();
       }
     }
     return this.state;
@@ -50,6 +55,8 @@ export class CircuitBreaker {
     }
     this.failureCount = 0;
     this.state = 'CLOSED';
+    this.config.instrumentation?.circuitBreakerSuccessTotal.inc();
+    this.reportStateGauge();
     this.config.onStateChange?.(this.state, 'success');
   }
 
@@ -63,12 +70,19 @@ export class CircuitBreaker {
         `Circuit breaker OPEN after ${this.failureCount} failures (reset in ${this.config.resetTimeoutMs}ms)`
       );
     }
+    this.config.instrumentation?.circuitBreakerFailuresTotal.inc();
+    this.reportStateGauge();
     this.config.onStateChange?.(this.state, 'failure');
+  }
+
+  private reportStateGauge(): void {
+    this.config.instrumentation?.circuitBreakerState.set(STATE_VALUES[this.state]);
   }
 
   reset(): void {
     this.failureCount = 0;
     this.state = 'CLOSED';
+    this.reportStateGauge();
     this.logger.log('Circuit breaker manually reset to CLOSED');
   }
 }

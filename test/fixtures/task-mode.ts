@@ -15,6 +15,7 @@ export function taskModeRequest(
       modeName: 'macp.mode.task.v1',
       modeVersion: '1.0.0',
       configurationVersion: '1.0.0',
+      policyVersion: 'policy.default',
       ttlMs: 60000,
       participants: [
         { id: 'requester', role: 'requester' },
@@ -82,7 +83,8 @@ export function taskHappyScript(): RuntimeScript {
         event: makeStreamEnvelope('macp.mode.task.v1', 'Commitment', 'system', {
           taskId: 'task-1',
           outcome: 'completed',
-          finalized: true
+          finalized: true,
+          outcome_positive: true
         })
       }
     ]

@@ -20,11 +20,10 @@
     "drizzle:generate": "drizzle-kit generate",
     "drizzle:migrate": "drizzle-kit migrate",
     "drizzle:studio": "drizzle-kit studio",
-    "proto:sync": "bash scripts/proto-sync.sh bsr",
-    "proto:sync:runtime": "bash scripts/proto-sync.sh runtime",
-    "proto:check": "bash scripts/proto-check.sh"
+    "dev:link-protos": "cd ../multiagentcoordinationprotocol/packages/proto-npm && npm link && cd - && npm link @multiagentcoordinationprotocol/proto"
   },
   "dependencies": {
+    "@multiagentcoordinationprotocol/proto": "^0.1.0",
     "@grpc/grpc-js": "^1.14.0",
     "@grpc/proto-loader": "^0.8.0",
     "@nestjs/common": "^11.1.16",

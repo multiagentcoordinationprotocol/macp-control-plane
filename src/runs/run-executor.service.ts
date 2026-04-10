@@ -9,6 +9,7 @@ import { AppException } from '../errors/app-exception';
 import { ErrorCode } from '../errors/error-codes';
 import { ProtoRegistryService } from '../runtime/proto-registry.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { TraceService } from '../telemetry/trace.service';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
@@ -30,12 +31,18 @@ export class RunExecutorService {
     private readonly artifactService: ArtifactService,
     private readonly streamConsumer: StreamConsumerService,
     private readonly streamHub: StreamHubService,
-    private readonly config: AppConfigService
+    private readonly config: AppConfigService,
+    private readonly instrumentation: InstrumentationService
   ) {}
 
   async validate(request: ExecutionRequest) {
     const errors: string[] = [];
     const warnings: string[] = [];
+
+    if (!request.session) {
+      errors.push('session is required');
+      return { valid: false, errors, warnings, runtime: { reachable: false, supportedModes: [] } };
+    }
 
     if (!request.session.participants || request.session.participants.length === 0) {
       errors.push('session.participants must contain at least one participant');
@@ -155,10 +162,42 @@ export class RunExecutorService {
     });
 
     if (!sendResult.ack.ok && sendResult.ack.error) {
+      const errorCode = sendResult.ack.error.code;
+
+      // Map runtime policy errors to specific error codes
+      if (errorCode === 'POLICY_DENIED') {
+        throw new AppException(
+          ErrorCode.POLICY_DENIED,
+          `Policy denied commitment: ${sendResult.ack.error.message}`,
+          403
+        );
+      }
+      if (errorCode === 'UNKNOWN_POLICY_VERSION') {
+        throw new AppException(
+          ErrorCode.UNKNOWN_POLICY_VERSION,
+          `Unknown policy version: ${sendResult.ack.error.message}`,
+          400
+        );
+      }
+      if (errorCode === 'INVALID_POLICY_DEFINITION') {
+        throw new AppException(
+          ErrorCode.INVALID_POLICY_DEFINITION,
+          `Invalid policy definition: ${sendResult.ack.error.message}`,
+          400
+        );
+      }
+      if (errorCode === 'SESSION_ALREADY_EXISTS') {
+        throw new AppException(
+          ErrorCode.SESSION_ALREADY_EXISTS,
+          `Session already exists: ${sendResult.ack.error.message}`,
+          409
+        );
+      }
+
       throw new AppException(
         ErrorCode.MESSAGE_SEND_FAILED,
-        `Runtime rejected message: [${sendResult.ack.error.code}] ${sendResult.ack.error.message}`,
-        sendResult.ack.error.code === 'INVALID_SESSION_ID' ? 400 : 502
+        `Runtime rejected message: [${errorCode}] ${sendResult.ack.error.message}`,
+        errorCode === 'INVALID_SESSION_ID' ? 400 : 502
       );
     }
 
@@ -180,6 +219,7 @@ export class RunExecutorService {
       }
     ]);
 
+    this.instrumentation.outboundMessagesTotal.inc({ category: 'message', status: 'sent' });
     return { messageId: sendResult.envelope.messageId, ack: sendResult.ack };
   }
 
@@ -298,7 +338,7 @@ export class RunExecutorService {
     }
     // Clear idempotency key so clone creates a new run
     if (cloned.execution) {
-      delete (cloned.execution as any).idempotencyKey;
+      delete (cloned.execution as unknown as Record<string, unknown>).idempotencyKey;
     }
 
     return this.launch(cloned);
@@ -480,7 +520,45 @@ export class RunExecutorService {
         ]);
       }
     } catch (error) {
-      await this.runManager.markFailed(runId, error);
+      // Surface policy-specific errors with appropriate error codes
+      try {
+        if (error instanceof Error) {
+          const msg = error.message ?? '';
+          if (msg.includes('UNKNOWN_POLICY_VERSION')) {
+            await this.runManager.markFailed(
+              runId,
+              new AppException(ErrorCode.UNKNOWN_POLICY_VERSION, `Unknown policy version: ${msg}`, 400)
+            );
+            return;
+          }
+          if (msg.includes('POLICY_DENIED')) {
+            await this.runManager.markFailed(
+              runId,
+              new AppException(ErrorCode.POLICY_DENIED, `Policy denied: ${msg}`, 403)
+            );
+            return;
+          }
+          if (msg.includes('INVALID_POLICY_DEFINITION')) {
+            await this.runManager.markFailed(
+              runId,
+              new AppException(ErrorCode.INVALID_POLICY_DEFINITION, `Invalid policy definition: ${msg}`, 400)
+            );
+            return;
+          }
+          if (msg.includes('SESSION_ALREADY_EXISTS') || msg.includes('SessionAlreadyExists')) {
+            await this.runManager.markFailed(
+              runId,
+              new AppException(ErrorCode.SESSION_ALREADY_EXISTS, `Session already exists: ${msg}`, 409)
+            );
+            return;
+          }
+        }
+        await this.runManager.markFailed(runId, error);
+      } catch (markFailedError) {
+        this.logger.error(
+          `failed to mark run ${runId} as failed (run may have been deleted): ${markFailedError instanceof Error ? markFailedError.message : String(markFailedError)}`
+        );
+      }
     }
   }
 

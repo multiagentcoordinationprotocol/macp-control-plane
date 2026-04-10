@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- gRPC dynamic proto loading returns untyped objects */
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
@@ -26,10 +27,18 @@ import {
   RuntimeSessionSnapshot,
   RuntimeStartSessionRequest,
   RuntimeStartSessionResult,
-  RuntimeStreamSessionRequest
+  RuntimeStreamSessionRequest,
+  RuntimeRegisterPolicyRequest,
+  RuntimeRegisterPolicyResult,
+  RuntimeUnregisterPolicyRequest,
+  RuntimeUnregisterPolicyResult,
+  RuntimeGetPolicyRequest,
+  RuntimeListPoliciesRequest,
+  RuntimePolicyDescriptor
 } from '../contracts/runtime';
 import { AppException } from '../errors/app-exception';
 import { ErrorCode } from '../errors/error-codes';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { CircuitBreaker } from './circuit-breaker';
 import { ProtoRegistryService } from './proto-registry.service';
 import { RuntimeCredentialResolverService } from './runtime-credential-resolver.service';
@@ -48,7 +57,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   constructor(
     private readonly config: AppConfigService,
     private readonly credentialResolver: RuntimeCredentialResolverService,
-    private readonly protoRegistry: ProtoRegistryService
+    private readonly protoRegistry: ProtoRegistryService,
+    private readonly instrumentation: InstrumentationService
   ) {}
 
   getCircuitBreakerState() {
@@ -62,14 +72,17 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   onModuleInit(): void {
     this.circuitBreaker = new CircuitBreaker({
       failureThreshold: this.config.runtimeCircuitBreakerThreshold,
-      resetTimeoutMs: this.config.runtimeCircuitBreakerResetMs
+      resetTimeoutMs: this.config.runtimeCircuitBreakerResetMs,
+      instrumentation: this.instrumentation
     });
 
-    const repoRoot = path.resolve(__dirname, '..', '..');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { protoDir } = require('@multiagentcoordinationprotocol/proto');
     const packageDefinition = protoLoader.loadSync(
       [
-        path.join(repoRoot, 'proto/macp/v1/core.proto'),
-        path.join(repoRoot, 'proto/macp/v1/envelope.proto')
+        path.join(protoDir, 'macp/v1/core.proto'),
+        path.join(protoDir, 'macp/v1/envelope.proto'),
+        path.join(protoDir, 'macp/v1/policy.proto')
       ],
       {
         keepCase: false,
@@ -77,7 +90,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         enums: String,
         defaults: true,
         oneofs: true,
-        includeDirs: [path.join(repoRoot, 'proto')]
+        includeDirs: [protoDir]
       }
     );
     const descriptor = grpc.loadPackageDefinition(packageDefinition) as any;
@@ -103,8 +116,9 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         cancellation: { cancelSession: true },
         progress: { progress: true },
         manifest: { getManifest: true },
-        modeRegistry: { listModes: true, listChanged: true },
-        roots: { listRoots: true, listChanged: true },
+        modeRegistry: { listModes: true, listChanged: false },
+        roots: { listRoots: true, listChanged: false },
+        policyRegistry: { registerPolicy: true, listPolicies: true, listChanged: false },
         experimental: { features: {} }
       }
     }, undefined, opts);
@@ -126,7 +140,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         progress: response.capabilities.progress,
         manifest: response.capabilities.manifest,
         modeRegistry: response.capabilities.modeRegistry,
-        roots: response.capabilities.roots
+        roots: response.capabilities.roots,
+        policyRegistry: response.capabilities.policyRegistry
       } : undefined
     };
   }
@@ -271,10 +286,34 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         grpcCall = streamMethod.call(this.client, metadata);
 
         grpcCall.on('data', (chunk: any) => {
-          const envelope = this.fromEnvelope(chunk.envelope);
+          const receivedAt = new Date().toISOString();
+
+          // StreamSessionResponse oneof: response.envelope | response.error
+          const responseBody = chunk.response ?? chunk;
+          if (responseBody.error) {
+            // Inline MACPError — non-terminal, stream stays open
+            const inlineError = responseBody.error;
+            buffer.push({
+              kind: 'stream-inline-error',
+              receivedAt,
+              inlineError: {
+                code: inlineError.code ?? 'UNKNOWN',
+                message: inlineError.message ?? '',
+                sessionId: inlineError.sessionId ?? '',
+                messageId: inlineError.messageId ?? ''
+              }
+            });
+            notify();
+            return;
+          }
+
+          const rawEnvelope = responseBody.envelope ?? chunk.envelope;
+          if (!rawEnvelope) return;
+
+          const envelope = this.fromEnvelope(rawEnvelope);
           const event: RawRuntimeEvent = {
             kind: 'stream-envelope',
-            receivedAt: new Date().toISOString(),
+            receivedAt,
             envelope
           };
 
@@ -523,27 +562,87 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     }
   }
 
+  // ── Governance policy lifecycle (RFC-MACP-0012) ──────────────────
+
+  async registerPolicy(req: RuntimeRegisterPolicyRequest): Promise<RuntimeRegisterPolicyResult> {
+    const descriptor = req.descriptor;
+    const response = await this.unary('RegisterPolicy', {
+      policyDescriptor: {
+        policyId: descriptor.policyId,
+        mode: descriptor.mode,
+        description: descriptor.description,
+        rules: typeof descriptor.rules === 'string' ? Buffer.from(descriptor.rules) : descriptor.rules,
+        schemaVersion: descriptor.schemaVersion
+      }
+    });
+    return { ok: response.ok ?? false, error: response.error || undefined };
+  }
+
+  async unregisterPolicy(req: RuntimeUnregisterPolicyRequest): Promise<RuntimeUnregisterPolicyResult> {
+    const response = await this.unary('UnregisterPolicy', { policyId: req.policyId });
+    return { ok: response.ok ?? false, error: response.error || undefined };
+  }
+
+  async getPolicy(req: RuntimeGetPolicyRequest): Promise<RuntimePolicyDescriptor> {
+    const response = await this.unary('GetPolicy', { policyId: req.policyId });
+    const d = response.policyDescriptor ?? response.descriptor;
+    return {
+      policyId: d.policyId,
+      mode: d.mode,
+      description: d.description,
+      rules: d.rules,
+      schemaVersion: d.schemaVersion ?? 1,
+      registeredAtUnixMs: d.registeredAtUnixMs ? Number(d.registeredAtUnixMs) : undefined
+    };
+  }
+
+  async listPolicies(req?: RuntimeListPoliciesRequest): Promise<RuntimePolicyDescriptor[]> {
+    const response = await this.unary('ListPolicies', { mode: req?.mode ?? '' });
+    return (response.descriptors ?? []).map((d: any) => ({
+      policyId: d.policyId,
+      mode: d.mode,
+      description: d.description,
+      rules: d.rules,
+      schemaVersion: d.schemaVersion ?? 1,
+      registeredAtUnixMs: d.registeredAtUnixMs ? Number(d.registeredAtUnixMs) : undefined
+    }));
+  }
+
   private async unary(
     method: string,
     request: unknown,
     metadata?: grpc.Metadata,
     opts?: GrpcCallOptions
   ): Promise<any> {
-    return this.circuitBreaker.execute(() => {
-      const clientMethod = this.getClientMethod(method);
-      const deadline = opts?.deadline ?? new Date(Date.now() + this.config.runtimeRequestTimeoutMs);
-      return new Promise((resolve, reject) => {
-        const callback = (error: grpc.ServiceError | null, response: any) => {
-          if (error) return reject(error);
-          resolve(response);
-        };
-        if (metadata) {
-          clientMethod.call(this.client, request, metadata, { deadline }, callback);
-        } else {
-          clientMethod.call(this.client, request, { deadline }, callback);
-        }
+    const start = Date.now();
+    try {
+      const result = await this.circuitBreaker.execute(() => {
+        const clientMethod = this.getClientMethod(method);
+        const deadline = opts?.deadline ?? new Date(Date.now() + this.config.runtimeRequestTimeoutMs);
+        return new Promise((resolve, reject) => {
+          const callback = (error: grpc.ServiceError | null, response: any) => {
+            if (error) return reject(error);
+            resolve(response);
+          };
+          if (metadata) {
+            clientMethod.call(this.client, request, metadata, { deadline }, callback);
+          } else {
+            clientMethod.call(this.client, request, { deadline }, callback);
+          }
+        });
       });
-    });
+      this.instrumentation.grpcCallDuration.observe(
+        { method, status: 'ok' },
+        (Date.now() - start) / 1000
+      );
+      return result;
+    } catch (error) {
+      this.instrumentation.grpcCallDuration.observe(
+        { method, status: 'error' },
+        (Date.now() - start) / 1000
+      );
+      throw error;
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
@@ -630,7 +729,28 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     };
   }
 
-  private fromAck(ack: any): RuntimeAck {
+  private fromAck(ack: any, trailingMetadata?: grpc.Metadata): RuntimeAck {
+    let reasons: string[] | undefined;
+
+    // Parse structured reasons from error details bytes
+    if (ack?.error?.details) {
+      try {
+        const parsed = JSON.parse(Buffer.from(ack.error.details).toString('utf-8'));
+        if (Array.isArray(parsed.reasons)) reasons = parsed.reasons;
+      } catch { /* ignore parse errors */ }
+    }
+
+    // Also check gRPC trailing metadata for POLICY_DENIED binary details
+    if (!reasons && trailingMetadata) {
+      const detailsBin = trailingMetadata.get('macp-error-details-bin');
+      if (detailsBin && detailsBin.length > 0) {
+        try {
+          const parsed = JSON.parse(Buffer.from(detailsBin[0] as Buffer).toString('utf-8'));
+          if (Array.isArray(parsed.reasons)) reasons = parsed.reasons;
+        } catch { /* ignore parse errors */ }
+      }
+    }
+
     return {
       ok: Boolean(ack?.ok),
       duplicate: Boolean(ack?.duplicate),
@@ -646,7 +766,9 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
             messageId: ack.error.messageId,
             detailsBase64: ack.error.details
               ? Buffer.from(ack.error.details).toString('base64')
-              : undefined
+              : undefined,
+            details: ack.error.details ? Buffer.from(ack.error.details) : undefined,
+            reasons
           }
         : undefined
     };
@@ -661,7 +783,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       expiresAtUnixMs: metadata?.expiresAtUnixMs ? Number(metadata.expiresAtUnixMs) : undefined,
       modeVersion: metadata?.modeVersion,
       configurationVersion: metadata?.configurationVersion,
-      policyVersion: metadata?.policyVersion
+      policyVersion: metadata?.policyVersion,
+      initiator: metadata?.initiator ?? undefined
     };
   }
 

@@ -21,6 +21,13 @@ export class ProjectionService {
   async get(runId: string): Promise<RunStateProjection | null> {
     const row = await this.projectionRepository.get(runId);
     if (!row) return null;
+
+    // Schema version migration: if stored schema is older, mark as needing rebuild
+    const storedSchemaVersion = (row as unknown as Record<string, unknown>).schemaVersion as number | undefined;
+    if (storedSchemaVersion != null && storedSchemaVersion < PROJECTION_SCHEMA_VERSION) {
+      this.logger.warn(`projection for run ${runId} has schema v${storedSchemaVersion}, current is v${PROJECTION_SCHEMA_VERSION} — returning stale data (rebuild recommended)`);
+    }
+
     return {
       run: row.runSummary as unknown as RunSummaryProjection,
       participants: row.participants as unknown as ParticipantProjection[],
@@ -30,15 +37,16 @@ export class ProjectionService {
       progress: row.progress as unknown as ProgressProjection ?? { entries: [] },
       timeline: row.timeline as unknown as RunStateProjection['timeline'],
       trace: row.traceSummary as unknown as RunStateProjection['trace'],
-      outboundMessages: (row as any).outboundMessages as OutboundMessageSummary ?? { total: 0, queued: 0, accepted: 0, rejected: 0 }
+      outboundMessages: (row as unknown as Record<string, unknown>).outboundMessages as OutboundMessageSummary ?? { total: 0, queued: 0, accepted: 0, rejected: 0 },
+      policy: (row as unknown as Record<string, unknown>).policy as RunStateProjection['policy'] ?? { policyVersion: '', commitmentEvaluations: [] }
     };
   }
 
-  async applyAndPersist(runId: string, events: CanonicalEvent[]): Promise<RunStateProjection> {
+  async applyAndPersist(runId: string, events: CanonicalEvent[], tx?: unknown): Promise<RunStateProjection> {
     const current = (await this.get(runId)) ?? this.empty(runId);
     const next = this.applyEvents(current, events);
     const version = (events.at(-1)?.seq ?? current.timeline.latestSeq) || 0;
-    await this.projectionRepository.upsert(runId, next, version);
+    await this.projectionRepository.upsert(runId, next, version, PROJECTION_SCHEMA_VERSION, tx as Parameters<typeof this.projectionRepository.upsert>[4]);
     return next;
   }
 
@@ -179,9 +187,16 @@ export class ProjectionService {
             confidence: safeOptionalNumber(payload?.confidence) ?? next.decision.current?.confidence,
             reasons: [String(payload?.reason ?? 'Commitment observed')],
             finalized: true,
-            proposalId: String(payload?.commitmentId ?? next.decision.current?.proposalId ?? '')
+            proposalId: String(payload?.commitmentId ?? next.decision.current?.proposalId ?? ''),
+            outcomePositive: payload?.outcomePositive != null
+              ? Boolean(payload.outcomePositive)
+              : payload?.outcome_positive != null
+                ? Boolean(payload.outcome_positive)
+                : true
           };
           next.run.status = 'completed';
+          // Propagate outcomePositive to policy projection
+          next.policy.outcomePositive = next.decision.current.outcomePositive;
           break;
         }
         case 'progress.reported': {
@@ -202,6 +217,26 @@ export class ProjectionService {
           next.trace.linkedArtifacts = [...new Set([...next.trace.linkedArtifacts, artifactId])];
           break;
         }
+        case 'policy.resolved': {
+          const policyPayload = event.data.decodedPayload as Record<string, unknown> | undefined;
+          next.policy.policyVersion = String(policyPayload?.policyVersion ?? event.data.policyVersion ?? '');
+          next.policy.policyDescription = String(policyPayload?.description ?? '');
+          next.policy.resolvedAt = event.ts;
+          break;
+        }
+        case 'policy.commitment.evaluated': {
+          const evalPayload = event.data.decodedPayload as Record<string, unknown> | undefined;
+          next.policy.commitmentEvaluations = [
+            ...next.policy.commitmentEvaluations,
+            {
+              commitmentId: String(evalPayload?.commitmentId ?? event.subject?.id ?? ''),
+              decision: (evalPayload?.decision as 'allow' | 'deny') ?? 'allow',
+              reasons: (evalPayload?.reasons as string[]) ?? [],
+              ts: event.ts
+            }
+          ].slice(-50);
+          break;
+        }
         default:
           break;
       }
@@ -217,7 +252,7 @@ export class ProjectionService {
   async rebuild(runId: string, events: CanonicalEvent[]): Promise<RunStateProjection> {
     const projection = this.applyEvents(this.empty(runId), events);
     const version = events.at(-1)?.seq ?? 0;
-    await this.projectionRepository.upsert(runId, projection, version);
+    await this.projectionRepository.upsert(runId, projection, version, PROJECTION_SCHEMA_VERSION);
     this.logger.log(`projection rebuilt for run ${runId} at schema version ${PROJECTION_SCHEMA_VERSION}`);
     return projection;
   }
@@ -232,7 +267,8 @@ export class ProjectionService {
       progress: { entries: [] },
       timeline: { latestSeq: 0, totalEvents: 0, recent: [] },
       trace: { spanCount: 0, linkedArtifacts: [] },
-      outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 }
+      outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
+      policy: { policyVersion: '', commitmentEvaluations: [] }
     };
   }
 

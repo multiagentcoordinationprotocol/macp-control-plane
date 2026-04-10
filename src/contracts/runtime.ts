@@ -34,11 +34,13 @@ export interface RuntimeAck {
     sessionId?: string;
     messageId?: string;
     detailsBase64?: string;
+    details?: Buffer | Uint8Array;
+    reasons?: string[];
   };
 }
 
 export interface RawRuntimeEvent {
-  kind: 'stream-envelope' | 'session-snapshot' | 'send-ack' | 'stream-status';
+  kind: 'stream-envelope' | 'session-snapshot' | 'send-ack' | 'stream-status' | 'stream-inline-error';
   receivedAt: string;
   envelope?: RuntimeEnvelope;
   sessionSnapshot?: RuntimeSessionSnapshot;
@@ -46,6 +48,12 @@ export interface RawRuntimeEvent {
   streamStatus?: {
     status: 'opened' | 'reconnecting' | 'closed';
     detail?: string;
+  };
+  inlineError?: {
+    code: string;
+    message: string;
+    sessionId?: string;
+    messageId?: string;
   };
 }
 
@@ -118,6 +126,7 @@ export interface RuntimeSessionSnapshot {
   modeVersion?: string;
   configurationVersion?: string;
   policyVersion?: string;
+  initiator?: string;
 }
 
 export interface RuntimeCancelSessionRequest {
@@ -195,6 +204,7 @@ export interface RuntimeCapabilities {
   manifest?: { getManifest?: boolean };
   modeRegistry?: { listModes?: boolean; listChanged?: boolean };
   roots?: { listRoots?: boolean; listChanged?: boolean };
+  policyRegistry?: { registerPolicy?: boolean; listPolicies?: boolean; listChanged?: boolean };
 }
 
 export interface RuntimeProvider {
@@ -216,7 +226,52 @@ export interface RuntimeProvider {
   listModes(): Promise<RuntimeModeDescriptor[]>;
   listRoots(): Promise<RuntimeRootDescriptor[]>;
   health(): Promise<RuntimeHealth>;
+
+  // Governance policy lifecycle (RFC-MACP-0012)
+  registerPolicy(req: RuntimeRegisterPolicyRequest): Promise<RuntimeRegisterPolicyResult>;
+  unregisterPolicy(req: RuntimeUnregisterPolicyRequest): Promise<RuntimeUnregisterPolicyResult>;
+  getPolicy(req: RuntimeGetPolicyRequest): Promise<RuntimePolicyDescriptor>;
+  listPolicies(req?: RuntimeListPoliciesRequest): Promise<RuntimePolicyDescriptor[]>;
 }
+
+// ── Policy types (RFC-MACP-0012) ────────────────────────────────────
+
+export interface RuntimePolicyDescriptor {
+  policyId: string;
+  mode: string;
+  description: string;
+  rules: Buffer | string;
+  schemaVersion: number;
+  registeredAtUnixMs?: number;
+}
+
+export interface RuntimeRegisterPolicyRequest {
+  descriptor: RuntimePolicyDescriptor;
+}
+
+export interface RuntimeRegisterPolicyResult {
+  ok: boolean;
+  error?: string;
+}
+
+export interface RuntimeUnregisterPolicyRequest {
+  policyId: string;
+}
+
+export interface RuntimeUnregisterPolicyResult {
+  ok: boolean;
+  error?: string;
+}
+
+export interface RuntimeGetPolicyRequest {
+  policyId: string;
+}
+
+export interface RuntimeListPoliciesRequest {
+  mode?: string;
+}
+
+// ── Credential types ────────────────────────────────────────────────
 
 export interface RuntimeCredentialResolver {
   resolve(req: {

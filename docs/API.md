@@ -88,12 +88,13 @@ Fetch the projected run state for UI rendering. Returns:
   "run": { "runId", "status", "modeName", "runtimeSessionId", "startedAt", "endedAt" },
   "participants": [{ "participantId", "role", "status", "latestSummary" }],
   "graph": { "nodes": [...], "edges": [...] },
-  "decision": { "current": { "action", "confidence", "finalized", "proposalId" } },
+  "decision": { "current": { "action", "confidence", "finalized", "proposalId", "outcomePositive" } },
   "signals": { "signals": [{ "id", "name", "severity", "sourceParticipantId", "confidence" }] },
   "progress": { "entries": [{ "participantId", "percentage", "message" }] },
   "timeline": { "latestSeq", "totalEvents", "recent": [...] },
   "trace": { "traceId", "spanCount", "linkedArtifacts" },
-  "outboundMessages": { "total", "queued", "accepted", "rejected" }
+  "outboundMessages": { "total", "queued", "accepted", "rejected" },
+  "policy": { "policyVersion", "policyDescription", "resolvedAt", "commitmentEvaluations": [...] }
 }
 ```
 
@@ -325,7 +326,32 @@ POST /runs/:id/messages
 }
 ```
 
-The control plane extracts `tokenUsage` from event data/metadata during normalization and accumulates per-run totals. Cost is estimated using built-in per-model rates.
+The control plane extracts `tokenUsage` from event data/metadata during normalization and accumulates per-run totals. Cost is estimated using built-in per-model rates:
+
+| Model | Prompt ($/1M tokens) | Completion ($/1M tokens) |
+|-------|---------------------|--------------------------|
+| `gpt-4o` | $2.50 | $10.00 |
+| `gpt-4o-mini` | $0.15 | $0.60 |
+| `gpt-4-turbo` | $10.00 | $30.00 |
+| `claude-3-opus` | $15.00 | $75.00 |
+| `claude-3-sonnet` | $3.00 | $15.00 |
+| `claude-3-haiku` | $0.25 | $1.25 |
+| _(unknown/default)_ | $1.00 | $3.00 |
+
+### Run Metadata Enrichment
+
+When a run completes or fails, the control plane asynchronously enriches the run's `metadata` field with:
+
+| Field | Source | Description |
+|-------|--------|-------------|
+| `durationMs` | `endedAt - startedAt` | Run wall-clock duration |
+| `eventCount` | MetricsService | Total canonical events |
+| `signalCount` | MetricsService | Total signals emitted |
+| `decisionCount` | MetricsService | Total decisions finalized |
+| `finalAction` | Last `decision.finalized` event | Commitment action string |
+| `finalConfidence` | Last `decision.finalized` event | Decision confidence score |
+
+Enrichment is fire-and-forget — errors are logged but never fail the run transition.
 
 ---
 
@@ -342,6 +368,84 @@ Runtime root descriptors.
 
 ### `GET /runtime/health`
 Runtime health: `{ "ok": true, "runtimeKind": "rust", "detail": "..." }`
+
+### `POST /runtime/policies`
+Register a governance policy with the runtime.
+
+Body:
+```json
+{
+  "policyId": "policy.fraud.majority-veto",
+  "mode": "macp.mode.decision.v1",
+  "description": "Majority voting with veto support",
+  "rules": {
+    "voting": { "algorithm": "majority", "threshold": 0.5, "quorum": { "type": "count", "value": 2 } },
+    "objection_handling": { "block_severity_vetoes": true, "veto_threshold": 1 },
+    "commitment": { "authority": "initiator_only", "require_vote_quorum": true }
+  },
+  "schemaVersion": 1
+}
+```
+
+Returns: `{ "ok": true }` or `{ "ok": false, "error": "..." }`
+
+### `GET /runtime/policies`
+List registered governance policies. Optional `?mode=macp.mode.decision.v1` filter.
+
+Returns array of policy descriptors with parsed `rules` objects.
+
+### `GET /runtime/policies/:policyId`
+Get a specific governance policy by ID.
+
+### `DELETE /runtime/policies/:policyId`
+Unregister a governance policy. Returns: `{ "ok": true }`
+
+### Policy Errors
+
+| Error Code | HTTP | When |
+|------------|------|------|
+| `UNKNOWN_POLICY_VERSION` | 400 | `policy_version` not found in registry at session start |
+| `POLICY_DENIED` | 403 | Commitment rejected because policy rules not satisfied (includes structured `reasons` array) |
+| `INVALID_POLICY_DEFINITION` | 400 | Policy rules fail schema validation at registration, or policy mode doesn't match session mode at SessionStart |
+| `SESSION_ALREADY_EXISTS` | 409 | Duplicate session start attempt |
+
+### Policy Projection
+
+The `GET /runs/:id/state` response includes a `policy` field:
+```json
+{
+  "policy": {
+    "policyVersion": "policy.fraud.majority-veto",
+    "policyDescription": "Majority voting with veto support",
+    "resolvedAt": "2026-04-05T12:00:00Z",
+    "commitmentEvaluations": [
+      {
+        "commitmentId": "commit-1",
+        "decision": "allow",
+        "reasons": ["quorum met", "no blocking objections"],
+        "ts": "2026-04-05T12:01:00Z"
+      }
+    ]
+  }
+}
+```
+
+Policy events are produced when:
+- Runtime resolves a policy at session start → `policy.resolved`
+- Runtime evaluates a commitment against policy → `policy.commitment.evaluated`
+- Runtime denies a commitment due to policy → `policy.denied`
+
+### Policy Rule Schemas (RFC-MACP-0012)
+
+Rules are opaque to the control plane (passed through as JSON to the runtime), but must conform to the RFC's per-mode schemas:
+
+| Mode | Rule Sections |
+|------|---------------|
+| **Decision** | `voting` (algorithm, threshold, quorum, weights), `objection_handling` (block_severity_vetoes, `veto_threshold`), `evaluation` (required_before_voting, `minimum_confidence`), `commitment` (authority, `designated_roles`, require_vote_quorum) |
+| **Quorum** | `threshold` (type: `n_of_m`/`percentage`/`weighted`, value), `abstention` (`counts_toward_quorum`, `interpretation`), `commitment` |
+| **Proposal** | `acceptance` (`criterion`), `counter_proposal` (`max_rounds`), `rejection` (`terminal_on_any_reject`), `commitment` |
+| **Task** | `assignment` (`allow_reassignment_on_reject`), `completion` (`require_output`), `commitment` |
+| **Handoff** | `acceptance` (`implicit_accept_timeout_ms`), `commitment` |
 
 ---
 
@@ -408,6 +512,28 @@ Prometheus metrics (text format).
 | `tool.called` | Tool invocation |
 | `tool.completed` | Tool result |
 | `artifact.created` | Artifact linked |
+| `policy.resolved` | Policy resolved at session start |
+| `policy.commitment.evaluated` | Commitment evaluated against policy rules |
+| `policy.denied` | Commitment rejected by policy (includes reasons) |
+
+---
+
+## Data Retention
+
+The control plane includes an optional periodic cleanup service that purges old data from PostgreSQL. When enabled, it runs on a configurable interval and deletes:
+
+- **Terminal runs** (completed, failed, cancelled) older than `DATA_RETENTION_TTL_DAYS` — cascade deletes events, projections, metrics, sessions, artifacts, and outbound messages
+- **Audit log** entries older than TTL
+- **Webhook deliveries** older than TTL
+
+Uses PostgreSQL advisory locks for multi-instance safety (only one instance runs retention at a time).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATA_RETENTION_ENABLED` | `false` | Enable periodic data purge |
+| `DATA_RETENTION_TTL_DAYS` | `30` | Days to keep data (min 1) |
+| `DATA_RETENTION_INTERVAL_HOURS` | `24` | Hours between retention sweeps |
+| `DATA_RETENTION_BATCH_SIZE` | `500` | Max runs deleted per batch |
 
 ## Error Response Format
 

@@ -3,6 +3,7 @@ import { ExecutionRequest } from '../contracts/control-plane';
 import { AppConfigService } from '../config/app-config.service';
 import { DatabaseService } from '../db/database.service';
 import { RunEventService } from '../events/run-event.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
 import { RunManagerService } from './run-manager.service';
@@ -19,7 +20,8 @@ export class RunRecoveryService implements OnApplicationBootstrap {
     private readonly runtimeSessionRepository: RuntimeSessionRepository,
     private readonly runManager: RunManagerService,
     private readonly streamConsumer: StreamConsumerService,
-    private readonly eventService: RunEventService
+    private readonly eventService: RunEventService,
+    private readonly instrumentation: InstrumentationService
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -52,12 +54,14 @@ export class RunRecoveryService implements OnApplicationBootstrap {
         }
         try {
           await this.recoverRun(run);
+          this.instrumentation.recoveryTotal.inc({ status: 'success' });
           recovered.push(run.id);
         } finally {
           await this.database.advisoryUnlock(lockKey);
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
+        this.instrumentation.recoveryTotal.inc({ status: 'failed' });
         this.logger.error(`failed to recover run ${run.id}: ${errorMessage}`);
         failed.push({ runId: run.id, error: errorMessage });
         try {

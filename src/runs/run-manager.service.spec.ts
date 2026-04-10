@@ -6,6 +6,7 @@ import { RuntimeSessionRepository } from '../storage/runtime-session.repository'
 import { ProjectionService } from '../projection/projection.service';
 import { RunEventService } from '../events/run-event.service';
 import { AuditService } from '../audit/audit.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { TraceService } from '../telemetry/trace.service';
 import { WebhookService } from '../webhooks/webhook.service';
 import { MetricsService } from '../metrics/metrics.service';
@@ -54,13 +55,14 @@ function makeEmptyProjection(runId: string): RunStateProjection {
     timeline: { latestSeq: 0, totalEvents: 0, recent: [] },
     trace: { spanCount: 0, linkedArtifacts: [] },
     outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
+    policy: { policyVersion: '', commitmentEvaluations: [] },
   };
 }
 
 describe('RunManagerService', () => {
   let service: RunManagerService;
   let runRepository: jest.Mocked<RunRepository>;
-  let runtimeSessionRepository: jest.Mocked<RuntimeSessionRepository>;
+  // runtimeSessionRepository available via module.get() if needed
   let projectionService: jest.Mocked<ProjectionService>;
   let runEventService: jest.Mocked<RunEventService>;
   let traceService: jest.Mocked<TraceService>;
@@ -133,12 +135,18 @@ describe('RunManagerService', () => {
             listCanonicalByRun: jest.fn().mockResolvedValue([]),
           },
         },
+        {
+          provide: InstrumentationService,
+          useValue: {
+            runStateTotal: { inc: jest.fn() },
+          },
+        },
       ],
     }).compile();
 
     service = module.get(RunManagerService);
     runRepository = module.get(RunRepository);
-    runtimeSessionRepository = module.get(RuntimeSessionRepository);
+    // runtimeSessionRepository = module.get(RuntimeSessionRepository);
     projectionService = module.get(ProjectionService);
     runEventService = module.get(RunEventService);
     traceService = module.get(TraceService);
@@ -334,6 +342,157 @@ describe('RunManagerService', () => {
 
       const result = await service.getRun('run-1');
       expect(result).toEqual(run);
+    });
+  });
+
+  describe('enrichRunMetadata (via markCompleted)', () => {
+    let metricsService: jest.Mocked<any>;
+    let eventRepository: jest.Mocked<any>;
+
+    beforeEach(() => {
+      metricsService = (service as any).metricsService;
+      eventRepository = (service as any).eventRepository;
+    });
+
+    it('enriches run metadata with duration, eventCount, and decision data on completion', async () => {
+      const runningRun = makeRunRecord({
+        status: 'running',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        metadata: { environment: 'staging' }
+      });
+      runRepository.findById.mockResolvedValue(runningRun as any);
+
+      const completedRun = makeRunRecord({
+        status: 'completed',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        endedAt: '2026-01-01T00:01:00.000Z',
+        metadata: { environment: 'staging' }
+      });
+      runRepository.markCompleted.mockResolvedValue(completedRun as any);
+
+      metricsService.get.mockResolvedValue({
+        eventCount: 15,
+        signalCount: 3,
+        decisionCount: 1
+      });
+
+      eventRepository.listCanonicalByRun.mockResolvedValue([
+        {
+          type: 'message.received',
+          data: {}
+        },
+        {
+          type: 'decision.finalized',
+          data: {
+            decodedPayload: {
+              action: 'approve-deployment',
+              confidence: 0.92
+            }
+          }
+        }
+      ]);
+
+      await service.markCompleted('run-1');
+
+      // Allow async enrichment to complete
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(runRepository.update).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            environment: 'staging',
+            durationMs: 60000,
+            eventCount: 15,
+            signalCount: 3,
+            decisionCount: 1,
+            finalAction: 'approve-deployment',
+            finalConfidence: 0.92
+          })
+        })
+      );
+    });
+
+    it('handles missing metrics gracefully', async () => {
+      const runningRun = makeRunRecord({ status: 'running' });
+      runRepository.findById.mockResolvedValue(runningRun as any);
+      const completedRun = makeRunRecord({ status: 'completed' });
+      runRepository.markCompleted.mockResolvedValue(completedRun as any);
+
+      metricsService.get.mockResolvedValue(null);
+      eventRepository.listCanonicalByRun.mockResolvedValue([]);
+
+      await service.markCompleted('run-1');
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Should not throw, update may or may not be called depending on data
+    });
+
+    it('handles enrichment errors without failing the run', async () => {
+      const runningRun = makeRunRecord({ status: 'running' });
+      runRepository.findById.mockResolvedValue(runningRun as any);
+      const completedRun = makeRunRecord({ status: 'completed' });
+      runRepository.markCompleted.mockResolvedValue(completedRun as any);
+
+      metricsService.get.mockRejectedValue(new Error('db connection lost'));
+
+      const result = await service.markCompleted('run-1');
+
+      // The run itself should still be marked completed
+      expect(result.status).toBe('completed');
+    });
+
+    it('also enriches on markFailed', async () => {
+      const runningRun = makeRunRecord({ status: 'running' });
+      runRepository.findById.mockResolvedValue(runningRun as any);
+      const failedRun = makeRunRecord({ status: 'failed', startedAt: '2026-01-01T00:00:00.000Z', endedAt: '2026-01-01T00:00:30.000Z' });
+      runRepository.markFailed.mockResolvedValue(failedRun as any);
+
+      metricsService.get.mockResolvedValue({ eventCount: 5 });
+      eventRepository.listCanonicalByRun.mockResolvedValue([]);
+
+      await service.markFailed('run-1', new Error('timeout'));
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(runRepository.update).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            durationMs: 30000,
+            eventCount: 5
+          })
+        })
+      );
+    });
+  });
+
+  describe('listRuns', () => {
+    it('passes environment, scenarioRef, and search filters to repository', async () => {
+      const listSpy = jest.fn().mockResolvedValue([]);
+      const countSpy = jest.fn().mockResolvedValue(0);
+      (runRepository as any).list = listSpy;
+      (runRepository as any).listCount = countSpy;
+
+      await service.listRuns({
+        environment: 'production',
+        scenarioRef: 'fraud-detection',
+        search: 'agent-123'
+      });
+
+      expect(listSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environment: 'production',
+          scenarioRef: 'fraud-detection',
+          search: 'agent-123'
+        })
+      );
+      expect(countSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environment: 'production',
+          scenarioRef: 'fraud-detection',
+          search: 'agent-123'
+        })
+      );
     });
   });
 

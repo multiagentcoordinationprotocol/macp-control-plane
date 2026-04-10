@@ -62,9 +62,9 @@ describe('Run Lifecycle (integration)', () => {
 
     await sleep(200);
 
-    const result = await ctx.client.listRuns({ tags: 'special-tag' }) as any;
+    // Test fixture uses sandbox mode; includeSandbox required to see sandbox runs in listing
+    const result = await ctx.client.listRuns({ tags: 'special-tag', includeSandbox: true }) as any;
     expect(result.data).toBeDefined();
-    // Should find at least the tagged run
     const tagged = result.data.filter(
       (r: any) => r.tags && r.tags.includes('special-tag')
     );

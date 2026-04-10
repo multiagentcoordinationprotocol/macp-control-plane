@@ -40,7 +40,8 @@ export const runs = pgTable(
     runtimeSessionIdx: uniqueIndex('runs_runtime_session_id_unique').on(table.runtimeSessionId),
     idempotencyIdx: uniqueIndex('runs_idempotency_key_unique').on(table.idempotencyKey),
     statusIdx: index('runs_status_idx').on(table.status),
-    createdIdx: index('runs_created_at_idx').on(table.createdAt)
+    createdIdx: index('runs_created_at_idx').on(table.createdAt),
+    modeIdx: index('runs_mode_idx').on(table.mode)
   })
 );
 
@@ -68,7 +69,8 @@ export const runtimeSessions = pgTable(
   },
   (table) => ({
     pk: primaryKey({ columns: [table.runId] }),
-    sessionIdIdx: uniqueIndex('runtime_sessions_runtime_session_id_unique').on(table.runtimeSessionId)
+    sessionIdIdx: uniqueIndex('runtime_sessions_runtime_session_id_unique').on(table.runtimeSessionId),
+    initiatorIdx: index('runtime_sessions_initiator_idx').on(table.initiatorParticipantId)
   })
 );
 
@@ -115,7 +117,8 @@ export const runEventsCanonical = pgTable(
   (table) => ({
     runSeqIdx: uniqueIndex('run_events_canonical_run_seq_unique').on(table.runId, table.seq),
     runIdx: index('run_events_canonical_run_idx').on(table.runId),
-    typeIdx: index('run_events_canonical_type_idx').on(table.type)
+    typeIdx: index('run_events_canonical_type_idx').on(table.type),
+    runCreatedIdx: index('run_events_canonical_run_created_idx').on(table.runId, table.createdAt)
   })
 );
 
@@ -124,6 +127,7 @@ export const runProjections = pgTable(
   {
     runId: uuid('run_id').notNull().references(() => runs.id, { onDelete: 'cascade' }),
     version: integer('version').notNull().default(0),
+    schemaVersion: integer('schema_version').notNull().default(1),
     runSummary: jsonb('run_summary').$type<Record<string, unknown>>().notNull().default({}),
     participants: jsonb('participants').$type<Record<string, unknown>[]>().notNull().default([]),
     graph: jsonb('graph').$type<Record<string, unknown>>().notNull().default({ nodes: [], edges: [] }),

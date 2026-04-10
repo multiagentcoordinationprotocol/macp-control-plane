@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, ValidationPipe } from '@nestjs/common';
 import { ApiBody, ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ArtifactService } from '../artifacts/artifact.service';
+import { CanonicalEvent } from '../contracts/control-plane';
 import { CreateArtifactDto } from '../dto/create-artifact.dto';
 import { MetricsSummaryDto } from '../dto/run-responses.dto';
 import { RunEventService } from '../events/run-event.service';
@@ -91,7 +92,7 @@ export class ObservabilityController {
   async rebuildProjection(@Param('id', new ParseUUIDPipe()) id: string) {
     await this.runManager.getRun(id);
     const events = await this.eventRepository.listCanonicalUpTo(id);
-    const projection = await this.projectionService.rebuild(id, events as any);
+    const projection = await this.projectionService.rebuild(id, events as unknown as CanonicalEvent[]);
     return { rebuilt: true, latestSeq: projection.timeline.latestSeq };
   }
 }

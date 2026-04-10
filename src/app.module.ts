@@ -4,6 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthModule } from './auth/auth.module';
 import { ThrottleByUserGuard } from './auth/throttle-by-user.guard';
+import { AppConfigService } from './config/app-config.service';
 import { ConfigModule } from './config/config.module';
 import { AdminController } from './controllers/admin.controller';
 import { DashboardController } from './controllers/dashboard.controller';
@@ -20,7 +21,9 @@ import { ArtifactService } from './artifacts/artifact.service';
 import { AuditService } from './audit/audit.service';
 import { EventNormalizerService } from './events/event-normalizer.service';
 import { RunEventService } from './events/run-event.service';
-import { StreamHubService } from './events/stream-hub.service';
+import { MemoryStreamHubStrategy } from './events/memory-stream-hub.strategy';
+import { RedisStreamHubStrategy } from './events/redis-stream-hub.strategy';
+import { StreamHubService, STREAM_HUB_STRATEGY } from './events/stream-hub.service';
 import { MetricsService } from './metrics/metrics.service';
 import { CorrelationIdMiddleware } from './middleware/correlation-id.middleware';
 import { RequestLoggerMiddleware } from './middleware/request-logger.middleware';
@@ -47,6 +50,7 @@ import { StreamConsumerService } from './runs/stream-consumer.service';
 import { WebhookController } from './controllers/webhook.controller';
 import { WebhookDeliveryRepository } from './webhooks/webhook-delivery.repository';
 import { WebhookRepository } from './webhooks/webhook.repository';
+import { DataRetentionService } from './retention/data-retention.service';
 import { WebhookService } from './webhooks/webhook.service';
 
 @Module({
@@ -73,6 +77,16 @@ import { WebhookService } from './webhooks/webhook.service';
     ArtifactRepository,
     MetricsRepository,
     OutboundMessageRepository,
+    {
+      provide: STREAM_HUB_STRATEGY,
+      useFactory: (config: AppConfigService) => {
+        if (config.streamHubStrategy === 'redis' && config.redisUrl) {
+          return new RedisStreamHubStrategy(config.redisUrl);
+        }
+        return new MemoryStreamHubStrategy();
+      },
+      inject: [AppConfigService],
+    },
     StreamHubService,
     EventNormalizerService,
     ProjectionService,
@@ -86,6 +100,7 @@ import { WebhookService } from './webhooks/webhook.service';
     RunExecutorService,
     RunRecoveryService,
     RunInsightsService,
+    DataRetentionService,
     WebhookRepository,
     WebhookDeliveryRepository,
     WebhookService,

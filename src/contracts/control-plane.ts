@@ -134,7 +134,10 @@ export type CanonicalEventType =
   | 'tool.called'
   | 'tool.completed'
   | 'artifact.created'
-  | 'message.send_failed';
+  | 'message.send_failed'
+  | 'policy.resolved'
+  | 'policy.commitment.evaluated'
+  | 'policy.denied';
 
 export interface CanonicalEvent {
   id: string;
@@ -154,7 +157,8 @@ export interface CanonicalEvent {
       | 'decision'
       | 'tool'
       | 'artifact'
-      | 'trace';
+      | 'trace'
+      | 'policy';
     id: string;
   };
   source: {
@@ -210,6 +214,7 @@ export interface DecisionProjection {
     reasons?: string[];
     finalized: boolean;
     proposalId?: string;
+    outcomePositive?: boolean;
   };
 }
 
@@ -253,6 +258,19 @@ export interface OutboundMessageSummary {
   rejected: number;
 }
 
+export interface PolicyProjection {
+  policyVersion: string;
+  policyDescription?: string;
+  resolvedAt?: string;
+  outcomePositive?: boolean;
+  commitmentEvaluations: Array<{
+    commitmentId: string;
+    decision: 'allow' | 'deny';
+    reasons: string[];
+    ts: string;
+  }>;
+}
+
 export interface RunStateProjection {
   run: RunSummaryProjection;
   participants: ParticipantProjection[];
@@ -263,6 +281,7 @@ export interface RunStateProjection {
   timeline: TimelineProjection;
   trace: TraceSummary;
   outboundMessages: OutboundMessageSummary;
+  policy: PolicyProjection;
 }
 
 export interface ReplayRequest {

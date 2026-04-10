@@ -15,6 +15,7 @@ export function quorumModeRequest(
       modeName: 'macp.mode.quorum.v1',
       modeVersion: '1.0.0',
       configurationVersion: '1.0.0',
+      policyVersion: 'policy.default',
       ttlMs: 60000,
       participants: [
         { id: 'initiator', role: 'initiator' },
@@ -79,7 +80,8 @@ export function quorumReachedScript(): RuntimeScript {
             requestId: 'approval-1',
             outcome: 'approved',
             approvalCount: 2,
-            finalized: true
+            finalized: true,
+            outcome_positive: true
           }
         )
       }
@@ -168,7 +170,8 @@ export function quorumAbstentionScript(): RuntimeScript {
             requestId: 'approval-1',
             outcome: 'approved',
             approvalCount: 2,
-            finalized: true
+            finalized: true,
+            outcome_positive: true
           }
         )
       }

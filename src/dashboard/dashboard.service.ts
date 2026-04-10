@@ -16,7 +16,7 @@ export class DashboardService {
 
   async getOverview(range: '24h' | '7d' | '30d' = '24h') {
     const interval = range === '24h' ? '24 hours' : range === '7d' ? '7 days' : '30 days';
-    const bucket = range === '24h' ? '1 hour' : '1 day';
+    const bucket = range === '24h' ? 'hour' : 'day';
     const cutoff = sql`now() - interval '${sql.raw(interval)}'`;
 
     const [kpis, volumeSeries, signalSeries, errorSeries, latencyStats, recentRuns, runtimeHealth] =
@@ -91,7 +91,7 @@ export class DashboardService {
   private async getRunVolume(cutoff: ReturnType<typeof sql>, bucket: string) {
     const result = await this.database.db.execute(sql`
       SELECT
-        date_trunc(${bucket}, created_at) AS bucket,
+        date_trunc(${sql.raw(`'${bucket}'`)}, created_at) AS bucket,
         count(*)::int AS cnt
       FROM runs
       WHERE created_at >= ${cutoff}
@@ -99,15 +99,15 @@ export class DashboardService {
       ORDER BY 1
     `);
     return {
-      labels: result.rows.map((r: any) => String(r.bucket)),
-      data: result.rows.map((r: any) => Number(r.cnt))
+      labels: result.rows.map((r: Record<string, unknown>) => String(r.bucket)),
+      data: result.rows.map((r: Record<string, unknown>) => Number(r.cnt))
     };
   }
 
   private async getSignalVolume(cutoff: ReturnType<typeof sql>, bucket: string) {
     const result = await this.database.db.execute(sql`
       SELECT
-        date_trunc(${bucket}, ts::timestamptz) AS bucket,
+        date_trunc(${sql.raw(`'${bucket}'`)}, ts::timestamptz) AS bucket,
         count(*)::int AS cnt
       FROM run_events_canonical
       WHERE type = 'signal.emitted'
@@ -116,8 +116,8 @@ export class DashboardService {
       ORDER BY 1
     `);
     return {
-      labels: result.rows.map((r: any) => String(r.bucket)),
-      data: result.rows.map((r: any) => Number(r.cnt))
+      labels: result.rows.map((r: Record<string, unknown>) => String(r.bucket)),
+      data: result.rows.map((r: Record<string, unknown>) => Number(r.cnt))
     };
   }
 
@@ -134,8 +134,8 @@ export class DashboardService {
       LIMIT 10
     `);
     return {
-      labels: result.rows.map((r: any) => String(r.class)),
-      data: result.rows.map((r: any) => Number(r.cnt))
+      labels: result.rows.map((r: Record<string, unknown>) => String(r.class)),
+      data: result.rows.map((r: Record<string, unknown>) => Number(r.cnt))
     };
   }
 
@@ -152,7 +152,7 @@ export class DashboardService {
       `),
       this.database.db.execute(sql`
         SELECT
-          date_trunc(${bucket}, ended_at::timestamptz) AS bucket,
+          date_trunc(${sql.raw(`'${bucket}'`)}, ended_at::timestamptz) AS bucket,
           avg(EXTRACT(EPOCH FROM (ended_at::timestamptz - started_at::timestamptz)) * 1000)::int AS "avgMs"
         FROM runs
         WHERE status = 'completed'
@@ -169,8 +169,8 @@ export class DashboardService {
     return {
       avgDurationMs,
       series: {
-        labels: seriesResult.rows.map((r: any) => String(r.bucket)),
-        data: seriesResult.rows.map((r: any) => Number(r.avgMs ?? 0))
+        labels: seriesResult.rows.map((r: Record<string, unknown>) => String(r.bucket)),
+        data: seriesResult.rows.map((r: Record<string, unknown>) => Number(r.avgMs ?? 0))
       }
     };
   }
@@ -210,7 +210,7 @@ export class DashboardService {
       GROUP BY subject_id
       ORDER BY runs DESC
     `);
-    return result.rows.map((r: any) => ({
+    return result.rows.map((r: Record<string, unknown>) => ({
       participantId: String(r.participantId),
       runs: Number(r.runs ?? 0),
       signals: Number(r.signals ?? 0),

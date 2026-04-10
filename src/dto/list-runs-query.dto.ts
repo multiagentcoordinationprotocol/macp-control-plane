@@ -28,7 +28,7 @@ export class ListRunsQueryDto {
 
   @ApiPropertyOptional({ default: 50, minimum: 1, maximum: 200 })
   @IsOptional()
-  @Transform(({ value }) => Number(value))
+  @Transform(({ value }) => (value === undefined || value === null) ? undefined : Number(value))
   @IsInt()
   @Min(1)
   @Max(200)
@@ -36,7 +36,7 @@ export class ListRunsQueryDto {
 
   @ApiPropertyOptional({ default: 0, minimum: 0 })
   @IsOptional()
-  @Transform(({ value }) => Number(value))
+  @Transform(({ value }) => (value === undefined || value === null) ? undefined : Number(value))
   @IsInt()
   @Min(0)
   offset?: number;
@@ -50,6 +50,11 @@ export class ListRunsQueryDto {
   @IsOptional()
   @IsIn(['asc', 'desc'])
   sortOrder?: 'asc' | 'desc';
+
+  @ApiPropertyOptional({ description: 'Include sandbox runs in listing', default: false })
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  includeSandbox?: boolean;
 
   @ApiPropertyOptional({ description: 'Include archived runs in listing', default: false })
   @IsOptional()

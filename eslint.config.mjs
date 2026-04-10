@@ -28,5 +28,11 @@ export default [
     rules: {
       ...prettier.rules
     }
+  },
+  {
+    files: ['src/**/*.spec.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off'
+    }
   }
 ];

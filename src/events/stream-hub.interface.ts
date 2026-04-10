@@ -7,4 +7,5 @@ export interface StreamHubStrategy {
   publishSnapshot(runId: string, snapshot: RunStateProjection): void;
   complete(runId: string): void;
   stream(runId: string): Observable<StreamHubMessage>;
+  destroy?(): void;
 }

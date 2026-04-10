@@ -7,6 +7,7 @@ import { AppModule } from '../../src/app.module';
 import { GlobalExceptionFilter } from '../../src/errors/exception.filter';
 import { RustRuntimeProvider } from '../../src/runtime/rust-runtime.provider';
 import { RuntimeProviderRegistry } from '../../src/runtime/runtime-provider.registry';
+import { StreamConsumerService } from '../../src/runs/stream-consumer.service';
 import { runMigrations } from '../../src/db/migrate';
 import {
   RuntimeScript,
@@ -133,6 +134,12 @@ export async function createTestApp(
   const client = new TestClient(url, 'test-key-integration');
 
   const cleanup = async () => {
+    // Stop all active stream consumers before truncating to prevent
+    // race conditions where async events reference deleted runs
+    const streamConsumer = moduleRef.get(StreamConsumerService);
+    await streamConsumer.onModuleDestroy();
+    // Pause for async queues and background executor operations to settle
+    await new Promise((r) => setTimeout(r, 500));
     const dbService = moduleRef.get(DatabaseService);
     await truncateAll(dbService.pool);
   };

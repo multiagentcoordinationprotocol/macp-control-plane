@@ -31,7 +31,7 @@ describe('Authentication (integration)', () => {
   });
 
   it('request with valid API key returns 200', async () => {
-    const res = await ctx.client.requestNoAuth('GET', '/runs', {
+    const res = await ctx.client.requestNoAuth('GET', '/runs?limit=10&offset=0', {
       headers: { Authorization: 'Bearer test-key-integration' }
     });
     expect(res.status).toBe(200);

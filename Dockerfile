@@ -2,12 +2,14 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
-RUN npm ci --ignore-scripts
+COPY package.json package-lock.json* .npmrc ./
+ARG NPM_TOKEN
+RUN echo "//npm.pkg.github.com/:_authToken=${NPM_TOKEN}" >> .npmrc && \
+    npm ci --ignore-scripts && \
+    rm -f .npmrc
 
 COPY tsconfig.json tsconfig.build.json nest-cli.json ./
 COPY src/ src/
-COPY proto/ proto/
 
 RUN npm run build
 
@@ -18,11 +20,15 @@ WORKDIR /app
 
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-COPY package.json package-lock.json* ./
-RUN npm ci --ignore-scripts --omit=dev && npm cache clean --force
+COPY package.json package-lock.json* .npmrc ./
+ARG NPM_TOKEN
+RUN echo "//npm.pkg.github.com/:_authToken=${NPM_TOKEN}" >> .npmrc && \
+    npm ci --ignore-scripts --omit=dev && \
+    npm cache clean --force && \
+    rm -f .npmrc
 
 COPY --from=builder /app/dist dist/
-COPY proto/ proto/
+COPY --from=builder /app/node_modules/@multiagentcoordinationprotocol/proto node_modules/@multiagentcoordinationprotocol/proto
 COPY drizzle/ drizzle/
 
 USER appuser

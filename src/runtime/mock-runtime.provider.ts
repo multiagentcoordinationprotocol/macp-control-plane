@@ -20,7 +20,14 @@ import {
   RuntimeSessionSnapshot,
   RuntimeStartSessionRequest,
   RuntimeStartSessionResult,
-  RuntimeStreamSessionRequest
+  RuntimeStreamSessionRequest,
+  RuntimeRegisterPolicyRequest,
+  RuntimeRegisterPolicyResult,
+  RuntimeUnregisterPolicyRequest,
+  RuntimeUnregisterPolicyResult,
+  RuntimeGetPolicyRequest,
+  RuntimeListPoliciesRequest,
+  RuntimePolicyDescriptor
 } from '../contracts/runtime';
 
 @Injectable()
@@ -153,6 +160,63 @@ export class MockRuntimeProvider implements RuntimeProvider {
 
   async health(): Promise<RuntimeHealth> {
     return { ok: true, runtimeKind: this.kind, detail: 'mock runtime always healthy' };
+  }
+
+  // ── Governance policy lifecycle (RFC-MACP-0012) ──────────────────
+
+  private policies: Map<string, RuntimePolicyDescriptor> = new Map([
+    ['policy.default', {
+      policyId: 'policy.default',
+      mode: '*',
+      description: 'Default policy — no additional governance constraints',
+      rules: Buffer.from(JSON.stringify({
+        voting: { algorithm: 'none', quorum: { type: 'count', value: 0 } },
+        objection_handling: { block_severity_vetoes: false, veto_threshold: 1 },
+        evaluation: { required_before_voting: false, minimum_confidence: 0.0 },
+        commitment: { authority: 'initiator_only', designated_roles: [], require_vote_quorum: false }
+      })),
+      schemaVersion: 1,
+      registeredAtUnixMs: Date.now()
+    }]
+  ]);
+
+  async registerPolicy(req: RuntimeRegisterPolicyRequest): Promise<RuntimeRegisterPolicyResult> {
+    const d = req.descriptor;
+    if (d.policyId === 'policy.default') {
+      return { ok: false, error: 'cannot register reserved policy.default' };
+    }
+    if (this.policies.has(d.policyId)) {
+      return { ok: false, error: `policy ${d.policyId} already registered` };
+    }
+    this.policies.set(d.policyId, { ...d, registeredAtUnixMs: Date.now() });
+    return { ok: true };
+  }
+
+  async unregisterPolicy(req: RuntimeUnregisterPolicyRequest): Promise<RuntimeUnregisterPolicyResult> {
+    if (req.policyId === 'policy.default') {
+      return { ok: false, error: 'cannot unregister reserved policy.default' };
+    }
+    if (!this.policies.has(req.policyId)) {
+      return { ok: false, error: `policy ${req.policyId} not found` };
+    }
+    this.policies.delete(req.policyId);
+    return { ok: true };
+  }
+
+  async getPolicy(req: RuntimeGetPolicyRequest): Promise<RuntimePolicyDescriptor> {
+    const policy = this.policies.get(req.policyId);
+    if (!policy) {
+      throw new Error(`policy ${req.policyId} not found`);
+    }
+    return policy;
+  }
+
+  async listPolicies(req?: RuntimeListPoliciesRequest): Promise<RuntimePolicyDescriptor[]> {
+    const all = Array.from(this.policies.values());
+    if (req?.mode) {
+      return all.filter((p) => p.mode === req.mode || p.mode === '*');
+    }
+    return all;
   }
 
   private makeAck(sessionId: string, messageId?: string): RuntimeAck {

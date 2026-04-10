@@ -5,6 +5,7 @@ import { EventRepository } from '../storage/event.repository';
 import { ReplayService } from '../replay/replay.service';
 import { StreamHubService } from '../events/stream-hub.service';
 import { AppConfigService } from '../config/app-config.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { ProjectionService } from '../projection/projection.service';
 import { OutboundMessageRepository } from '../storage/outbound-message.repository';
 
@@ -76,6 +77,7 @@ describe('RunsController', () => {
       mockConfig as unknown as AppConfigService,
       mockProjectionService as unknown as ProjectionService,
       mockOutboundMessageRepository as unknown as OutboundMessageRepository,
+      { activeSseConnections: { inc: jest.fn(), dec: jest.fn() }, signalsTotal: { inc: jest.fn() } } as unknown as InstrumentationService,
     );
   });
 
@@ -285,6 +287,7 @@ describe('RunsController', () => {
         to: ['agent-2'],
         messageType: 'Signal',
         payload: { data: 'test' },
+        signalType: 'alert',
       };
       const result = await controller.sendSignal('run-1', body as any);
 

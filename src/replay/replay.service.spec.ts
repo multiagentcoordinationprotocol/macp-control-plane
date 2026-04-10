@@ -234,6 +234,7 @@ describe('ReplayService', () => {
         timeline: { latestSeq: 2, totalEvents: 2, recent: [] },
         trace: { spanCount: 0, linkedArtifacts: [] },
         outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
+        policy: { policyVersion: '', commitmentEvaluations: [] },
       };
       mockProjectionService.replayStateAt.mockResolvedValue(fakeProjection);
 
