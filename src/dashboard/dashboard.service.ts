@@ -16,7 +16,7 @@ export class DashboardService {
 
   async getOverview(range: '24h' | '7d' | '30d' = '24h') {
     const interval = range === '24h' ? '24 hours' : range === '7d' ? '7 days' : '30 days';
-    const bucket = range === '24h' ? '1 hour' : '1 day';
+    const bucket = range === '24h' ? 'hour' : 'day';
     const cutoff = sql`now() - interval '${sql.raw(interval)}'`;
 
     const [kpis, volumeSeries, signalSeries, errorSeries, latencyStats, recentRuns, runtimeHealth] =

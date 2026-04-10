@@ -138,8 +138,8 @@ export async function createTestApp(
     // race conditions where async events reference deleted runs
     const streamConsumer = moduleRef.get(StreamConsumerService);
     await streamConsumer.onModuleDestroy();
-    // Brief pause for async queues to settle
-    await new Promise((r) => setTimeout(r, 100));
+    // Pause for async queues and background executor operations to settle
+    await new Promise((r) => setTimeout(r, 500));
     const dbService = moduleRef.get(DatabaseService);
     await truncateAll(dbService.pool);
   };
