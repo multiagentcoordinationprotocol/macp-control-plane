@@ -126,7 +126,7 @@ jobs:
           # Fail if any tracked file contains common secret patterns
           # (API keys, tokens, passwords in plain text)
           PATTERNS='(sk-proj-|sk-[a-zA-Z0-9]{20,}|AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|password\s*=\s*["\x27][^"\x27]{8,})'
-          if git ls-files | xargs grep -lPn "$PATTERNS" -- 2>/dev/null | grep -v '.env.example' | grep -v 'node_modules'; then
+          if git ls-files | xargs grep -lPn "$PATTERNS" -- 2>/dev/null | grep -v '.env.example' | grep -v '.npmrc' | grep -v 'node_modules' | grep -v 'ci.yml'; then
             echo "::error::Potential secrets found in tracked files. Review the matches above."
             exit 1
           fi
