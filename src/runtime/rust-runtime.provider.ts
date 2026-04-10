@@ -77,7 +77,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     });
 
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { protoDir } = require('@macp/proto');
+    const { protoDir } = require('@multiagentcoordinationprotocol/proto');
     const packageDefinition = protoLoader.loadSync(
       [
         path.join(protoDir, 'macp/v1/core.proto'),
