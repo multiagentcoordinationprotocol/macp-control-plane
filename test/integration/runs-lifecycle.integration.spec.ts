@@ -1,11 +1,43 @@
 import { createTestApp, TestAppContext } from '../helpers/test-app';
-import { decisionModeRequest, decisionHappyScript } from '../fixtures/decision-mode';
+import {
+  decisionModeRequest as decisionModeRequestBase,
+  decisionHappyScript
+} from '../fixtures/decision-mode';
+import { testRuntimeKind } from '../helpers/runtime-kind';
+
+const isRealRuntime =
+  process.env.INTEGRATION_RUNTIME === 'docker' ||
+  process.env.INTEGRATION_RUNTIME === 'remote';
+
+/** Returns the execution request, adjusting for the active runtime mode */
+function decisionModeRequest(overrides?: Record<string, unknown>) {
+  const base = decisionModeRequestBase(overrides as any);
+  if (isRealRuntime) {
+    base.runtime = { kind: 'rust' };
+    // Real runtime requires proto-encoded kickoff payloads
+    if (base.kickoff) {
+      for (const k of base.kickoff) {
+        if (k.payload && !k.payloadEnvelope) {
+          k.payloadEnvelope = {
+            encoding: 'proto' as const,
+            proto: {
+              typeName: 'macp.modes.decision.v1.ProposalPayload',
+              value: k.payload
+            }
+          };
+          delete k.payload;
+        }
+      }
+    }
+  }
+  return base;
+}
 
 describe('Run Lifecycle (integration)', () => {
   let ctx: TestAppContext;
 
   beforeAll(async () => {
-    ctx = await createTestApp(decisionHappyScript());
+    ctx = await createTestApp(isRealRuntime ? undefined : decisionHappyScript());
   });
 
   afterAll(async () => {
@@ -34,7 +66,7 @@ describe('Run Lifecycle (integration)', () => {
     const run = await ctx.client.getRun(runId);
     expect(run).toHaveProperty('id', runId);
     expect(run).toHaveProperty('status');
-    expect(run).toHaveProperty('runtimeKind', 'scripted-mock');
+    expect(run).toHaveProperty('runtimeKind', testRuntimeKind());
     expect(run).toHaveProperty('createdAt');
   });
 

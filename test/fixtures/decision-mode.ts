@@ -5,13 +5,14 @@ import {
   RuntimeScript,
   ScriptedEvent
 } from '../helpers/scripted-mock-runtime.provider';
+import { testRuntimeKind } from '../helpers/runtime-kind';
 
 export function decisionModeRequest(
   overrides?: Partial<ExecutionRequest>
 ): ExecutionRequest {
   return {
     mode: 'sandbox',
-    runtime: { kind: 'scripted-mock' },
+    runtime: { kind: testRuntimeKind() },
     session: {
       modeName: 'macp.mode.decision.v1',
       modeVersion: '1.0.0',

@@ -1,12 +1,17 @@
 import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { decisionHappyScript } from '../fixtures/decision-mode';
 import { RuntimeProviderRegistry } from '../../src/runtime/runtime-provider.registry';
+import { testRuntimeKind } from '../helpers/runtime-kind';
+
+const isRealRuntime =
+  process.env.INTEGRATION_RUNTIME === 'docker' ||
+  process.env.INTEGRATION_RUNTIME === 'remote';
 
 describe('Policy Projection in Run State (integration)', () => {
   let ctx: TestAppContext;
 
   beforeAll(async () => {
-    ctx = await createTestApp(decisionHappyScript());
+    ctx = await createTestApp(isRealRuntime ? undefined : decisionHappyScript());
   });
 
   afterAll(async () => {
@@ -16,7 +21,7 @@ describe('Policy Projection in Run State (integration)', () => {
   it('run state includes policy projection with empty defaults', async () => {
     const run = await ctx.client.createRun({
       mode: 'sandbox',
-      runtime: { kind: 'scripted-mock' },
+      runtime: { kind: testRuntimeKind() },
       session: {
         modeName: 'macp.mode.decision.v1',
         modeVersion: '1.0.0',
@@ -37,11 +42,14 @@ describe('Policy Projection in Run State (integration)', () => {
   });
 });
 
-describe('Policy Provider Methods (integration)', () => {
+// Policy provider methods test the runtime provider API directly.
+// In real runtime mode, the gRPC policy API may have different behavior.
+const describeProviderMethods = isRealRuntime ? describe.skip : describe;
+describeProviderMethods('Policy Provider Methods (integration)', () => {
   let ctx: TestAppContext;
 
   beforeAll(async () => {
-    ctx = await createTestApp(decisionHappyScript());
+    ctx = await createTestApp(isRealRuntime ? undefined : decisionHappyScript());
   });
 
   afterAll(async () => {
@@ -51,7 +59,7 @@ describe('Policy Provider Methods (integration)', () => {
   it('ScriptedMockRuntimeProvider supports policy registration round-trip', async () => {
     // Access the runtime provider registry directly via the NestJS module
     const registry = ctx.app.get(RuntimeProviderRegistry);
-    const provider = registry.get('scripted-mock');
+    const provider = registry.get(testRuntimeKind());
 
     // Register
     const registerResult = await provider.registerPolicy({

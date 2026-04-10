@@ -1,5 +1,6 @@
 import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { decisionModeRequest } from '../fixtures/decision-mode';
+import { testRuntimeKind } from '../helpers/runtime-kind';
 
 describe('Run Validation (integration)', () => {
   let ctx: TestAppContext;
@@ -46,7 +47,7 @@ describe('Run Validation (integration)', () => {
   it('rejects request without session', async () => {
     const result = await ctx.client.validateRun({
       mode: 'sandbox',
-      runtime: { kind: 'scripted-mock' }
+      runtime: { kind: testRuntimeKind() }
     }) as any;
 
     // Should fail validation

@@ -17,9 +17,14 @@ services:
 
   # Only started with: docker compose --profile with-runtime up
   runtime:
-    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:latest
+    build:
+      context: ../runtime
+      dockerfile: Dockerfile
     ports:
       - '50051:50051'
+    environment:
+      MACP_ALLOW_INSECURE: '1'
+      MACP_ALLOW_DEV_SENDER_HEADER: '1'
     profiles:
       - with-runtime
     healthcheck:

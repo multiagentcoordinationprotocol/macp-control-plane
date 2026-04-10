@@ -1,5 +1,6 @@
 import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { decisionHappyScript } from '../fixtures/decision-mode';
+import { testRuntimeKind } from '../helpers/runtime-kind';
 
 describe('Dashboard Overview (integration)', () => {
   let ctx: TestAppContext;
@@ -69,7 +70,7 @@ describe('Dashboard Overview (integration)', () => {
   it('KPIs reflect created runs', async () => {
     await ctx.client.createRun({
       mode: 'sandbox',
-      runtime: { kind: 'scripted-mock' },
+      runtime: { kind: testRuntimeKind() },
       session: {
         modeName: 'macp.mode.decision.v1',
         modeVersion: '1.0.0',
@@ -114,7 +115,7 @@ describe('Dashboard Agent Metrics (integration)', () => {
     // Create a run to generate some participant events
     await ctx.client.createRun({
       mode: 'sandbox',
-      runtime: { kind: 'scripted-mock' },
+      runtime: { kind: testRuntimeKind() },
       session: {
         modeName: 'macp.mode.decision.v1',
         modeVersion: '1.0.0',
@@ -158,7 +159,7 @@ describe('Run Listing Filters (integration)', () => {
     // Create a run with environment metadata
     await ctx.client.createRun({
       mode: 'sandbox',
-      runtime: { kind: 'scripted-mock' },
+      runtime: { kind: testRuntimeKind() },
       session: {
         modeName: 'macp.mode.decision.v1',
         modeVersion: '1.0.0',

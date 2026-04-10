@@ -1,5 +1,6 @@
 import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { decisionHappyScript } from '../fixtures/decision-mode';
+import { testRuntimeKind } from '../helpers/runtime-kind';
 
 describe('Metrics Token Usage (integration)', () => {
   let ctx: TestAppContext;
@@ -15,7 +16,7 @@ describe('Metrics Token Usage (integration)', () => {
   it('GET /runs/:id/metrics returns token usage fields', async () => {
     const run = await ctx.client.createRun({
       mode: 'sandbox',
-      runtime: { kind: 'scripted-mock' },
+      runtime: { kind: testRuntimeKind() },
       session: {
         modeName: 'macp.mode.decision.v1',
         modeVersion: '1.0.0',
@@ -48,7 +49,7 @@ describe('Metrics Token Usage (integration)', () => {
   it('token fields default to 0 for runs without token data', async () => {
     const run = await ctx.client.createRun({
       mode: 'sandbox',
-      runtime: { kind: 'scripted-mock' },
+      runtime: { kind: testRuntimeKind() },
       session: {
         modeName: 'macp.mode.decision.v1',
         modeVersion: '1.0.0',
@@ -71,7 +72,7 @@ describe('Metrics Token Usage (integration)', () => {
   it('run state includes metrics-relevant fields after completion', async () => {
     const run = await ctx.client.createRun({
       mode: 'sandbox',
-      runtime: { kind: 'scripted-mock' },
+      runtime: { kind: testRuntimeKind() },
       session: {
         modeName: 'macp.mode.decision.v1',
         modeVersion: '1.0.0',

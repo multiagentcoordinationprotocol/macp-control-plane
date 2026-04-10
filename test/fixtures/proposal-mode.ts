@@ -4,13 +4,14 @@ import {
   makeStreamEnvelope,
   RuntimeScript
 } from '../helpers/scripted-mock-runtime.provider';
+import { testRuntimeKind } from '../helpers/runtime-kind';
 
 export function proposalModeRequest(
   overrides?: Partial<ExecutionRequest>
 ): ExecutionRequest {
   return {
     mode: 'sandbox',
-    runtime: { kind: 'scripted-mock' },
+    runtime: { kind: testRuntimeKind() },
     session: {
       modeName: 'macp.mode.proposal.v1',
       modeVersion: '1.0.0',

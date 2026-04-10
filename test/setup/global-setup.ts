@@ -6,16 +6,27 @@ const TEST_DB_URL =
   'postgres://postgres:postgres@localhost:5433/macp_control_plane_test';
 
 export default async function globalSetup(): Promise<void> {
-  // If not in CI, start the test postgres container
+  const runtimeMode = process.env.INTEGRATION_RUNTIME ?? 'mock';
+
+  // If not in CI, start the test containers via docker compose
   if (!process.env.CI) {
     try {
-      execSync(
-        'docker compose -f docker-compose.test.yml up -d postgres-test --wait',
-        { stdio: 'inherit', cwd: process.cwd() }
-      );
+      if (runtimeMode === 'docker') {
+        // Start both postgres and runtime containers
+        execSync(
+          'docker compose -f docker-compose.test.yml --profile with-runtime up -d --wait',
+          { stdio: 'inherit', cwd: process.cwd() }
+        );
+      } else {
+        // Start only postgres
+        execSync(
+          'docker compose -f docker-compose.test.yml up -d postgres-test --wait',
+          { stdio: 'inherit', cwd: process.cwd() }
+        );
+      }
     } catch {
       console.warn(
-        'Could not start docker compose. Assuming database is already running.'
+        'Could not start docker compose. Assuming services are already running.'
       );
     }
   }

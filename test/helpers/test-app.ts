@@ -138,9 +138,28 @@ export async function createTestApp(
     // race conditions where async events reference deleted runs
     const streamConsumer = moduleRef.get(StreamConsumerService);
     await streamConsumer.onModuleDestroy();
-    // Pause for async queues and background executor operations to settle
-    await new Promise((r) => setTimeout(r, 500));
+
     const dbService = moduleRef.get(DatabaseService);
+
+    // Use a dedicated short-lived connection (not the app pool, which may be
+    // exhausted by background executor operations) to force-terminate active runs,
+    // then truncate. This prevents cleanup from hanging.
+    const { Client } = require('pg');
+    const client = new Client({ connectionString: TEST_DB_URL });
+    try {
+      await client.connect();
+      // Force all in-progress runs to 'failed' so background operations stop
+      await client.query(
+        `UPDATE runs SET status = 'failed', error_code = 'TEST_CLEANUP', error_message = 'force-terminated by test cleanup', ended_at = now() WHERE status NOT IN ('completed','failed','cancelled','queued')`
+      );
+      // Brief pause for background operations to notice the state change
+      await new Promise((r) => setTimeout(r, runtimeMode === 'mock' ? 300 : 1000));
+    } catch {
+      // Best-effort; proceed to truncate
+    } finally {
+      await client.end().catch(() => {});
+    }
+
     await truncateAll(dbService.pool);
   };
 

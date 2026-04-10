@@ -1,11 +1,66 @@
 import { createTestApp, TestAppContext } from '../helpers/test-app';
-import { decisionModeRequest, decisionHappyScript } from '../fixtures/decision-mode';
+import {
+  decisionModeRequest as decisionModeRequestBase,
+  decisionHappyScript
+} from '../fixtures/decision-mode';
+
+const isRealRuntime =
+  process.env.INTEGRATION_RUNTIME === 'docker' ||
+  process.env.INTEGRATION_RUNTIME === 'remote';
+
+/** Returns the execution request, adjusting for the active runtime mode */
+function decisionModeRequest(overrides?: Record<string, unknown>) {
+  const base = decisionModeRequestBase(overrides as any);
+  if (isRealRuntime) {
+    base.runtime = { kind: 'rust' };
+    // Real runtime requires proto-encoded kickoff payloads
+    if (base.kickoff) {
+      for (const k of base.kickoff) {
+        if (k.payload && !k.payloadEnvelope) {
+          k.payloadEnvelope = {
+            encoding: 'proto' as const,
+            proto: {
+              typeName: 'macp.modes.decision.v1.ProposalPayload',
+              value: k.payload
+            }
+          };
+          delete k.payload;
+        }
+      }
+    }
+  }
+  return base;
+}
+
+/**
+ * Build a message body with proto encoding when running against the real runtime.
+ */
+function msg(
+  from: string,
+  messageType: string,
+  protoTypeName: string,
+  payload: Record<string, unknown>,
+  to?: string[]
+): Record<string, unknown> {
+  const base: Record<string, unknown> = { from, messageType };
+  if (to) base.to = to;
+
+  if (isRealRuntime) {
+    base.payloadEnvelope = {
+      encoding: 'proto',
+      proto: { typeName: protoTypeName, value: payload }
+    };
+  } else {
+    base.payload = payload;
+  }
+  return base;
+}
 
 describe('Concurrency (integration)', () => {
   let ctx: TestAppContext;
 
   beforeAll(async () => {
-    ctx = await createTestApp(decisionHappyScript());
+    ctx = await createTestApp(isRealRuntime ? undefined : decisionHappyScript());
   });
 
   afterAll(async () => {
@@ -43,19 +98,24 @@ describe('Concurrency (integration)', () => {
 
   it('concurrent messages to same run are all accepted', async () => {
     const { runId } = await ctx.client.createRun(decisionModeRequest());
-    await sleep(500);
+    // Wait for run to reach running state before sending messages
+    for (let i = 0; i < 10; i++) {
+      await sleep(300);
+      const run = await ctx.client.getRun(runId) as any;
+      if (['running', 'completed'].includes(run.status)) break;
+    }
 
     // Send multiple messages concurrently
     const promises = Array.from({ length: 3 }, (_, i) =>
-      ctx.client.sendMessage(runId, {
-        from: 'evaluator',
-        to: ['proposer'],
-        messageType: 'Evaluation',
-        payload: {
+      ctx.client.sendMessage(
+        runId,
+        msg('evaluator', 'Evaluation', 'macp.modes.decision.v1.EvaluationPayload', {
+          proposalId: 'prop-1',
           recommendation: 'APPROVE',
-          rationale: `Concurrent evaluation ${i}`
-        }
-      })
+          confidence: 0.9,
+          reason: `Concurrent evaluation ${i}`
+        }, ['proposer'])
+      )
     );
 
     const results = await Promise.allSettled(promises);
