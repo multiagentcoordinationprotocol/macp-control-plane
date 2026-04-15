@@ -32,6 +32,13 @@ export class InstrumentationService implements OnModuleInit {
     labelNames: ['status'] as const
   });
 
+  readonly runDuration = new client.Histogram({
+    name: 'macp_run_duration_seconds',
+    help: 'End-to-end run duration in seconds (observed at terminal transition)',
+    labelNames: ['terminal_status', 'mode_name'] as const,
+    buckets: [0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600]
+  });
+
   readonly grpcCallDuration = new client.Histogram({
     name: 'grpc_call_duration_seconds',
     help: 'Duration of gRPC calls to runtime in seconds',

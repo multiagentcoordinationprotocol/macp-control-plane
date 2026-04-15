@@ -2,6 +2,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
+import { context, propagation } from '@opentelemetry/api';
 import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import { AppConfigService } from '../config/app-config.service';
@@ -52,6 +53,9 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   readonly kind = 'rust';
   private readonly logger = new Logger(RustRuntimeProvider.name);
   private client!: any;
+  private serviceConstructor!: any;
+  private runtimeAddress!: string;
+  private channelCreds!: grpc.ChannelCredentials;
   private circuitBreaker!: CircuitBreaker;
 
   constructor(
@@ -63,6 +67,10 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
 
   getCircuitBreakerState() {
     return this.circuitBreaker.getState();
+  }
+
+  getCircuitBreakerHistory(since?: string) {
+    return this.circuitBreaker.getHistory(since);
   }
 
   resetCircuitBreaker(): void {
@@ -94,11 +102,17 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       }
     );
     const descriptor = grpc.loadPackageDefinition(packageDefinition) as any;
-    const address = this.config.runtimeAddress;
-    const creds = this.config.runtimeTls
+    this.serviceConstructor = descriptor.macp.v1.MACPRuntimeService;
+    this.runtimeAddress = this.config.runtimeAddress;
+    this.channelCreds = this.config.runtimeTls
       ? grpc.credentials.createSsl()
       : grpc.credentials.createInsecure();
-    this.client = new descriptor.macp.v1.MACPRuntimeService(address, creds);
+    this.client = this.createClient();
+  }
+
+  /** Create a fresh gRPC channel to the runtime. */
+  private createClient(): any {
+    return new this.serviceConstructor(this.runtimeAddress, this.channelCreds);
   }
 
   async initialize(req: RuntimeInitializeRequest, opts?: GrpcCallOptions): Promise<RuntimeInitializeResult> {
@@ -147,6 +161,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   }
 
   async startSession(req: RuntimeStartSessionRequest, opts?: GrpcCallOptions): Promise<RuntimeStartSessionResult> {
+    // Create a fresh gRPC channel per session to avoid stale connection issues
+    this.client = this.createClient();
     const initiator = this.chooseInitiator(req.execution);
     const participant = this.findParticipant(req.execution, initiator);
     const creds = await this.credentialResolver.resolve({
@@ -444,6 +460,10 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       fallbackSender: req.from
     });
 
+    this.logger.debug(
+      `send() resolved creds: sender=${creds.sender}, metadataKeys=${Object.keys(creds.metadata).join(',')}`
+    );
+
     const envelope = this.buildEnvelope({
       mode: req.modeName,
       messageType: req.messageType,
@@ -453,11 +473,20 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       payload: req.payload
     });
 
-    const response = await this.unary(
-      'Send',
-      { envelope: this.toGrpcEnvelope(envelope) },
-      this.buildMetadata(creds.metadata)
-    );
+    let response: any;
+    try {
+      response = await this.unary(
+        'Send',
+        { envelope: this.toGrpcEnvelope(envelope) },
+        this.buildMetadata(creds.metadata)
+      );
+    } catch (error) {
+      const grpcError = error as { code?: number; details?: string; metadata?: { toJSON?: () => unknown } };
+      this.logger.error(
+        `send() gRPC error: code=${grpcError.code}, details=${grpcError.details}`
+      );
+      throw error;
+    }
 
     const ack = this.fromAck(response.ack);
     if (!ack.ok && ack.error) {
@@ -793,6 +822,18 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     for (const [key, value] of Object.entries(metadataInput)) {
       if (value) metadata.set(key, value);
     }
+    // Propagate W3C trace context so runtime-side spans become children of the
+    // control-plane span. OTel's propagator serializes the active span into
+    // `traceparent` (+ optional `tracestate`) headers.
+    injectTraceContext(metadata);
     return metadata;
+  }
+}
+
+function injectTraceContext(metadata: grpc.Metadata): void {
+  const carrier: Record<string, string> = {};
+  propagation.inject(context.active(), carrier);
+  for (const [key, value] of Object.entries(carrier)) {
+    if (value) metadata.set(key, value);
   }
 }

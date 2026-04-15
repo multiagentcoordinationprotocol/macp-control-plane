@@ -36,7 +36,9 @@ describe('DashboardController', () => {
 
       const result = await controller.getOverview({ range: undefined });
 
-      expect(mockService.getOverview).toHaveBeenCalledWith('24h');
+      expect(mockService.getOverview).toHaveBeenCalledWith(
+        expect.objectContaining({ window: '24h' })
+      );
       expect(result).toEqual(overview);
       expect(result.kpis.totalTokens).toBe(1500);
       expect(result.kpis.totalCostUsd).toBe(0.05);
@@ -44,16 +46,36 @@ describe('DashboardController', () => {
       expect(result.runtimeHealth.ok).toBe(true);
     });
 
-    it('passes 7d range to service', async () => {
+    it('passes 7d range to service (via legacy range alias)', async () => {
       mockService.getOverview.mockResolvedValue({ kpis: {}, charts: {} });
       await controller.getOverview({ range: '7d' });
-      expect(mockService.getOverview).toHaveBeenCalledWith('7d');
+      expect(mockService.getOverview).toHaveBeenCalledWith(
+        expect.objectContaining({ window: '7d' })
+      );
     });
 
-    it('passes 30d range to service', async () => {
+    it('passes 30d range to service (via legacy range alias)', async () => {
       mockService.getOverview.mockResolvedValue({ kpis: {}, charts: {} });
       await controller.getOverview({ range: '30d' });
-      expect(mockService.getOverview).toHaveBeenCalledWith('30d');
+      expect(mockService.getOverview).toHaveBeenCalledWith(
+        expect.objectContaining({ window: '30d' })
+      );
+    });
+
+    it('prefers the new `window` field over `range` alias (§5.1)', async () => {
+      mockService.getOverview.mockResolvedValue({ kpis: {}, charts: {} });
+      await controller.getOverview({ window: '1h', range: '24h' } as any);
+      expect(mockService.getOverview).toHaveBeenCalledWith(
+        expect.objectContaining({ window: '1h' })
+      );
+    });
+
+    it('passes scenarioRef + environment filters through (§5.1)', async () => {
+      mockService.getOverview.mockResolvedValue({ kpis: {}, charts: {} });
+      await controller.getOverview({ window: '24h', scenarioRef: 'fraud@1.0', environment: 'prod' } as any);
+      expect(mockService.getOverview).toHaveBeenCalledWith(
+        expect.objectContaining({ window: '24h', scenarioRef: 'fraud@1.0', environment: 'prod' })
+      );
     });
   });
 

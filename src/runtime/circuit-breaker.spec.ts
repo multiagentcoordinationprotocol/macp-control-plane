@@ -159,4 +159,55 @@ describe('CircuitBreaker', () => {
       originalError,
     );
   });
+
+  describe('getHistory (§5.3)', () => {
+    it('records an initial CLOSED entry', () => {
+      const history = breaker.getHistory();
+      expect(history).toHaveLength(1);
+      expect(history[0].state).toBe('CLOSED');
+      expect(history[0].reason).toBe('initial');
+    });
+
+    it('records OPEN transition after threshold failures', async () => {
+      for (let i = 0; i < defaultConfig.failureThreshold; i++) {
+        await expect(breaker.execute(() => Promise.reject(new Error('fail')))).rejects.toThrow('fail');
+      }
+      const history = breaker.getHistory();
+      expect(history).toHaveLength(2);
+      expect(history[1].state).toBe('OPEN');
+      expect(history[1].reason).toMatch(/consecutive failures/);
+    });
+
+    it('records HALF_OPEN → CLOSED on successful probe', async () => {
+      const now = 100_000;
+      (Date.now as jest.Mock).mockReturnValue(now);
+      for (let i = 0; i < defaultConfig.failureThreshold; i++) {
+        await expect(breaker.execute(() => Promise.reject(new Error('fail')))).rejects.toThrow('fail');
+      }
+      // Advance past reset timeout → next getState flips to HALF_OPEN
+      (Date.now as jest.Mock).mockReturnValue(now + defaultConfig.resetTimeoutMs + 1);
+      expect(breaker.getState()).toBe('HALF_OPEN');
+      await breaker.execute(() => Promise.resolve('ok'));
+
+      const history = breaker.getHistory();
+      const states = history.map((h) => h.state);
+      expect(states).toEqual(['CLOSED', 'OPEN', 'HALF_OPEN', 'CLOSED']);
+    });
+
+    it('records manual reset as a CLOSED transition', async () => {
+      for (let i = 0; i < defaultConfig.failureThreshold; i++) {
+        await expect(breaker.execute(() => Promise.reject(new Error('fail')))).rejects.toThrow('fail');
+      }
+      breaker.reset();
+      const history = breaker.getHistory();
+      const last = history.at(-1);
+      expect(last?.state).toBe('CLOSED');
+      expect(last?.reason).toBe('manual reset');
+    });
+
+    it('filters by since cutoff', async () => {
+      const history = breaker.getHistory('2999-01-01T00:00:00Z');
+      expect(history).toEqual([]);
+    });
+  });
 });

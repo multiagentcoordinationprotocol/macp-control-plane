@@ -94,6 +94,9 @@ export class AppConfigService implements OnModuleInit {
   readonly otelServiceName = process.env.OTEL_SERVICE_NAME ?? 'macp-control-plane';
   readonly otelExporterOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? '';
 
+  // Privacy — redaction patterns applied to LLM prompt/response content (§8.3)
+  readonly redactPatterns = readStringList('MACP_REDACT_PATTERNS');
+
   onModuleInit(): void {
     this.validate();
   }

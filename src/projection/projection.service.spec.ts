@@ -60,6 +60,7 @@ describe('ProjectionService', () => {
         trace: { spanCount: 0, linkedArtifacts: [] },
         outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
         policy: { policyVersion: '', commitmentEvaluations: [] },
+        llm: { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } },
       });
     });
   });
@@ -253,7 +254,74 @@ describe('ProjectionService', () => {
         sourceParticipantId: 'agent-A',
         ts: '2026-01-01T00:00:00Z',
         confidence: 0.95,
+        payload: { signalType: 'anomaly', severity: 'high', confidence: 0.95 },
       });
+    });
+
+    it('signal.emitted preserves decoded payload on signal entry (§1.2)', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'signal.emitted',
+        subject: { kind: 'signal', id: 'sig-42' },
+        data: {
+          sender: 'agent-A',
+          decodedPayload: { signalType: 'anomaly', severity: 'high', detail: { score: 0.97 } },
+        },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.signals.signals).toHaveLength(1);
+      expect(result.signals.signals[0].payload).toEqual({
+        signalType: 'anomaly',
+        severity: 'high',
+        detail: { score: 0.97 },
+      });
+    });
+
+    it('signal.acknowledged annotates existing signal with ack timestamp + acknowledger (§1.2)', () => {
+      const base = service.empty('run-1');
+
+      const emitted = makeEvent({
+        type: 'signal.emitted',
+        seq: 1,
+        ts: '2026-01-01T00:00:01Z',
+        subject: { kind: 'signal', id: 'sig-1' },
+        data: {
+          sender: 'agent-A',
+          decodedPayload: { signalType: 'anomaly' },
+        },
+      });
+      const ack = makeEvent({
+        type: 'signal.acknowledged',
+        id: 'evt-ack',
+        seq: 2,
+        ts: '2026-01-01T00:00:02Z',
+        subject: { kind: 'signal', id: 'sig-1' },
+        data: {
+          sender: 'agent-B',
+          decodedPayload: { signalId: 'sig-1' },
+        },
+      });
+
+      const result = service.applyEvents(base, [emitted, ack]);
+
+      expect(result.signals.signals).toHaveLength(1);
+      expect(result.signals.signals[0].acknowledgedAt).toBe('2026-01-01T00:00:02Z');
+      expect(result.signals.signals[0].acknowledgedBy).toBe('agent-B');
+    });
+
+    it('signal.acknowledged without matching signal is a no-op (§1.2)', () => {
+      const base = service.empty('run-1');
+      const ack = makeEvent({
+        type: 'signal.acknowledged',
+        subject: { kind: 'signal', id: 'sig-missing' },
+        data: { sender: 'agent-B', decodedPayload: { signalId: 'sig-missing' } },
+      });
+
+      const result = service.applyEvents(base, [ack]);
+
+      expect(result.signals.signals).toHaveLength(0);
     });
 
     it('signals are pruned to 200', () => {
@@ -311,6 +379,165 @@ describe('ProjectionService', () => {
       expect(result.decision.current!.reasons).toEqual(['Analysis complete']);
       expect(result.decision.current!.finalized).toBe(false);
       expect(result.decision.current!.proposalId).toBe('prop-1');
+    });
+
+    it('decision.finalized with explicit outcome_positive honors the boolean (§1.3)', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'decision.finalized',
+        subject: { kind: 'decision', id: 'dec-1' },
+        data: {
+          decodedPayload: {
+            action: 'step_up',
+            outcome_positive: false,
+            commitmentId: 'commit-1',
+          },
+        },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.decision.current!.outcomePositive).toBe(false);
+      expect(result.policy.outcomePositive).toBe(false);
+    });
+
+    it('decision.finalized infers true from approve-like actions (§1.3)', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'decision.finalized',
+        subject: { kind: 'decision', id: 'dec-1' },
+        data: {
+          decodedPayload: { action: 'approve', commitmentId: 'commit-1' },
+        },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.decision.current!.outcomePositive).toBe(true);
+      expect(result.policy.outcomePositive).toBe(true);
+    });
+
+    it('decision.finalized infers false from reject-like actions (§1.3)', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'decision.finalized',
+        subject: { kind: 'decision', id: 'dec-1' },
+        data: {
+          decodedPayload: { action: 'declined', commitmentId: 'commit-1' },
+        },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.decision.current!.outcomePositive).toBe(false);
+      expect(result.policy.outcomePositive).toBe(false);
+    });
+
+    it('decision.finalized with unknown action and no explicit outcome uses null (not true) (§1.3)', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'decision.finalized',
+        subject: { kind: 'decision', id: 'dec-1' },
+        data: {
+          decodedPayload: { action: 'step_up', commitmentId: 'commit-1' },
+        },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.decision.current!.outcomePositive).toBeNull();
+      expect(result.policy.outcomePositive).toBeNull();
+    });
+
+    it('run.created with decisionPrompt seeds decision.current.prompt (§2.3)', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'run.created',
+        data: { status: 'starting', decisionPrompt: 'Decide whether to approve the transaction' },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.decision.current?.prompt).toBe('Decide whether to approve the transaction');
+    });
+
+    it('proposal.updated accumulates proposals[] contributor breakdown (§2.1)', () => {
+      const base = service.empty('run-1');
+      const events: CanonicalEvent[] = [
+        makeEvent({
+          type: 'proposal.created',
+          seq: 1,
+          ts: '2026-01-01T00:00:01Z',
+          data: {
+            sender: 'proposer',
+            messageType: 'Proposal',
+            decodedPayload: { proposalId: 'prop-1', option: 'Deploy feature X', rationale: 'ready to ship' },
+          },
+        }),
+        makeEvent({
+          type: 'proposal.updated',
+          id: 'evt-2',
+          seq: 2,
+          ts: '2026-01-01T00:00:02Z',
+          data: {
+            sender: 'evaluator',
+            messageType: 'Evaluation',
+            decodedPayload: { proposalId: 'prop-1', recommendation: 'APPROVE', confidence: 0.9, reason: 'looks good' },
+          },
+        }),
+        makeEvent({
+          type: 'proposal.updated',
+          id: 'evt-3',
+          seq: 3,
+          ts: '2026-01-01T00:00:03Z',
+          data: {
+            sender: 'voter',
+            messageType: 'Vote',
+            decodedPayload: { proposalId: 'prop-1', vote: 'APPROVE', reason: 'approved' },
+          },
+        }),
+      ];
+
+      const result = service.applyEvents(base, events);
+
+      expect(result.decision.current?.proposals).toHaveLength(3);
+      expect(result.decision.current?.proposals?.[0]).toMatchObject({
+        participantId: 'proposer',
+        action: 'Deploy feature X',
+        reasons: ['ready to ship'],
+        messageType: 'Proposal',
+      });
+      expect(result.decision.current?.proposals?.[1]).toMatchObject({
+        participantId: 'evaluator',
+        action: 'APPROVE',
+        vote: 'allow',
+        confidence: 0.9,
+        messageType: 'Evaluation',
+      });
+      expect(result.decision.current?.proposals?.[2]).toMatchObject({
+        participantId: 'voter',
+        action: 'APPROVE',
+        vote: 'allow',
+        messageType: 'Vote',
+      });
+    });
+
+    it('decision.finalized sets resolvedAt + resolvedBy (§2.2)', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'decision.finalized',
+        ts: '2026-01-01T00:00:10Z',
+        subject: { kind: 'decision', id: 'dec-1' },
+        data: {
+          sender: 'system',
+          decodedPayload: { action: 'approve', commitmentId: 'commit-1' },
+        },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.decision.current?.resolvedAt).toBe('2026-01-01T00:00:10Z');
+      expect(result.decision.current?.resolvedBy).toBe('system');
     });
 
     it('decision.finalized marks finalized and sets run completed', () => {
@@ -418,6 +645,120 @@ describe('ProjectionService', () => {
 
       expect(result.run.status).toBe('completed');
       expect(result.run.runtimeSessionId).toBe('session-1');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // applyEvents — terminal participant sweep (§1.1)
+  // -----------------------------------------------------------------------
+
+  describe('applyEvents — terminal participant sweep', () => {
+    function seed(base: RunStateProjection, id: string, status: 'idle' | 'active' | 'waiting', latestActivityAt?: string) {
+      base.participants.push({ participantId: id, status, latestActivityAt });
+      base.graph.nodes.push({ id, kind: 'participant', status });
+    }
+
+    it('run.completed promotes participants with activity to completed, idle ones to skipped', () => {
+      const base = service.empty('run-1');
+      base.run.status = 'running';
+      seed(base, 'agent-A', 'active', '2026-01-01T00:00:05Z');
+      seed(base, 'agent-B', 'waiting', '2026-01-01T00:00:03Z');
+      seed(base, 'agent-C', 'idle');
+
+      const result = service.applyEvents(base, [
+        makeEvent({ type: 'run.completed', data: { status: 'completed' } }),
+      ]);
+
+      const byId = (id: string) => result.participants.find((p) => p.participantId === id)!;
+      expect(byId('agent-A').status).toBe('completed');
+      expect(byId('agent-B').status).toBe('completed');
+      expect(byId('agent-C').status).toBe('skipped');
+
+      const nodeById = (id: string) => result.graph.nodes.find((n) => n.id === id)!;
+      expect(nodeById('agent-A').status).toBe('completed');
+      expect(nodeById('agent-B').status).toBe('completed');
+      expect(nodeById('agent-C').status).toBe('skipped');
+    });
+
+    it('run.failed marks last-active participant as failed, others completed/skipped', () => {
+      const base = service.empty('run-1');
+      base.run.status = 'running';
+      seed(base, 'agent-A', 'active', '2026-01-01T00:00:01Z');
+      seed(base, 'agent-B', 'active', '2026-01-01T00:00:10Z');
+      seed(base, 'agent-C', 'idle');
+
+      const result = service.applyEvents(base, [
+        makeEvent({ type: 'run.failed', data: { status: 'failed', error: 'boom' } }),
+      ]);
+
+      const byId = (id: string) => result.participants.find((p) => p.participantId === id)!;
+      expect(byId('agent-A').status).toBe('completed');
+      expect(byId('agent-B').status).toBe('failed');
+      expect(byId('agent-C').status).toBe('skipped');
+    });
+
+    it('run.cancelled sweeps like completed (never failed)', () => {
+      const base = service.empty('run-1');
+      base.run.status = 'running';
+      seed(base, 'agent-A', 'active', '2026-01-01T00:00:05Z');
+      seed(base, 'agent-B', 'idle');
+
+      const result = service.applyEvents(base, [
+        makeEvent({ type: 'run.cancelled', data: { status: 'cancelled' } }),
+      ]);
+
+      const byId = (id: string) => result.participants.find((p) => p.participantId === id)!;
+      expect(byId('agent-A').status).toBe('completed');
+      expect(byId('agent-B').status).toBe('skipped');
+    });
+
+    it('does not overwrite already-terminal participants', () => {
+      const base = service.empty('run-1');
+      base.run.status = 'running';
+      base.participants.push({ participantId: 'agent-A', status: 'failed', latestActivityAt: '2026-01-01T00:00:01Z' });
+      base.graph.nodes.push({ id: 'agent-A', kind: 'participant', status: 'failed' });
+      seed(base, 'agent-B', 'active', '2026-01-01T00:00:05Z');
+
+      const result = service.applyEvents(base, [
+        makeEvent({ type: 'run.completed', data: { status: 'completed' } }),
+      ]);
+
+      expect(result.participants.find((p) => p.participantId === 'agent-A')!.status).toBe('failed');
+      expect(result.participants.find((p) => p.participantId === 'agent-B')!.status).toBe('completed');
+    });
+
+    it('SESSION_STATE_RESOLVED sweeps participants (skipped for no activity)', () => {
+      const base = service.empty('run-1');
+      base.run.status = 'running';
+      seed(base, 'agent-A', 'active', '2026-01-01T00:00:05Z');
+      seed(base, 'agent-B', 'idle');
+
+      const result = service.applyEvents(base, [
+        makeEvent({
+          type: 'session.state.changed',
+          data: { sessionId: 'session-1', state: 'SESSION_STATE_RESOLVED' },
+        }),
+      ]);
+
+      expect(result.participants.find((p) => p.participantId === 'agent-A')!.status).toBe('completed');
+      expect(result.participants.find((p) => p.participantId === 'agent-B')!.status).toBe('skipped');
+    });
+
+    it('SESSION_STATE_EXPIRED sweeps like failed', () => {
+      const base = service.empty('run-1');
+      base.run.status = 'running';
+      seed(base, 'agent-A', 'active', '2026-01-01T00:00:05Z');
+      seed(base, 'agent-B', 'idle');
+
+      const result = service.applyEvents(base, [
+        makeEvent({
+          type: 'session.state.changed',
+          data: { sessionId: 'session-1', state: 'SESSION_STATE_EXPIRED' },
+        }),
+      ]);
+
+      expect(result.participants.find((p) => p.participantId === 'agent-A')!.status).toBe('failed');
+      expect(result.participants.find((p) => p.participantId === 'agent-B')!.status).toBe('skipped');
     });
   });
 
@@ -621,6 +962,70 @@ describe('ProjectionService', () => {
       expect(result.policy.commitmentEvaluations[49].commitmentId).toBe('commit-new');
     });
 
+    it('llm.call.completed appends to llm.calls and updates totals (§8.1)', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'llm.call.completed',
+        ts: '2026-04-14T00:00:01Z',
+        subject: { kind: 'message', id: 'msg-1' },
+        data: {
+          sender: 'agent-a',
+          messageId: 'msg-1',
+          decodedPayload: {
+            model: 'gpt-4o-mini',
+            promptTokens: 120,
+            completionTokens: 45,
+            totalTokens: 165,
+            latencyMs: 890,
+            estimatedCostUsd: 0.00042,
+          },
+        },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.llm.calls).toHaveLength(1);
+      expect(result.llm.calls[0]).toMatchObject({
+        participantId: 'agent-a',
+        model: 'gpt-4o-mini',
+        promptTokens: 120,
+        completionTokens: 45,
+        totalTokens: 165,
+        latencyMs: 890,
+        messageId: 'msg-1',
+      });
+      expect(result.llm.totals).toEqual({
+        callCount: 1,
+        promptTokens: 120,
+        completionTokens: 45,
+        totalTokens: 165,
+        estimatedCostUsd: 0.00042,
+      });
+    });
+
+    it('llm.calls are capped at 100 entries (§8.1)', () => {
+      const base = service.empty('run-1');
+      for (let i = 0; i < 100; i++) {
+        base.llm.calls.push({
+          participantId: `a-${i}`,
+          promptTokens: 1,
+          completionTokens: 1,
+          totalTokens: 2,
+          ts: '2026-04-14T00:00:00Z',
+        });
+      }
+      const event = makeEvent({
+        type: 'llm.call.completed',
+        data: { sender: 'new-agent', decodedPayload: { promptTokens: 5, completionTokens: 5 } },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.llm.calls).toHaveLength(100);
+      expect(result.llm.calls[result.llm.calls.length - 1].participantId).toBe('new-agent');
+      expect(result.llm.calls[0].participantId).toBe('a-1');
+    });
+
     it('empty projection has default policy state', () => {
       const projection = service.empty('run-1');
 
@@ -628,6 +1033,107 @@ describe('ProjectionService', () => {
         policyVersion: '',
         commitmentEvaluations: []
       });
+    });
+
+    it('session.bound with expectedCommitments populates policy.expectedCommitments (§2.4)', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'session.bound',
+        data: {
+          sessionId: 'session-1',
+          expectedCommitments: [
+            { id: 'commit-approve', title: 'Approve', requiredRoles: ['voter'] },
+            { id: 'commit-reject', title: 'Reject', requiredRoles: ['voter'] },
+          ],
+        },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.policy.expectedCommitments).toHaveLength(2);
+      expect(result.policy.expectedCommitments?.[0]).toEqual({ id: 'commit-approve', title: 'Approve', requiredRoles: ['voter'] });
+      expect(result.policy.quorumStatus).toBe('pending');
+    });
+
+    it('Vote contributions accumulate voteTally with derived quorum (§2.5)', () => {
+      const base = service.empty('run-1');
+      base.participants.push(
+        { participantId: 'voter-a', status: 'idle', role: 'voter' },
+        { participantId: 'voter-b', status: 'idle', role: 'voter' },
+        { participantId: 'voter-c', status: 'idle', role: 'voter' }
+      );
+
+      const events: CanonicalEvent[] = [
+        makeEvent({
+          type: 'proposal.updated',
+          seq: 1,
+          data: {
+            sender: 'voter-a',
+            messageType: 'Vote',
+            decodedPayload: { proposalId: 'prop-1', vote: 'APPROVE' },
+          },
+        }),
+        makeEvent({
+          type: 'proposal.updated',
+          id: 'evt-2',
+          seq: 2,
+          data: {
+            sender: 'voter-b',
+            messageType: 'Vote',
+            decodedPayload: { proposalId: 'prop-1', vote: 'REJECT' },
+          },
+        }),
+        makeEvent({
+          type: 'proposal.updated',
+          id: 'evt-3',
+          seq: 3,
+          data: {
+            sender: 'voter-c',
+            messageType: 'Vote',
+            decodedPayload: { proposalId: 'prop-1', vote: 'APPROVE' },
+          },
+        }),
+      ];
+
+      const result = service.applyEvents(base, events);
+
+      expect(result.policy.voteTally).toHaveLength(1);
+      const entry = result.policy.voteTally![0];
+      expect(entry).toEqual({
+        commitmentId: 'prop-1',
+        allow: 2,
+        deny: 1,
+        threshold: 2,
+        quorum: { required: 3, cast: 3 },
+      });
+      expect(result.policy.quorumStatus).toBe('pending');
+    });
+
+    it('policy.commitment.evaluated with decision=allow flips quorumStatus to reached (§2.5)', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'policy.commitment.evaluated',
+        subject: { kind: 'policy', id: 'commit-1' },
+        data: {
+          decodedPayload: { commitmentId: 'commit-1', decision: 'allow', reasons: ['ok'] },
+        },
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.policy.quorumStatus).toBe('reached');
+    });
+
+    it('run.failed with no allow evaluations flips quorumStatus to failed (§2.5)', () => {
+      const base = service.empty('run-1');
+      base.run.status = 'running';
+      base.policy.quorumStatus = 'pending';
+
+      const result = service.applyEvents(base, [
+        makeEvent({ type: 'run.failed', data: { status: 'failed', error: 'boom' } }),
+      ]);
+
+      expect(result.policy.quorumStatus).toBe('failed');
     });
   });
 });

@@ -1,12 +1,22 @@
 import { Injectable } from '@nestjs/common';
-import { and, asc, eq, gt, lte } from 'drizzle-orm';
+import { and, asc, count, eq, gt, gte, inArray, lt, lte, sql, SQL } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { randomUUID } from 'node:crypto';
 import { CanonicalEvent } from '../contracts/control-plane';
 import { RawRuntimeEvent } from '../contracts/runtime';
 import { DatabaseService } from '../db/database.service';
 import * as schema from '../db/schema';
-import { runEventsCanonical, runEventsRaw } from '../db/schema';
+import { runEventsCanonical, runEventsRaw, runs } from '../db/schema';
+
+export interface CanonicalEventFilter {
+  runId?: string;
+  afterSeq?: number;
+  afterTs?: string;
+  beforeTs?: string;
+  types?: string[];
+  scenarioRef?: string;
+  limit?: number;
+}
 
 type Tx = NodePgDatabase<typeof schema>;
 
@@ -58,6 +68,86 @@ export class EventRepository {
       .where(and(eq(runEventsCanonical.runId, runId), gt(runEventsCanonical.seq, afterSeq)))
       .orderBy(asc(runEventsCanonical.seq))
       .limit(limit);
+  }
+
+  /**
+   * Filtered query over canonical events — used by the per-run endpoint with time bounds (§4.2)
+   * and the cross-run GET /events endpoint (§4.1).
+   */
+  async listCanonicalFiltered(filter: CanonicalEventFilter): Promise<{ data: typeof runEventsCanonical.$inferSelect[]; total: number }> {
+    const conditions = this.buildCanonicalWhere(filter);
+    const limit = filter.limit ?? 200;
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    // For scenarioRef we must JOIN runs; otherwise simple SELECT
+    if (filter.scenarioRef) {
+      const scenarioExact = filter.scenarioRef;
+      const scenarioLike = `%${filter.scenarioRef}%`;
+      const baseWhere = conditions.length > 0 ? and(...conditions) : sql`TRUE`;
+      const composed = and(
+        baseWhere,
+        sql`(${runs.sourceRef} = ${scenarioExact} OR ${runs.metadata}->>'scenarioRef' ILIKE ${scenarioLike})`
+      );
+      const [data, totalResult] = await Promise.all([
+        this.database.db
+          .select({
+            id: runEventsCanonical.id,
+            runId: runEventsCanonical.runId,
+            seq: runEventsCanonical.seq,
+            ts: runEventsCanonical.ts,
+            type: runEventsCanonical.type,
+            subjectKind: runEventsCanonical.subjectKind,
+            subjectId: runEventsCanonical.subjectId,
+            sourceKind: runEventsCanonical.sourceKind,
+            sourceName: runEventsCanonical.sourceName,
+            rawType: runEventsCanonical.rawType,
+            traceId: runEventsCanonical.traceId,
+            spanId: runEventsCanonical.spanId,
+            parentSpanId: runEventsCanonical.parentSpanId,
+            data: runEventsCanonical.data,
+            schemaVersion: runEventsCanonical.schemaVersion,
+          })
+          .from(runEventsCanonical)
+          .innerJoin(runs, eq(runs.id, runEventsCanonical.runId))
+          .where(composed)
+          .orderBy(asc(runEventsCanonical.ts), asc(runEventsCanonical.seq))
+          .limit(limit),
+        this.database.db
+          .select({ value: count() })
+          .from(runEventsCanonical)
+          .innerJoin(runs, eq(runs.id, runEventsCanonical.runId))
+          .where(composed),
+      ]);
+      return { data: data as typeof runEventsCanonical.$inferSelect[], total: Number(totalResult[0]?.value ?? 0) };
+    }
+
+    const [data, totalResult] = await Promise.all([
+      this.database.db
+        .select()
+        .from(runEventsCanonical)
+        .where(whereClause)
+        .orderBy(asc(runEventsCanonical.ts), asc(runEventsCanonical.seq))
+        .limit(limit),
+      this.database.db
+        .select({ value: count() })
+        .from(runEventsCanonical)
+        .where(whereClause),
+    ]);
+    return { data, total: Number(totalResult[0]?.value ?? 0) };
+  }
+
+  private buildCanonicalWhere(filter: CanonicalEventFilter): SQL[] {
+    const conditions: SQL[] = [];
+    if (filter.runId) conditions.push(eq(runEventsCanonical.runId, filter.runId));
+    if (filter.afterSeq !== undefined && filter.afterSeq > 0) {
+      conditions.push(gt(runEventsCanonical.seq, filter.afterSeq));
+    }
+    if (filter.afterTs) conditions.push(gte(runEventsCanonical.ts, filter.afterTs));
+    if (filter.beforeTs) conditions.push(lt(runEventsCanonical.ts, filter.beforeTs));
+    if (filter.types && filter.types.length > 0) {
+      conditions.push(inArray(runEventsCanonical.type, filter.types));
+    }
+    return conditions;
   }
 
   async listCanonicalRange(runId: string, afterSeq: number, toSeq: number, limit = 500) {

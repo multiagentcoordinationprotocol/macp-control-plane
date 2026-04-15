@@ -1,15 +1,44 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional } from 'class-validator';
+import { IsIn, IsISO8601, IsOptional, IsString } from 'class-validator';
 
 export class DashboardOverviewQueryDto {
   @ApiPropertyOptional({
-    description: 'Time range for dashboard data',
-    enum: ['24h', '7d', '30d'],
+    description: 'Named time window (mutually exclusive with from/to)',
+    enum: ['1h', '6h', '24h', '7d', '30d'],
     default: '24h'
+  })
+  @IsOptional()
+  @IsIn(['1h', '6h', '24h', '7d', '30d'])
+  window?: '1h' | '6h' | '24h' | '7d' | '30d';
+
+  /** @deprecated — alias for `window`, retained for backward compatibility */
+  @ApiPropertyOptional({
+    description: 'Deprecated alias for `window`',
+    enum: ['24h', '7d', '30d']
   })
   @IsOptional()
   @IsIn(['24h', '7d', '30d'])
   range?: '24h' | '7d' | '30d';
+
+  @ApiPropertyOptional({ description: 'Explicit start timestamp (ISO-8601); overrides `window`' })
+  @IsOptional()
+  @IsISO8601()
+  from?: string;
+
+  @ApiPropertyOptional({ description: 'Explicit end timestamp (ISO-8601); defaults to now' })
+  @IsOptional()
+  @IsISO8601()
+  to?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by scenario reference (e.g. fraud-detection@1.2.0)' })
+  @IsOptional()
+  @IsString()
+  scenarioRef?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by environment tag' })
+  @IsOptional()
+  @IsString()
+  environment?: string;
 }
 
 export class DashboardKpisDto {
@@ -34,6 +63,15 @@ export class DashboardChartsDto {
   @ApiProperty() latency!: ChartSeriesDto;
   @ApiProperty() signalVolume!: ChartSeriesDto;
   @ApiProperty() errorClasses!: ChartSeriesDto;
+  @ApiPropertyOptional() throughput?: ChartSeriesDto;
+  @ApiPropertyOptional() queueDepth?: ChartSeriesDto;
+  @ApiPropertyOptional() latencyP50?: ChartSeriesDto;
+  @ApiPropertyOptional() latencyP95?: ChartSeriesDto;
+  @ApiPropertyOptional() latencyP99?: ChartSeriesDto;
+  @ApiPropertyOptional() cost?: ChartSeriesDto;
+  @ApiPropertyOptional() successRate?: ChartSeriesDto;
+  @ApiPropertyOptional() decisionOutcome?: ChartSeriesDto;
+  @ApiPropertyOptional() perScenario?: ChartSeriesDto;
 }
 
 export class DashboardRunSummaryDto {

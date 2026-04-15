@@ -29,6 +29,7 @@ describe('RunEventService', () => {
     trace: { spanCount: 0, linkedArtifacts: [] },
     outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
     policy: { policyVersion: '', commitmentEvaluations: [] },
+    llm: { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } },
   };
 
   beforeEach(() => {
@@ -69,6 +70,12 @@ describe('RunEventService', () => {
       projectionService,
       metricsService,
       streamHub,
+      {
+        withRunSpan: jest.fn(<T>(_runId: string, _name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
+        withSpan: jest.fn(<T>(_name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
+        addRunSpanEvent: jest.fn(),
+        getRunTraceContext: jest.fn().mockReturnValue(undefined),
+      } as any,
     );
   });
 

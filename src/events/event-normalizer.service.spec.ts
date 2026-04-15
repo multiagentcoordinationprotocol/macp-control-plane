@@ -50,6 +50,7 @@ describe('EventNormalizerService', () => {
     service = new EventNormalizerService(
       protoRegistry,
       { inboundMessagesTotal: { inc: jest.fn() } } as unknown as InstrumentationService,
+      { isActive: () => false, redact: <T>(v: T) => v } as any,
     );
   });
 
@@ -199,6 +200,114 @@ describe('EventNormalizerService', () => {
           sender: 'agent-a',
         }),
       );
+    });
+
+    it('should produce signal.acknowledged derived event for SignalAck messageType (§1.2)', () => {
+      const decoded = { signalId: 'sig-42', acknowledgedBy: 'agent-a' };
+      protoRegistry.decodeKnown.mockReturnValue(decoded);
+
+      const envelope = makeEnvelope({ messageType: 'SignalAck' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const ack = events.find((e) => e.type === 'signal.acknowledged');
+      expect(ack).toBeDefined();
+      expect(ack!.subject).toEqual({ kind: 'signal', id: 'sig-42' });
+    });
+
+    it('synthesizes llm.call.completed when message metadata carries llmCall (§3.3)', () => {
+      const decoded = {
+        some_payload: 'foo',
+        metadata: {
+          llmCall: { model: 'gpt-4o-mini', promptTokens: 123, completionTokens: 45, latencyMs: 890 },
+        },
+      };
+      protoRegistry.decodeKnown.mockReturnValue(decoded);
+
+      const envelope = makeEnvelope({ messageType: 'Proposal' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-04-14T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const llm = events.find((e) => e.type === 'llm.call.completed');
+      expect(llm).toBeDefined();
+      expect(llm!.data.decodedPayload).toMatchObject({
+        model: 'gpt-4o-mini',
+        promptTokens: 123,
+        completionTokens: 45,
+        totalTokens: 168,
+        latencyMs: 890,
+      });
+    });
+
+    it('synthesizes llm.call.completed from minimal tokenUsage shape (§3.3)', () => {
+      protoRegistry.decodeKnown.mockReturnValue({
+        tokenUsage: { promptTokens: 50, completionTokens: 10, model: 'claude-3-haiku' },
+      });
+
+      const envelope = makeEnvelope({ messageType: 'Evaluation' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-04-14T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const llm = events.find((e) => e.type === 'llm.call.completed');
+      expect(llm).toBeDefined();
+      expect(llm!.data.decodedPayload).toMatchObject({
+        model: 'claude-3-haiku',
+        promptTokens: 50,
+        completionTokens: 10,
+      });
+    });
+
+    it('does NOT synthesize llm.call.completed when metadata is absent (§3.3)', () => {
+      protoRegistry.decodeKnown.mockReturnValue({ anything: 'else' });
+
+      const envelope = makeEnvelope({ messageType: 'Proposal' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-04-14T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      expect(events.find((e) => e.type === 'llm.call.completed')).toBeUndefined();
+    });
+
+    it('SignalAcknowledged messageType also maps to signal.acknowledged (§1.2)', () => {
+      const decoded = { signal_id: 'sig-99' };
+      protoRegistry.decodeKnown.mockReturnValue(decoded);
+
+      const envelope = makeEnvelope({ messageType: 'SignalAcknowledged' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const ack = events.find((e) => e.type === 'signal.acknowledged');
+      expect(ack).toBeDefined();
+      expect(ack!.subject).toEqual({ kind: 'signal', id: 'sig-99' });
     });
 
     it('should produce decision.finalized but NOT session.state.changed for Commitment messageType', () => {

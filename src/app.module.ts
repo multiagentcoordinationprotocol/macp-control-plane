@@ -12,6 +12,7 @@ import { DashboardService } from './dashboard/dashboard.service';
 import { AuditController } from './controllers/audit.controller';
 import { HealthController } from './controllers/health.controller';
 import { MetricsController } from './controllers/metrics.controller';
+import { EventsController } from './controllers/events.controller';
 import { ObservabilityController } from './controllers/observability.controller';
 import { RunInsightsController } from './controllers/run-insights.controller';
 import { RunsController } from './controllers/runs.controller';
@@ -41,6 +42,7 @@ import { OutboundMessageRepository } from './storage/outbound-message.repository
 import { RunRepository } from './storage/run.repository';
 import { RuntimeSessionRepository } from './storage/runtime-session.repository';
 import { InstrumentationService } from './telemetry/instrumentation.service';
+import { RedactionService } from './telemetry/redaction.service';
 import { TraceService } from './telemetry/trace.service';
 import { RunInsightsService } from './insights/run-insights.service';
 import { RunExecutorService } from './runs/run-executor.service';
@@ -58,14 +60,18 @@ import { WebhookService } from './webhooks/webhook.service';
     ConfigModule,
     DatabaseModule,
     AuthModule,
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }])
+    ThrottlerModule.forRoot([{
+      ttl: Number(process.env.THROTTLE_TTL_MS ?? 60000),
+      limit: Number(process.env.THROTTLE_LIMIT ?? 100)
+    }])
   ],
-  controllers: [RunsController, RunInsightsController, RuntimeController, ObservabilityController, HealthController, MetricsController, AdminController, AuditController, WebhookController, DashboardController],
+  controllers: [RunsController, RunInsightsController, RuntimeController, ObservabilityController, HealthController, MetricsController, AdminController, AuditController, WebhookController, DashboardController, EventsController],
   providers: [
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: ThrottleByUserGuard },
     InstrumentationService,
     TraceService,
+    RedactionService,
     ProtoRegistryService,
     RuntimeCredentialResolverService,
     RustRuntimeProvider,

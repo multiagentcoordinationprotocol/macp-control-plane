@@ -41,6 +41,7 @@ describe('StreamHubService', () => {
     trace: { spanCount: 0, linkedArtifacts: [] },
     outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
     policy: { policyVersion: '', commitmentEvaluations: [] },
+    llm: { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } },
   });
 
   describe('publishEvent()', () => {

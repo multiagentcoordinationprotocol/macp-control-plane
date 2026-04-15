@@ -136,6 +136,42 @@ describe('Projection (integration)', () => {
     expect(state.graph).toHaveProperty('edges');
   });
 
+  it('terminal sweep: participants reach terminal status after run is cancelled (§1.1)', async () => {
+    const { runId } = await ctx.client.createRun(decisionModeRequest());
+
+    // Wait for participants to be registered and the kickoff to activate the proposer
+    let activated = false;
+    for (let i = 0; i < 10; i++) {
+      await sleep(300);
+      const state = await ctx.client.getState(runId) as any;
+      if (state.participants?.length >= 3) { activated = true; break; }
+    }
+    expect(activated).toBe(true);
+
+    // Cancel the run — triggers markCancelled, which emits run.cancelled, which triggers the sweep
+    await ctx.client.cancelRun(runId, 'integration test sweep');
+
+    let settled = false;
+    for (let i = 0; i < 10; i++) {
+      await sleep(300);
+      const run = await ctx.client.getRun(runId) as any;
+      if (['completed', 'failed', 'cancelled'].includes(run.status)) { settled = true; break; }
+    }
+    expect(settled).toBe(true);
+
+    const state = await ctx.client.getState(runId) as any;
+    const terminal = new Set(['completed', 'failed', 'skipped']);
+
+    // Every participant (and graph node) should land in a terminal status after cancel
+    expect(state.participants.length).toBeGreaterThan(0);
+    for (const p of state.participants) {
+      expect(terminal.has(p.status)).toBe(true);
+    }
+    for (const n of state.graph.nodes) {
+      expect(terminal.has(n.status)).toBe(true);
+    }
+  });
+
   it('projection rebuilds from events', async () => {
     const { runId } = await ctx.client.createRun(decisionModeRequest());
 

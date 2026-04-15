@@ -19,7 +19,12 @@ describe('ObservabilityController', () => {
 
   beforeEach(() => {
     mockRunManager = {
-      getRun: jest.fn().mockResolvedValue({ id: runId, status: 'completed' }),
+      getRun: jest.fn().mockResolvedValue({
+        id: runId,
+        status: 'completed',
+        sourceKind: 'scenario',
+        sourceRef: 'fraud-detection@1.2.0'
+      }),
     };
     mockArtifactService = {
       list: jest.fn(),
@@ -53,7 +58,7 @@ describe('ObservabilityController', () => {
   // getTraces
   // ===========================================================================
   describe('getTraces', () => {
-    it('returns trace from projection when available', async () => {
+    it('returns trace from projection plus runStatus + scenarioRef (§4.4)', async () => {
       const traceSummary = { spanCount: 12, linkedArtifacts: ['art-1'] };
       mockProjectionService.get.mockResolvedValue({ trace: traceSummary });
 
@@ -61,23 +66,46 @@ describe('ObservabilityController', () => {
 
       expect(mockRunManager.getRun).toHaveBeenCalledWith(runId);
       expect(mockProjectionService.get).toHaveBeenCalledWith(runId);
-      expect(result).toEqual(traceSummary);
+      expect(result).toEqual({
+        ...traceSummary,
+        runStatus: 'completed',
+        scenarioRef: 'fraud-detection@1.2.0',
+      });
     });
 
-    it('returns empty default when projection has no trace', async () => {
+    it('returns empty default trace when projection has no trace, still includes runStatus (§4.4)', async () => {
       mockProjectionService.get.mockResolvedValue({ trace: undefined });
 
       const result = await controller.getTraces(runId);
 
-      expect(result).toEqual({ spanCount: 0, linkedArtifacts: [] });
+      expect(result).toEqual({
+        spanCount: 0,
+        linkedArtifacts: [],
+        runStatus: 'completed',
+        scenarioRef: 'fraud-detection@1.2.0',
+      });
     });
 
-    it('returns empty default when projection is null', async () => {
+    it('returns empty default when projection is null but keeps run metadata (§4.4)', async () => {
       mockProjectionService.get.mockResolvedValue(null);
 
       const result = await controller.getTraces(runId);
 
-      expect(result).toEqual({ spanCount: 0, linkedArtifacts: [] });
+      expect(result).toEqual({
+        spanCount: 0,
+        linkedArtifacts: [],
+        runStatus: 'completed',
+        scenarioRef: 'fraud-detection@1.2.0',
+      });
+    });
+
+    it('scenarioRef is undefined when run has no source.ref (§4.4)', async () => {
+      mockRunManager.getRun.mockResolvedValueOnce({ id: runId, status: 'running' });
+      mockProjectionService.get.mockResolvedValue({ trace: { spanCount: 3, linkedArtifacts: [] } });
+
+      const result = await controller.getTraces(runId);
+
+      expect(result).toMatchObject({ runStatus: 'running', scenarioRef: undefined });
     });
   });
 

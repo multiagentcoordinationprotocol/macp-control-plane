@@ -67,6 +67,10 @@ export class RunManagerService {
       traceId
     });
 
+    const decisionPrompt =
+      (request.session.metadata?.decisionPrompt as string | undefined) ??
+      (request.session.metadata?.decision_prompt as string | undefined);
+
     await this.runEventService.emitControlPlaneEvents(record.id, [
       {
         ts: new Date().toISOString(),
@@ -79,7 +83,8 @@ export class RunManagerService {
           modeName: request.session.modeName,
           runtimeKind: request.runtime.kind,
           runtimeVersion: request.runtime.version,
-          traceId
+          traceId,
+          ...(decisionPrompt ? { decisionPrompt } : {})
         }
       }
     ]);
@@ -147,6 +152,8 @@ export class RunManagerService {
       }
     }));
 
+    const expectedCommitments = request.session.commitments;
+
     await this.runEventService.emitControlPlaneEvents(runId, [
       {
         ts: new Date().toISOString(),
@@ -161,7 +168,8 @@ export class RunManagerService {
           modeVersion: request.session.modeVersion,
           configurationVersion: request.session.configurationVersion,
           policyVersion: request.session.policyVersion || 'policy.default',
-          participants: request.session.participants.map((item) => item.id)
+          participants: request.session.participants.map((item) => item.id),
+          ...(expectedCommitments && expectedCommitments.length > 0 ? { expectedCommitments } : {})
         }
       },
       ...participantEvents
@@ -367,7 +375,7 @@ export class RunManagerService {
 
   private async enrichRunMetadata(
     runId: string,
-    run: { startedAt?: string | null; endedAt?: string | null; metadata?: Record<string, unknown> | null }
+    run: { startedAt?: string | null; endedAt?: string | null; metadata?: Record<string, unknown> | null; status?: string }
   ) {
     try {
       const [metrics, events] = await Promise.all([
@@ -383,6 +391,17 @@ export class RunManagerService {
         run.startedAt && run.endedAt
           ? new Date(run.endedAt).getTime() - new Date(run.startedAt).getTime()
           : metrics?.durationMs ?? undefined;
+
+      // Feed latency histogram (§5.4). Only observe when we have a real duration.
+      if (durationMs !== undefined && durationMs >= 0) {
+        const modeName =
+          (run.metadata?.executionRequest as { session?: { modeName?: string } } | undefined)?.session?.modeName
+          ?? 'unknown';
+        this.instrumentation.runDuration.observe(
+          { terminal_status: run.status ?? 'unknown', mode_name: modeName },
+          durationMs / 1000
+        );
+      }
 
       const enrichment: Record<string, unknown> = {};
       if (durationMs !== undefined) enrichment.durationMs = durationMs;
