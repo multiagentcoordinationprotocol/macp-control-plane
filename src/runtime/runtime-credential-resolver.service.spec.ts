@@ -23,7 +23,11 @@ describe('RuntimeCredentialResolverService', () => {
   // Sender resolution priority
   // ===========================================================================
   describe('sender resolution', () => {
-    it('uses participant.transportIdentity as highest priority', async () => {
+    it('uses participant.id as highest priority (ignores transportIdentity for sender consistency)', async () => {
+      // participant.id must equal the sender string used in startSession so that
+      // session.initiator_sender matches later Commitment sender checks.
+      // transportIdentity is accepted in the input for symmetry with the
+      // runtime contract but is intentionally NOT used as the sender id.
       const result = await service.resolve({
         runtimeKind: 'rust',
         requester: { actorId: 'actor-1' },
@@ -31,10 +35,10 @@ describe('RuntimeCredentialResolverService', () => {
         fallbackSender: 'fallback',
       });
 
-      expect(result.sender).toBe('transport-id');
+      expect(result.sender).toBe('part-1');
     });
 
-    it('falls back to participant.id when transportIdentity is absent', async () => {
+    it('uses participant.id when only it is provided', async () => {
       const result = await service.resolve({
         runtimeKind: 'rust',
         requester: { actorId: 'actor-1' },
