@@ -85,9 +85,14 @@ describe('RunExecutorService', () => {
   };
   let mockProtoRegistry: {
     encodePayloadEnvelope: jest.Mock;
+    getKnownTypeName: jest.Mock;
+    encodeMessage: jest.Mock;
   };
   let mockTraceService: {
     withSpan: jest.Mock;
+    withRunSpan: jest.Mock;
+    addRunSpanEvent: jest.Mock;
+    getRunTraceContext: jest.Mock;
   };
   let mockEventService: {
     emitControlPlaneEvents: jest.Mock;
@@ -136,7 +141,29 @@ describe('RunExecutorService', () => {
       }),
       openSession: jest.fn(),
       startSession: jest.fn(),
-      send: jest.fn(),
+      // Default send ack — tests that care override via mockResolvedValue.
+      // Kickoff now flows through unary send, so a sensible default is required
+      // for the launch-flow tests to reach the stream-consumer start step.
+      send: jest.fn().mockResolvedValue({
+        ack: {
+          ok: true,
+          duplicate: false,
+          messageId: 'msg-default',
+          sessionId: 'sess-default',
+          acceptedAtUnixMs: Date.now(),
+          sessionState: 'SESSION_STATE_OPEN' as const,
+        },
+        envelope: {
+          macpVersion: '1.0',
+          mode: 'decision',
+          messageType: 'Proposal',
+          messageId: 'msg-default',
+          sessionId: 'sess-default',
+          sender: 'agent-1',
+          timestampUnixMs: Date.now(),
+          payload: Buffer.from(''),
+        },
+      }),
       streamSession: jest.fn(),
       getSession: jest.fn(),
       cancelSession: jest.fn(),
@@ -175,10 +202,15 @@ describe('RunExecutorService', () => {
 
     mockProtoRegistry = {
       encodePayloadEnvelope: jest.fn().mockReturnValue(Buffer.from('encoded')),
+      getKnownTypeName: jest.fn().mockReturnValue(undefined),
+      encodeMessage: jest.fn().mockReturnValue(Buffer.from('encoded')),
     };
 
     mockTraceService = {
       withSpan: jest.fn().mockImplementation((_name, _attrs, fn) => fn()),
+      withRunSpan: jest.fn().mockImplementation((_runId, _name, _attrs, fn) => fn()),
+      addRunSpanEvent: jest.fn(),
+      getRunTraceContext: jest.fn().mockReturnValue(undefined),
     };
 
     mockEventService = {
