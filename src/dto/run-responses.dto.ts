@@ -76,6 +76,9 @@ export class RunStateResponseDto implements RunStateProjection {
 
   @ApiProperty({ type: 'object', additionalProperties: true })
   policy!: RunStateProjection['policy'];
+
+  @ApiProperty({ type: 'object', additionalProperties: true })
+  llm!: RunStateProjection['llm'];
 }
 
 export class MetricsSummaryDto implements MetricsSummary {

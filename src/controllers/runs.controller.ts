@@ -122,15 +122,32 @@ export class RunsController {
   }
 
   @Get(':id/events')
-  @ApiOperation({ summary: 'List canonical events for a run.' })
+  @ApiOperation({ summary: 'List canonical events for a run with optional time-range and type filters (§4.2).' })
   @ApiQuery({ name: 'afterSeq', required: false })
   @ApiQuery({ name: 'limit', required: false })
+  @ApiQuery({ name: 'afterTs', required: false })
+  @ApiQuery({ name: 'beforeTs', required: false })
+  @ApiQuery({ name: 'type', required: false, description: 'Comma-separated canonical event types' })
   @ApiOkResponse({ type: [CanonicalEventDto] })
   async getRunEvents(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Query(new ValidationPipe({ transform: true, whitelist: true })) query: ListEventsQueryDto
   ) {
-    return this.eventRepository.listCanonicalByRun(id, query.afterSeq ?? 0, query.limit ?? 200);
+    // Fast path: no time/type filter — keep legacy array response for backward compat.
+    if (!query.afterTs && !query.beforeTs && !query.type) {
+      return this.eventRepository.listCanonicalByRun(id, query.afterSeq ?? 0, query.limit ?? 200);
+    }
+    const { data, total } = await this.eventRepository.listCanonicalFiltered({
+      runId: id,
+      afterSeq: query.afterSeq,
+      afterTs: query.afterTs,
+      beforeTs: query.beforeTs,
+      types: query.type ? query.type.split(',').map((t) => t.trim()).filter(Boolean) : undefined,
+      limit: query.limit ?? 200,
+    });
+    const limit = query.limit ?? 200;
+    const nextCursor = data.length > 0 ? data[data.length - 1].seq : undefined;
+    return { data, total, limit, nextCursor };
   }
 
   @Sse(':id/stream')

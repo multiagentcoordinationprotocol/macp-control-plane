@@ -88,18 +88,80 @@ Fetch the projected run state for UI rendering. Returns:
   "run": { "runId", "status", "modeName", "runtimeSessionId", "startedAt", "endedAt" },
   "participants": [{ "participantId", "role", "status", "latestSummary" }],
   "graph": { "nodes": [...], "edges": [...] },
-  "decision": { "current": { "action", "confidence", "finalized", "proposalId", "outcomePositive" } },
-  "signals": { "signals": [{ "id", "name", "severity", "sourceParticipantId", "confidence" }] },
+  "decision": { "current": { "action", "confidence", "finalized", "proposalId", "outcomePositive", "prompt", "resolvedAt", "resolvedBy", "proposals": [...] } },
+  "signals": { "signals": [{ "id", "name", "severity", "sourceParticipantId", "confidence", "payload", "acknowledgedAt", "acknowledgedBy" }] },
   "progress": { "entries": [{ "participantId", "percentage", "message" }] },
   "timeline": { "latestSeq", "totalEvents", "recent": [...] },
   "trace": { "traceId", "spanCount", "linkedArtifacts" },
   "outboundMessages": { "total", "queued", "accepted", "rejected" },
-  "policy": { "policyVersion", "policyDescription", "resolvedAt", "commitmentEvaluations": [...] }
+  "policy": { "policyVersion", "policyDescription", "resolvedAt", "outcomePositive", "commitmentEvaluations": [...], "expectedCommitments": [...], "voteTally": [...], "quorumStatus": "pending|reached|failed" }
 }
 ```
 
+**Decision projection enrichments (§2.1 – §2.3):**
+
+- `decision.current.prompt` — scenario-supplied decision prompt, sourced from `ExecutionRequest.session.metadata.decisionPrompt` at run-creation time. Use this instead of reading prompt text from `reasons[]`.
+- `decision.current.proposals[]` — per-contributor breakdown built from `proposal.created` and `proposal.updated` events. Each entry: `{ participantId, action, confidence?, reasons[], ts, vote?: 'allow'|'deny', messageType? }`. Capped at 50 most-recent.
+- `decision.current.resolvedAt` / `resolvedBy` — populated from the `decision.finalized` event's `ts` and `sender`.
+
+**Policy projection enrichments (§2.4 – §2.5):**
+
+- `policy.expectedCommitments[]` — seeded from `ExecutionRequest.session.commitments` at `session.bound` time. Each entry: `{ id, title?, description?, requiredRoles?, policyRef? }`.
+- `policy.voteTally[]` — derived from vote-bearing `proposal.updated` events (Vote / Approve / Reject / Accept / Evaluation). Each entry: `{ commitmentId (≈ proposalId until finalized), allow, deny, threshold, quorum: { required, cast } }`. `required` is the count of `role === 'voter'` participants (fallback: total participants); `threshold` is the simple majority `ceil(required/2)`.
+- `policy.quorumStatus` — `pending` until a `policy.commitment.evaluated` with `decision === 'allow'` arrives (→ `reached`). On run terminal (`failed` / `cancelled`) with no `allow` evaluation, flips to `failed`.
+
+**Participant status values:** `idle` | `active` | `waiting` | `completed` | `failed` | `skipped`.
+
+On run terminal transition (`completed` / `failed` / `cancelled`), non-terminal participants are swept:
+- `completed` — participant emitted at least one canonical event during the run.
+- `skipped` — participant was declared but never emitted any event.
+- `failed` — on `run.failed` only, assigned to the **last-active** participant (by `latestActivityAt`).
+
+**Decision `outcomePositive` semantics:** `boolean | null | undefined`.
+- `boolean` — explicit outcome was emitted, or inferred from the action (`approve`/`accept`/`selected`/`completed` → `true`; `reject`/`declined`/`failed` → `false`).
+- `null` — decision is finalized but no outcome could be inferred (e.g. `step_up`).
+- `undefined` — decision has not resolved yet (run still in flight).
+
+**Signal entry fields:** each entry carries `payload` (the decoded signal payload), and once a matching `signal.acknowledged` event arrives, `acknowledgedAt` + `acknowledgedBy` are populated in place.
+
 ### `GET /runs/:id/events`
-List canonical events. Query: `afterSeq` (default 0), `limit` (default 200).
+List canonical events for a single run.
+
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `afterSeq` | int ≥ 0 | 0 | Return events with sequence strictly greater. |
+| `limit` | int ≥ 1 | 200 | Maximum entries returned. |
+| `afterTs` | ISO-8601 | — | Time lower bound (inclusive) (§4.2). |
+| `beforeTs` | ISO-8601 | — | Time upper bound (exclusive) (§4.2). |
+| `type` | csv | — | Comma-separated canonical event types (e.g. `signal.emitted,signal.acknowledged`) (§4.2). |
+
+**Response shape (backward-compatible):**
+- With only `afterSeq`/`limit` → returns a bare `CanonicalEvent[]` array (legacy shape retained).
+- With any of `afterTs`, `beforeTs`, or `type` → returns `{ data: CanonicalEvent[], total, limit, nextCursor? }`.
+
+### `GET /events` (§4.1)
+Cross-run canonical events with filters. Useful for the `/logs` and `/traces` UIs when aggregating across runs.
+
+| Param | Type | Notes |
+|-------|------|-------|
+| `runId` | uuid | Scope to a single run (equivalent to `/runs/:id/events`). |
+| `scenarioRef` | string | Match `run.sourceRef` exactly or `run.metadata.scenarioRef` via ILIKE. |
+| `type` | csv | Comma-separated canonical event types. |
+| `afterSeq` | int ≥ 0 | Sequence cursor. |
+| `afterTs` | ISO-8601 | Time lower bound (inclusive). |
+| `beforeTs` | ISO-8601 | Time upper bound (exclusive). |
+| `limit` | int ≥ 1 (default 500) | Maximum entries returned. |
+
+Response: `{ data: CanonicalEvent[], total, limit, nextCursor? }`. `nextCursor` is set to the last event's `seq` only when the page is full (`data.length === limit`), so consumers can pass it as `afterSeq` on the next page. Authorization matches the per-run events endpoint.
+
+### Stable `total` counts (§4.3)
+
+The following list endpoints return `{ data, total, limit, offset | nextCursor }`:
+
+- `GET /runs` — paginated by `limit` + `offset`, includes `total`.
+- `GET /audit` — paginated by `limit` + `offset`, includes `total`.
+- `GET /events` (§4.1) — cursor-based via `nextCursor` or offset-style via `limit`, includes `total`.
+- `GET /runs/:id/events` — bare array for the legacy fast-path, `{ data, total, limit, nextCursor }` when any filter is supplied.
 
 ### `POST /runs/:id/cancel`
 Cancel a running session. Body: `{ "reason": "optional" }`
@@ -243,9 +305,16 @@ Export full run bundle. Query: `includeCanonical` (default true), `includeRaw` (
 ### `GET /dashboard/overview`
 Single aggregated endpoint for the UI dashboard — KPIs, recent runs, runtime health, and chart data.
 
-| Param | Values | Default |
-|-------|--------|---------|
-| `range` | `24h`, `7d`, `30d` | `24h` |
+| Param | Values | Default | Notes |
+|-------|--------|---------|-------|
+| `window` | `1h`, `6h`, `24h`, `7d`, `30d` | `24h` | Preferred — drives all KPIs and chart series (§5.1). |
+| `range` | `24h`, `7d`, `30d` | — | Deprecated alias for `window`; retained for backward compatibility. |
+| `from` | ISO-8601 timestamp | — | Explicit start; overrides `window`. |
+| `to` | ISO-8601 timestamp | now | Explicit end when `from` is supplied. |
+| `scenarioRef` | string | — | Filter runs by `source_ref` (exact match) or `metadata.scenarioRef` (ILIKE). |
+| `environment` | string | — | Filter runs by `metadata.environment` (exact match). |
+
+Bucket granularity is chosen automatically — `minute` for windows ≤ 6h, `hour` for 24h, `day` for 7d/30d. When using `from`/`to`, the bucket is derived from the range (≤ 6h → minute; ≤ 48h → hour; otherwise day).
 
 Returns:
 ```json
@@ -259,15 +328,34 @@ Returns:
   ],
   "runtimeHealth": { "ok": true, "runtimeKind": "rust", "detail?": "..." },
   "charts": {
-    "runVolume": { "labels": [...], "data": [...] },
-    "latency": { "labels": [...], "data": [...] },
-    "signalVolume": { "labels": [...], "data": [...] },
-    "errorClasses": { "labels": [...], "data": [...] }
+    "runVolume":       { "labels": [...], "data": [...] },
+    "latency":         { "labels": [...], "data": [...] },
+    "signalVolume":    { "labels": [...], "data": [...] },
+    "errorClasses":    { "labels": [...], "data": [...] },
+    "throughput":      { "labels": [...], "data": [...] },
+    "queueDepth":      { "labels": [...], "data": [...] },
+    "latencyP50":      { "labels": [...], "data": [...] },
+    "latencyP95":      { "labels": [...], "data": [...] },
+    "latencyP99":      { "labels": [...], "data": [...] },
+    "cost":            { "labels": [...], "data": [...] },
+    "successRate":     { "labels": [...], "data": [...] },
+    "decisionOutcome": { "labels": [...], "data": [...] },
+    "perScenario":     { "labels": [...], "data": [...] }
   }
 }
 ```
 
-The `recentRuns` array contains up to 10 latest non-archived runs. The `runtimeHealth` reflects the current runtime connection status. `totalTokens` and `totalCostUsd` are aggregated from `run_metrics` for runs in the time range. Packs data should be fetched separately from the Examples Service.
+Chart series semantics (§5.2):
+
+- **throughput** — completed runs per bucket (runs/min or runs/hour depending on window).
+- **queueDepth** — runs created per bucket still in a non-terminal status (`queued`/`starting`/`binding_session`) as of query time.
+- **latencyP50 / P95 / P99** — run duration percentiles in milliseconds, computed per bucket from `runs.ended_at - runs.started_at` for `status = 'completed'`.
+- **cost** — sum of `estimated_cost_usd` per bucket (from `run_metrics`).
+- **successRate** — `completed / (completed + failed + cancelled)` per bucket, expressed as 0–100.
+- **decisionOutcome** — net outcome per bucket (`positive - negative`) derived from `decision.finalized` events' `outcome_positive` field.
+- **perScenario** — top-10 scenarios by run volume within the window.
+
+The `recentRuns` array contains up to 10 latest non-archived runs matching the active filters. The `runtimeHealth` reflects the current runtime connection status. `totalTokens` and `totalCostUsd` are aggregated from `run_metrics` for runs in the time range. Pack metadata should be fetched separately from the Examples Service.
 
 ### `GET /dashboard/agents/metrics`
 Aggregated per-agent metrics derived from canonical events.
@@ -290,7 +378,28 @@ Returns:
 ## Observability
 
 ### `GET /runs/:id/traces`
-Trace summary: `{ "traceId", "spanCount", "lastSpanId", "linkedArtifacts" }`
+Trace summary with run context: `{ "traceId", "spanCount", "lastSpanId", "linkedArtifacts", "runStatus", "scenarioRef" }`.
+
+- `runStatus` — current status of the run (`queued` | `starting` | `binding_session` | `running` | `completed` | `failed` | `cancelled`).
+- `scenarioRef` — the scenario reference the run was launched from (e.g. `fraud-detection@1.2.0`), or `undefined` if the run was not launched from a scenario.
+
+### Control-plane trace enrichment (§6, Wave 5)
+
+The control plane instruments its critical paths with OpenTelemetry spans parented to a single `run.lifecycle` span. Exporter config via `OTEL_ENABLED` + `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
+Parent: `run.lifecycle` (started in `RunManager.createRun`, ended in `markCompleted`/`markFailed`/`markCancelled`).
+
+Child spans emitted by the control plane:
+- `runtime.send_message` — outbound session-bound message (`RunExecutor.sendMessage`); attributes: `macp.message_type`, `macp.sender`.
+- `stream.handle_raw_event` — each raw event pulled from the runtime stream; attributes: `macp.raw_kind`, `macp.message_type`, `macp.session_id`.
+- `run-event.persist` — transactional raw + canonical event persistence with projection update; attribute: `macp.event_count`, `macp.raw_kind`.
+- `run-event.emit` — transactional emission of control-plane-synthesized events; attribute: `macp.event_count`.
+
+Span annotations (`addEvent`) are attached to the run span for key canonical events: `signal.emitted`, `signal.acknowledged`, `policy.denied`, `decision.finalized`. These appear inline on the waterfall without requiring new span instrumentation.
+
+**gRPC traceparent propagation.** All calls to the Rust runtime carry W3C `traceparent` + `tracestate` headers via gRPC metadata, so spans emitted by the runtime or downstream agents will become children of the active control-plane span when their tracers honour the context.
+
+**Canonical event trace context.** `CanonicalEvent.trace.traceId` / `spanId` are stamped from the active run span when events are emitted by the control plane (and back-filled for runtime-emitted events that don't carry their own trace context). This ties the event stream to the waterfall even when upstream exporters aren't fully wired.
 
 ### `GET /runs/:id/artifacts`
 List artifacts (trace bundles, reports, logs).
@@ -473,6 +582,29 @@ List audit log entries. Query: `actor`, `action`, `resource`, `resourceId`, `cre
 ### `POST /admin/circuit-breaker/reset`
 Manually reset the runtime circuit breaker.
 
+### `GET /admin/circuit-breaker/history`
+Returns the circuit breaker state transition log (§5.3). Up to 200 most-recent entries are retained in-memory per process.
+
+| Param | Values | Default | Notes |
+|-------|--------|---------|-------|
+| `window` | `1h`, `6h`, `24h`, `7d` | — | Named convenience cutoff. |
+| `since` | ISO-8601 | — | Explicit cutoff; overrides `window`. |
+
+Response:
+```json
+{
+  "state": "CLOSED" | "OPEN" | "HALF_OPEN",
+  "history": [
+    { "state": "CLOSED", "enteredAt": "2026-04-13T00:00:00Z", "reason": "initial" },
+    { "state": "OPEN",   "enteredAt": "2026-04-13T01:23:45Z", "reason": "5 consecutive failures" },
+    { "state": "HALF_OPEN", "enteredAt": "2026-04-13T01:24:15Z", "reason": "reset timeout after 30000ms" },
+    { "state": "CLOSED", "enteredAt": "2026-04-13T01:24:17Z", "reason": "half-open probe succeeded" }
+  ]
+}
+```
+
+Notes: history is in-memory and resets on process restart. For persistent observability, scrape Prometheus `circuit_breaker_state` + `macp_circuit_breaker_{success,failures}_total`.
+
 ---
 
 ## Health (Public, no auth)
@@ -490,6 +622,8 @@ Prometheus metrics (text format).
 
 ## Canonical Event Types
 
+Canonical event types are exported as `CANONICAL_EVENT_TYPES` from `src/contracts/control-plane.ts`. Consumers should import that constant rather than string-matching.
+
 | Type | Description |
 |------|-------------|
 | `run.created` | Run record created |
@@ -505,9 +639,11 @@ Prometheus metrics (text format).
 | `message.received` | Inbound message from runtime |
 | `message.send_failed` | Message delivery failed |
 | `signal.emitted` | Ambient signal broadcast |
-| `proposal.created` | Proposal/request submitted |
-| `proposal.updated` | Evaluation/vote/counter received |
-| `decision.finalized` | Commitment issued |
+| `signal.acknowledged` | Signal ack — annotates matching `signal.emitted` entry with `acknowledgedAt` / `acknowledgedBy` |
+| `proposal.created` | New proposal/request submitted (Proposal, CounterProposal, ApprovalRequest, TaskRequest, HandoffOffer) |
+| `proposal.updated` | Evaluation/vote/counter received (Evaluation, Vote, Accept, Reject, Withdraw, Approve, Abstain, TaskAccept, etc.) |
+| `decision.proposed` | Decision candidate proposed (reserved; not currently emitted by the default normalizer) |
+| `decision.finalized` | Commitment issued — decision is binding and resolved |
 | `progress.reported` | Task progress update |
 | `tool.called` | Tool invocation |
 | `tool.completed` | Tool result |
@@ -515,6 +651,181 @@ Prometheus metrics (text format).
 | `policy.resolved` | Policy resolved at session start |
 | `policy.commitment.evaluated` | Commitment evaluated against policy rules |
 | `policy.denied` | Commitment rejected by policy (includes reasons) |
+| `llm.call.completed` | Synthesized by the control plane when an agent message carries LLM metadata (§3.3) |
+
+### Decision Lifecycle — event payload shapes (§3.2)
+
+**Note on naming.** The MACP specification uses terms like *submit / accept / reject* to describe proposal transitions, but the control-plane collapses these to two canonical types on the normalized event stream: `proposal.created` (first time a proposal is seen) and `proposal.updated` (any subsequent contribution — evaluation, vote, counter-proposal, acceptance, rejection, withdrawal). The raw runtime message type is preserved in `data.messageType` so consumers can discriminate.
+
+**`proposal.created`** — subject `{ kind: "proposal", id: <proposalId | messageId> }`
+```json
+{
+  "modeName": "macp.mode.decision.v1",
+  "messageType": "Proposal",
+  "messageId": "<uuid>",
+  "sessionId": "<uuid>",
+  "sender": "<participantId>",
+  "decodedPayload": {
+    "proposalId": "prop-1",
+    "option": "<string>",
+    "rationale": "<string>",
+    "confidence": 0.9
+  },
+  "payloadTypeName": "macp.modes.decision.v1.ProposalPayload"
+}
+```
+
+**`proposal.updated`** — subject `{ kind: "proposal", id: <proposalId | messageId> }`
+
+Same envelope as `proposal.created`. `messageType` (e.g. `Evaluation`, `Vote`, `CounterProposal`, `Accept`, `Reject`) and `decodedPayload` discriminate the contribution. Typical `decodedPayload` fields by contribution type:
+- `Evaluation` → `{ proposalId, recommendation: "APPROVE"|"REVIEW"|"BLOCK"|"REJECT", confidence, reason }`
+- `Vote` → `{ proposalId, vote: "APPROVE"|"REJECT"|"ABSTAIN", reason }` (ABSTAIN votes are excluded from voting ratio denominators per RFC-MACP-0004)
+- `Objection` → `{ proposalId, severity: "critical"|"high"|"medium"|"low", reason }` (only `critical` counts toward veto)
+- `CounterProposal` → `{ proposalId, revisedAction, rationale }`
+
+**`decision.finalized`** — subject `{ kind: "decision", id: <commitmentId | messageId> }`
+```json
+{
+  "modeName": "macp.mode.decision.v1",
+  "messageType": "Commitment",
+  "messageId": "<uuid>",
+  "sessionId": "<uuid>",
+  "sender": "<participantId>",
+  "decodedPayload": {
+    "proposalId": "prop-1",
+    "commitmentId": "commit-1",
+    "action": "approve",
+    "confidence": 1.0,
+    "reason": "Consensus reached",
+    "outcome_positive": true
+  },
+  "payloadTypeName": "macp.modes.decision.v1.CommitmentPayload"
+}
+```
+
+The projection layer folds `decision.finalized` into `decision.current` with `{ action, confidence, reasons, finalized: true, proposalId, outcomePositive }`. `outcomePositive` resolution is documented above under `GET /runs/:id/state`.
+
+### LLM Interaction Contract (§3.3 + §8)
+
+**`llm.call.completed`** — subject `{ kind: "message", id: <messageId> }`
+
+The control plane synthesizes this event when an agent message carries LLM usage metadata. No Runtime / agent-SDK change is required to start emitting it — the control plane extracts from the same conventions used by the metrics pipeline.
+
+**Where agents put it (any of these, checked in order):**
+1. `payload.llmCall` — preferred, full-fidelity form.
+2. `payload.metadata.llmCall` — same schema, on the message metadata channel.
+3. `payload.tokenUsage` — minimal form (counts + model only).
+4. `payload.metadata.tokenUsage` — minimal form on metadata.
+
+**Recognized fields** (all optional; camelCase or snake_case accepted):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `promptTokens` / `prompt_tokens` | int | Input tokens. |
+| `completionTokens` / `completion_tokens` | int | Output tokens. |
+| `model` | string | Model identifier, e.g. `gpt-4o-mini`, `claude-3-haiku`. |
+| `latencyMs` / `latency_ms` | int | Wall-clock call latency. |
+| `provider` | string | `openai`, `anthropic`, etc. |
+| `prompt` | any | The prompt content (subject to redaction). |
+| `response` | any | The response content (subject to redaction). |
+| `estimatedCostUsd` | float | If the agent pre-computed it; otherwise the CP will continue to use `MODEL_COSTS`. |
+| `artifactId` | uuid | If the agent pre-pinned the prompt/response as an artifact. |
+
+**Emitted event `data.decodedPayload` shape:**
+```json
+{
+  "model": "gpt-4o-mini",
+  "promptTokens": 120,
+  "completionTokens": 45,
+  "totalTokens": 165,
+  "latencyMs": 890,
+  "provider": "openai",
+  "prompt": "...",
+  "response": "..."
+}
+```
+
+**Projection surface** — `RunStateProjection.llm`:
+```json
+{
+  "calls": [
+    { "participantId", "model", "promptTokens", "completionTokens", "totalTokens", "latencyMs?", "ts", "messageId?", "artifactId?", "estimatedCostUsd?" }
+  ],
+  "totals": {
+    "callCount", "promptTokens", "completionTokens", "totalTokens", "estimatedCostUsd"
+  }
+}
+```
+
+Calls are capped at the most recent 100. Totals continue to accumulate across the full run.
+
+**Privacy / redaction (§8.3).** Set `MACP_REDACT_PATTERNS` to a comma-separated list of JavaScript regexes; matches in any string field of the decoded LLM payload (including `prompt` / `response`) are replaced with `[REDACTED]` before the event is persisted or broadcast on SSE. Default: off. Example:
+```
+MACP_REDACT_PATTERNS='sk-[A-Za-z0-9]+,\\b\\d{3}-\\d{2}-\\d{4}\\b'
+```
+(API keys, SSNs). Invalid patterns are logged and skipped; the rest continue to apply.
+
+### Policy Lifecycle — event payload shapes (§3.1)
+
+Policy events are emitted by the runtime on the stream and/or synthesized by the control-plane when a send-ack carries `POLICY_DENIED`.
+
+**`policy.resolved`** — subject `{ kind: "policy", id: <policyId | policyVersion> }`
+
+Emitted when the runtime sends a `PolicyResolved` message at session binding time.
+```json
+{
+  "modeName": "<mode>",
+  "messageType": "PolicyResolved",
+  "sender": "<runtime agent id>",
+  "policyVersion": "policy.fraud.majority",
+  "decodedPayload": {
+    "policyVersion": "policy.fraud.majority",
+    "policyId": "policy.fraud.majority",
+    "description": "Majority veto policy",
+    "resolvedAt": "2026-04-12T00:00:00Z"
+  }
+}
+```
+
+**`policy.commitment.evaluated`** — subject `{ kind: "policy", id: <commitmentId> }`
+
+Emitted for each commitment the runtime evaluates against the active policy.
+```json
+{
+  "modeName": "<mode>",
+  "messageType": "PolicyCommitmentEvaluated",
+  "sender": "<runtime agent id>",
+  "decodedPayload": {
+    "commitmentId": "commit-1",
+    "decision": "allow",
+    "reasons": ["quorum met", "no blocking objections"]
+  }
+}
+```
+
+`decision` is always `"allow"` or `"deny"`. The projection accumulates these in `policy.commitmentEvaluations[]` (capped at the most recent 50).
+
+**`policy.denied`** — subject `{ kind: "policy", id: <commitmentId | messageId> }`
+
+Emitted in two cases:
+1. The runtime sends a `PolicyDenied` stream message.
+2. A send-ack (`POST /runs/:id/messages`) returns `error.code = "POLICY_DENIED"`. The control-plane synthesizes the event so deny reasons are visible on the event stream even if the runtime doesn't echo them back.
+
+```json
+{
+  "modeName": "<mode>",
+  "messageType": "PolicyDenied",
+  "sender": "<runtime agent id | undefined>",
+  "errorCode": "POLICY_DENIED",
+  "errorMessage": "<human-readable>",
+  "decodedPayload": {
+    "decision": "deny",
+    "reasons": ["commitment outside policy", "..."]
+  }
+}
+```
+
+Reasons are extracted from `error.reasons` when available, otherwise from the `macp-error-details-bin` binary metadata, falling back to the error message. See CLAUDE.md § Policy event pipeline for the full extraction order.
 
 ---
 

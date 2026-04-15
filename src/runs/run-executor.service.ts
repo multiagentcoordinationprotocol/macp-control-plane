@@ -119,12 +119,19 @@ export class RunExecutorService {
     const provider = this.runtimeRegistry.get(run.runtimeKind);
     const session = await this.runtimeSessionRepository.findByRunId(runId);
     const requesterId = session?.initiatorParticipantId ?? undefined;
-    await provider.cancelSession({
-      runId,
-      runtimeSessionId: run.runtimeSessionId,
-      reason,
-      requesterId
-    });
+    try {
+      await provider.cancelSession({
+        runId,
+        runtimeSessionId: run.runtimeSessionId,
+        reason,
+        requesterId
+      });
+    } catch (cancelError) {
+      // Session may have already expired on the runtime — proceed with local cancellation
+      this.logger.warn(
+        `cancelSession failed for run ${runId} (proceeding with local cancel): ${cancelError instanceof Error ? cancelError.message : String(cancelError)}`
+      );
+    }
     const cancelled = await this.runManager.markCancelled(runId);
     await this.streamConsumer.stop(runId);
     this.streamHub.complete(runId);
@@ -132,6 +139,15 @@ export class RunExecutorService {
   }
 
   async sendMessage(runId: string, params: RunMessageInput) {
+    return this.traceService.withRunSpan(
+      runId,
+      'runtime.send_message',
+      { 'macp.message_type': params.messageType, 'macp.sender': params.from },
+      () => this.sendMessageInner(runId, params)
+    );
+  }
+
+  private async sendMessageInner(runId: string, params: RunMessageInput) {
     const run = await this.runManager.getRun(runId);
     if (!run.runtimeSessionId || !['binding_session', 'running'].includes(run.status)) {
       throw new BadRequestException('run is not ready to accept session-bound messages');
@@ -145,9 +161,22 @@ export class RunExecutorService {
     }
 
     const provider = this.runtimeRegistry.get(run.runtimeKind);
-    const payload = params.payloadEnvelope
-      ? this.protoRegistry.encodePayloadEnvelope(params.payloadEnvelope)
-      : Buffer.from(JSON.stringify(params.payload ?? {}), 'utf8');
+    let payload: Buffer;
+    if (params.payloadEnvelope) {
+      payload = this.protoRegistry.encodePayloadEnvelope(params.payloadEnvelope);
+    } else {
+      // Try to auto-encode plain JSON payload as proto using the known type for this mode+messageType
+      const knownType = this.protoRegistry.getKnownTypeName(modeName, params.messageType);
+      if (knownType && params.payload) {
+        payload = this.protoRegistry.encodeMessage(knownType, params.payload as Record<string, unknown>);
+      } else {
+        payload = Buffer.from(JSON.stringify(params.payload ?? {}), 'utf8');
+      }
+    }
+
+    this.logger.log(
+      `sendMessage debug: type=${params.messageType} mode=${modeName} payloadLen=${payload.length} payloadHex=${payload.toString('hex').slice(0, 80)} sessionId=${run.runtimeSessionId}`
+    );
 
     const sendResult = await provider.send({
       runId,
@@ -397,46 +426,35 @@ export class RunExecutorService {
 
       await this.runManager.bindSession(runId, request, session, initResult.capabilities as unknown as Record<string, unknown>);
 
-      // Send kickoff messages through the bidirectional stream
+      // Send kickoff messages via unary Send RPC (more reliable than bidi stream)
       for (const message of request.kickoff ?? []) {
         try {
           const payload = message.payloadEnvelope
             ? this.protoRegistry.encodePayloadEnvelope(message.payloadEnvelope)
             : Buffer.from(JSON.stringify(message.payload ?? {}), 'utf8');
 
-          const kickoffEnvelope = {
-            macpVersion: '1.0',
-            mode: request.session.modeName,
-            messageType: message.messageType,
-            messageId: randomUUID(),
-            sessionId: session.runtimeSessionId,
-            sender: message.from,
-            timestampUnixMs: Date.now(),
-            payload
-          };
-
-          // Retry kickoff send through the stream handle
-          await this.retryKickoff(async () => {
-            handle.send(kickoffEnvelope);
-            return {
-              ack: {
-                ok: true,
-                duplicate: false,
-                messageId: kickoffEnvelope.messageId,
-                sessionId: session.runtimeSessionId,
-                acceptedAtUnixMs: Date.now(),
-                sessionState: 'SESSION_STATE_OPEN' as const
-              },
-              envelope: kickoffEnvelope
-            };
+          const sendResult = await this.retryKickoff(async () => {
+            return provider.send({
+              runId,
+              runtimeSessionId: session.runtimeSessionId,
+              modeName: request.session.modeName,
+              from: message.from,
+              to: message.to ?? [],
+              messageType: message.messageType,
+              payload,
+              payloadDescriptor: (message.payloadEnvelope as unknown as Record<string, unknown>) ?? message.payload ?? {},
+              metadata: { kickoff: true }
+            });
           });
+
+          const kickoffMessageId = sendResult.envelope?.messageId ?? randomUUID();
 
           await this.eventService.emitControlPlaneEvents(runId, [
             {
               ts: new Date().toISOString(),
               type: 'message.sent',
               source: { kind: 'control-plane', name: 'run-executor' },
-              subject: { kind: 'message', id: kickoffEnvelope.messageId },
+              subject: { kind: 'message', id: kickoffMessageId },
               data: {
                 sessionId: session.runtimeSessionId,
                 sender: message.from,
@@ -444,12 +462,12 @@ export class RunExecutorService {
                 messageType: message.messageType,
                 kind: message.kind,
                 ack: {
-                  ok: true,
-                  duplicate: false,
-                  messageId: kickoffEnvelope.messageId,
+                  ok: sendResult.ack.ok,
+                  duplicate: sendResult.ack.duplicate,
+                  messageId: kickoffMessageId,
                   sessionId: session.runtimeSessionId,
-                  acceptedAtUnixMs: Date.now(),
-                  sessionState: 'SESSION_STATE_OPEN'
+                  acceptedAtUnixMs: sendResult.ack.acceptedAtUnixMs ?? Date.now(),
+                  sessionState: sendResult.ack.sessionState ?? 'SESSION_STATE_OPEN'
                 },
                 payloadDescriptor: (message.payloadEnvelope as unknown as Record<string, unknown>) ?? message.payload ?? {}
               }

@@ -6,6 +6,7 @@ import { EventNormalizerService } from '../events/event-normalizer.service';
 import { RunEventService } from '../events/run-event.service';
 import { StreamHubService } from '../events/stream-hub.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
+import { TraceService } from '../telemetry/trace.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
 import { RunManagerService } from './run-manager.service';
@@ -31,7 +32,8 @@ export class StreamConsumerService implements OnModuleDestroy {
     private readonly runManager: RunManagerService,
     private readonly streamHub: StreamHubService,
     private readonly config: AppConfigService,
-    private readonly instrumentation: InstrumentationService
+    private readonly instrumentation: InstrumentationService,
+    private readonly traceService: TraceService
   ) {}
 
   async onModuleDestroy(): Promise<void> {
@@ -230,6 +232,25 @@ export class StreamConsumerService implements OnModuleDestroy {
   }
 
   private async handleRawEvent(
+    runId: string,
+    raw: RawRuntimeEvent,
+    context: Parameters<EventNormalizerService['normalize']>[2],
+    runtimeSessionId: string,
+    marker: ActiveStream
+  ) {
+    return this.traceService.withRunSpan(
+      runId,
+      'stream.handle_raw_event',
+      {
+        'macp.raw_kind': raw.kind,
+        'macp.message_type': raw.envelope?.messageType,
+        'macp.session_id': runtimeSessionId
+      },
+      () => this.handleRawEventInner(runId, raw, context, runtimeSessionId, marker)
+    );
+  }
+
+  private async handleRawEventInner(
     runId: string,
     raw: RawRuntimeEvent,
     context: Parameters<EventNormalizerService['normalize']>[2],

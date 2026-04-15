@@ -66,7 +66,7 @@ describe('DashboardService', () => {
     });
 
     it('returns complete overview structure with kpis, recentRuns, runtimeHealth, charts', async () => {
-      const result = await service.getOverview('24h');
+      const result = await service.getOverview({ window: '24h' });
 
       expect(result).toHaveProperty('kpis');
       expect(result).toHaveProperty('recentRuns');
@@ -75,7 +75,7 @@ describe('DashboardService', () => {
     });
 
     it('returns KPIs including token and signal metrics', async () => {
-      const result = await service.getOverview('24h');
+      const result = await service.getOverview({ window: '24h' });
 
       expect(result.kpis.totalRuns).toBe(10);
       expect(result.kpis.activeRuns).toBe(2);
@@ -89,12 +89,12 @@ describe('DashboardService', () => {
     });
 
     it('rounds totalCostUsd to 2 decimal places', async () => {
-      const result = await service.getOverview('24h');
+      const result = await service.getOverview({ window: '24h' });
       expect(result.kpis.totalCostUsd).toBe(0.06);
     });
 
     it('returns chart data with labels and data arrays', async () => {
-      const result = await service.getOverview('24h');
+      const result = await service.getOverview({ window: '24h' });
 
       expect(result.charts.runVolume).toEqual({
         labels: ['2026-04-04T00:00:00Z'],
@@ -115,7 +115,7 @@ describe('DashboardService', () => {
     });
 
     it('returns recentRuns from repository', async () => {
-      const result = await service.getOverview('24h');
+      const result = await service.getOverview({ window: '24h' });
 
       expect(result.recentRuns).toHaveLength(1);
       expect(result.recentRuns[0]).toEqual({
@@ -130,7 +130,7 @@ describe('DashboardService', () => {
     });
 
     it('returns runtime health', async () => {
-      const result = await service.getOverview('24h');
+      const result = await service.getOverview({ window: '24h' });
 
       expect(result.runtimeHealth).toEqual({
         ok: true,
@@ -140,7 +140,7 @@ describe('DashboardService', () => {
     });
 
     it('uses 1 hour bucket for 24h range', async () => {
-      await service.getOverview('24h');
+      await service.getOverview({ window: '24h' });
       const execCalls = (mockDb.db.execute as jest.Mock).mock.calls;
       // runVolume query includes bucket parameter
       const runVolumeCall = execCalls[3]; // 4th call
@@ -148,7 +148,7 @@ describe('DashboardService', () => {
     });
 
     it('uses 1 day bucket for 7d range', async () => {
-      await service.getOverview('7d');
+      await service.getOverview({ window: '7d' });
       expect(mockDb.db.execute).toHaveBeenCalled();
     });
   });
@@ -171,7 +171,7 @@ describe('DashboardService', () => {
       mockRunRepo = makeMockRunRepo([]);
       service = new DashboardService(mockDb, mockRunRepo, mockRuntimeRegistry);
 
-      const result = await service.getOverview('24h');
+      const result = await service.getOverview({ window: '24h' });
 
       expect(result.kpis.totalRuns).toBe(0);
       expect(result.kpis.totalSignals).toBe(0);
@@ -184,7 +184,7 @@ describe('DashboardService', () => {
       mockRunRepo = makeMockRunRepo([]);
       service = new DashboardService(mockDb, mockRunRepo, mockRuntimeRegistry);
 
-      const result = await service.getOverview('24h');
+      const result = await service.getOverview({ window: '24h' });
 
       expect(result.charts.runVolume).toEqual({ labels: [], data: [] });
       expect(result.charts.signalVolume).toEqual({ labels: [], data: [] });
@@ -207,7 +207,7 @@ describe('DashboardService', () => {
     });
 
     it('defaults NULL values to 0', async () => {
-      const result = await service.getOverview('24h');
+      const result = await service.getOverview({ window: '24h' });
 
       expect(result.kpis.totalSignals).toBe(0);
       expect(result.kpis.totalTokens).toBe(0);
@@ -286,7 +286,7 @@ describe('DashboardService', () => {
         .mockResolvedValueOnce({ rows: [{}] })
         .mockResolvedValueOnce({ rows: [] });
 
-      const result = await service.getOverview('24h');
+      const result = await service.getOverview({ window: '24h' });
 
       expect(result.runtimeHealth.ok).toBe(true);
       expect(result.runtimeHealth.runtimeKind).toBe('rust');
@@ -310,7 +310,7 @@ describe('DashboardService', () => {
         .mockResolvedValueOnce({ rows: [{}] })
         .mockResolvedValueOnce({ rows: [] });
 
-      const result = await service.getOverview('24h');
+      const result = await service.getOverview({ window: '24h' });
 
       expect(result.runtimeHealth.ok).toBe(false);
       expect(result.runtimeHealth.runtimeKind).toBe('none');
@@ -335,7 +335,7 @@ describe('DashboardService', () => {
         .mockResolvedValueOnce({ rows: [{}] })
         .mockResolvedValueOnce({ rows: [] });
 
-      const result = await service.getOverview('24h');
+      const result = await service.getOverview({ window: '24h' });
 
       expect(result.runtimeHealth.ok).toBe(false);
       expect(result.runtimeHealth.detail).toBe('Runtime unreachable');

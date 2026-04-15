@@ -5,12 +5,14 @@ import { EventNormalizer, NormalizeContext, RawRuntimeEvent } from '../contracts
 import { PROJECTION_SCHEMA_VERSION } from '../projection/projection.service';
 import { ProtoRegistryService } from '../runtime/proto-registry.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
+import { RedactionService } from '../telemetry/redaction.service';
 
 @Injectable()
 export class EventNormalizerService implements EventNormalizer {
   constructor(
     private readonly protoRegistry: ProtoRegistryService,
-    private readonly instrumentation: InstrumentationService
+    private readonly instrumentation: InstrumentationService,
+    private readonly redaction: RedactionService
   ) {}
 
   normalize(runId: string, rawEvent: RawRuntimeEvent, ctx: NormalizeContext): CanonicalEvent[] {
@@ -180,6 +182,30 @@ export class EventNormalizerService implements EventNormalizer {
       )
     );
 
+    // Synthesize llm.call.completed (§3.3) from message metadata when the agent
+    // reports LLM usage. Applies redaction (§8.3) before emission.
+    const llm = extractLlmCall(decoded);
+    if (llm) {
+      const redacted = this.redaction.redact(llm);
+      canonical.push(
+        this.makeEvent(
+          runId,
+          ts,
+          'llm.call.completed',
+          { kind: 'message', id: envelope.messageId },
+          {
+            modeName: envelope.mode,
+            messageType: envelope.messageType,
+            messageId: envelope.messageId,
+            sessionId: envelope.sessionId,
+            sender: envelope.sender,
+            decodedPayload: redacted
+          },
+          envelope.messageType
+        )
+      );
+    }
+
     const derivedType = this.deriveEventType(envelope.messageType);
     if (derivedType) {
       canonical.push(
@@ -298,6 +324,7 @@ export class EventNormalizerService implements EventNormalizer {
 
   private deriveEventType(messageType: string): CanonicalEventType | null {
     if (messageType === 'Signal') return 'signal.emitted';
+    if (messageType === 'SignalAck' || messageType === 'SignalAcknowledged') return 'signal.acknowledged';
     if (messageType === 'Commitment') return 'decision.finalized';
 
     if (['Proposal', 'CounterProposal', 'ApprovalRequest', 'TaskRequest', 'HandoffOffer'].includes(messageType)) {
@@ -348,6 +375,10 @@ export class EventNormalizerService implements EventNormalizer {
     switch (type) {
       case 'signal.emitted':
         return { kind: 'signal', id: envelope.messageId };
+      case 'signal.acknowledged': {
+        const signalId = payload?.signalId ?? payload?.signal_id;
+        return { kind: 'signal', id: String(signalId ?? envelope.messageId) };
+      }
       case 'proposal.created':
       case 'proposal.updated': {
         const proposalId = payload?.proposalId ?? payload?.proposal_id ?? payload?.requestId ?? payload?.request_id;
@@ -393,4 +424,50 @@ export class EventNormalizerService implements EventNormalizer {
       data
     };
   }
+}
+
+/**
+ * Extract an LLM-call descriptor from a decoded message payload.
+ *
+ * Convention: agents attach `llmCall` or `tokenUsage` to message metadata.
+ * Recognized locations (mirrors metrics.service.ts extraction order):
+ *   - payload.llmCall
+ *   - payload.metadata.llmCall
+ *   - payload.tokenUsage (minimal form — no prompt/response, just counts)
+ *   - payload.metadata.tokenUsage
+ *
+ * Returns null when no LLM metadata is present. Prompt/response content is
+ * preserved when supplied (subject to redaction downstream) so the control
+ * plane can pin it as an artifact for inspection.
+ */
+function extractLlmCall(payload?: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!payload) return null;
+  const meta = payload.metadata as Record<string, unknown> | undefined;
+  const candidates: Array<Record<string, unknown> | undefined> = [
+    payload.llmCall as Record<string, unknown> | undefined,
+    meta?.llmCall as Record<string, unknown> | undefined,
+    // `tokenUsage` is the minimal form — upgrade it to an llmCall shape.
+    payload.tokenUsage as Record<string, unknown> | undefined,
+    meta?.tokenUsage as Record<string, unknown> | undefined,
+  ];
+  for (const c of candidates) {
+    if (!c || typeof c !== 'object') continue;
+    const promptTokens = Number(c.promptTokens ?? c.prompt_tokens ?? 0);
+    const completionTokens = Number(c.completionTokens ?? c.completion_tokens ?? 0);
+    if (!Number.isFinite(promptTokens) || !Number.isFinite(completionTokens)) continue;
+    if (promptTokens === 0 && completionTokens === 0 && !c.model && !c.prompt && !c.response) continue;
+    const out: Record<string, unknown> = {
+      promptTokens,
+      completionTokens,
+      totalTokens: promptTokens + completionTokens,
+    };
+    if (c.model) out.model = String(c.model);
+    if (c.latencyMs != null) out.latencyMs = Number(c.latencyMs);
+    else if (c.latency_ms != null) out.latencyMs = Number(c.latency_ms);
+    if (c.prompt != null) out.prompt = c.prompt;
+    if (c.response != null) out.response = c.response;
+    if (c.provider) out.provider = String(c.provider);
+    return out;
+  }
+  return null;
 }

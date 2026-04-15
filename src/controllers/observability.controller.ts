@@ -23,11 +23,16 @@ export class ObservabilityController {
   ) {}
 
   @Get('runs/:id/traces')
-  @ApiOperation({ summary: 'Fetch trace summary for a run.' })
+  @ApiOperation({ summary: 'Fetch trace summary for a run, including run status and scenario reference (§4.4).' })
   async getTraces(@Param('id', new ParseUUIDPipe()) id: string) {
-    await this.runManager.getRun(id);
+    const run = await this.runManager.getRun(id);
     const state = await this.projectionService.get(id);
-    return state?.trace ?? { spanCount: 0, linkedArtifacts: [] };
+    const trace = state?.trace ?? { spanCount: 0, linkedArtifacts: [] };
+    return {
+      ...trace,
+      runStatus: run.status,
+      scenarioRef: run.sourceRef ?? undefined
+    };
   }
 
   @Get('runs/:id/artifacts')

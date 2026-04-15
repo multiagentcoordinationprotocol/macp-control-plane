@@ -12,8 +12,9 @@ export class RuntimeCredentialResolverService implements RuntimeCredentialResolv
     participant?: { id: string; transportIdentity?: string };
     fallbackSender?: string;
   }): Promise<RuntimeCredentials> {
+    // Use participant ID as the sender — must be consistent between startSession and send
+    // so that session.initiator_sender matches later Commitment sender checks.
     const sender =
-      req.participant?.transportIdentity ??
       req.participant?.id ??
       req.requester?.actorId ??
       req.fallbackSender ??

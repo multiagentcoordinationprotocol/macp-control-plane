@@ -52,6 +52,14 @@ export interface RunMessageInput {
   metadata?: Record<string, unknown>;
 }
 
+export interface ExpectedCommitment {
+  id: string;
+  title?: string;
+  description?: string;
+  requiredRoles?: string[];
+  policyRef?: string;
+}
+
 export interface ExecutionRequest {
   mode: ExecutionMode;
   runtime: {
@@ -70,6 +78,7 @@ export interface ExecutionRequest {
     context?: Record<string, unknown>;
     contextEnvelope?: PayloadEnvelopeInput;
     metadata?: Record<string, unknown>;
+    commitments?: ExpectedCommitment[];
   };
   kickoff?: KickoffMessage[];
   execution?: {
@@ -113,31 +122,41 @@ export interface Run {
   metadata?: Record<string, unknown>;
 }
 
-export type CanonicalEventType =
-  | 'run.created'
-  | 'run.started'
-  | 'run.completed'
-  | 'run.failed'
-  | 'run.cancelled'
-  | 'session.bound'
-  | 'session.stream.opened'
-  | 'session.state.changed'
-  | 'participant.seen'
-  | 'message.sent'
-  | 'message.received'
-  | 'signal.emitted'
-  | 'proposal.created'
-  | 'proposal.updated'
-  | 'decision.proposed'
-  | 'decision.finalized'
-  | 'progress.reported'
-  | 'tool.called'
-  | 'tool.completed'
-  | 'artifact.created'
-  | 'message.send_failed'
-  | 'policy.resolved'
-  | 'policy.commitment.evaluated'
-  | 'policy.denied';
+/**
+ * Published set of canonical event types (v1). Consumers should import this
+ * constant rather than string-matching. Shape changes to the payloads of these
+ * events require a new version (e.g. `CANONICAL_EVENT_TYPES_V2`).
+ */
+export const CANONICAL_EVENT_TYPES = [
+  'run.created',
+  'run.started',
+  'run.completed',
+  'run.failed',
+  'run.cancelled',
+  'session.bound',
+  'session.stream.opened',
+  'session.state.changed',
+  'participant.seen',
+  'message.sent',
+  'message.received',
+  'message.send_failed',
+  'signal.emitted',
+  'signal.acknowledged',
+  'proposal.created',
+  'proposal.updated',
+  'decision.proposed',
+  'decision.finalized',
+  'progress.reported',
+  'tool.called',
+  'tool.completed',
+  'artifact.created',
+  'policy.resolved',
+  'policy.commitment.evaluated',
+  'policy.denied',
+  'llm.call.completed'
+] as const;
+
+export type CanonicalEventType = typeof CANONICAL_EVENT_TYPES[number];
 
 export interface CanonicalEvent {
   id: string;
@@ -197,7 +216,7 @@ export interface RunSummaryProjection {
 export interface ParticipantProjection {
   participantId: string;
   role?: string;
-  status: 'idle' | 'active' | 'waiting' | 'completed' | 'failed';
+  status: 'idle' | 'active' | 'waiting' | 'completed' | 'failed' | 'skipped';
   latestActivityAt?: string;
   latestSummary?: string;
 }
@@ -207,6 +226,16 @@ export interface GraphProjection {
   edges: Array<{ from: string; to: string; kind: string; ts: string }>;
 }
 
+export interface DecisionProposalContribution {
+  participantId: string;
+  action: string;
+  confidence?: number;
+  reasons: string[];
+  ts: string;
+  vote?: 'allow' | 'deny';
+  messageType?: string;
+}
+
 export interface DecisionProjection {
   current?: {
     action: string;
@@ -214,7 +243,11 @@ export interface DecisionProjection {
     reasons?: string[];
     finalized: boolean;
     proposalId?: string;
-    outcomePositive?: boolean;
+    outcomePositive?: boolean | null;
+    prompt?: string;
+    proposals?: DecisionProposalContribution[];
+    resolvedAt?: string;
+    resolvedBy?: string;
   };
 }
 
@@ -226,6 +259,9 @@ export interface SignalProjection {
     sourceParticipantId?: string;
     ts: string;
     confidence?: number;
+    payload?: Record<string, unknown>;
+    acknowledgedAt?: string;
+    acknowledgedBy?: string;
   }>;
 }
 
@@ -258,17 +294,52 @@ export interface OutboundMessageSummary {
   rejected: number;
 }
 
+export interface VoteTallyEntry {
+  commitmentId: string;
+  allow: number;
+  deny: number;
+  threshold: number;
+  quorum: { required: number; cast: number };
+}
+
 export interface PolicyProjection {
   policyVersion: string;
   policyDescription?: string;
   resolvedAt?: string;
-  outcomePositive?: boolean;
+  outcomePositive?: boolean | null;
   commitmentEvaluations: Array<{
     commitmentId: string;
     decision: 'allow' | 'deny';
     reasons: string[];
     ts: string;
   }>;
+  expectedCommitments?: ExpectedCommitment[];
+  voteTally?: VoteTallyEntry[];
+  quorumStatus?: 'pending' | 'reached' | 'failed';
+}
+
+export interface LlmCallEntry {
+  participantId: string;
+  model?: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  latencyMs?: number;
+  ts: string;
+  messageId?: string;
+  artifactId?: string;
+  estimatedCostUsd?: number;
+}
+
+export interface LlmProjection {
+  calls: LlmCallEntry[];
+  totals: {
+    callCount: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    estimatedCostUsd: number;
+  };
 }
 
 export interface RunStateProjection {
@@ -282,6 +353,7 @@ export interface RunStateProjection {
   trace: TraceSummary;
   outboundMessages: OutboundMessageSummary;
   policy: PolicyProjection;
+  llm: LlmProjection;
 }
 
 export interface ReplayRequest {

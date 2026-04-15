@@ -244,4 +244,84 @@ describe('TraceService', () => {
       expect(otelMocks.end).not.toHaveBeenCalled();
     });
   });
+
+  // ===========================================================================
+  // withRunSpan (§6a)
+  // ===========================================================================
+  describe('withRunSpan', () => {
+    it('creates child span parented to stored run span', async () => {
+      service.startRunTrace('run-x', {});
+      jest.clearAllMocks();
+      otelMocks.startSpan.mockReturnValue(makeSpan());
+      otelMocks.with.mockImplementation((_ctx: any, fn: any) => fn());
+
+      const result = await service.withRunSpan('run-x', 'child.op', { a: 1 }, async () => 'ok');
+
+      expect(result).toBe('ok');
+      expect(otelMocks.startSpan).toHaveBeenCalledWith('child.op', undefined, expect.any(Object));
+      expect(otelMocks.setAttribute).toHaveBeenCalledWith('run_id', 'run-x');
+      expect(otelMocks.setAttribute).toHaveBeenCalledWith('a', 1);
+      expect(otelMocks.end).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to withSpan when run span is unknown', async () => {
+      otelMocks.startSpan.mockReturnValue(makeSpan());
+
+      const result = await service.withRunSpan('run-missing', 'child.op', {}, async () => 'fallback');
+
+      expect(result).toBe('fallback');
+      expect(otelMocks.startSpan).toHaveBeenCalledWith('child.op');
+    });
+
+    it('records exception and rethrows on failure', async () => {
+      service.startRunTrace('run-err', {});
+      jest.clearAllMocks();
+      otelMocks.startSpan.mockReturnValue(makeSpan());
+      otelMocks.with.mockImplementation((_ctx: any, fn: any) => fn());
+
+      const boom = new Error('boom');
+      await expect(
+        service.withRunSpan('run-err', 'child.fail', {}, async () => { throw boom; })
+      ).rejects.toBe(boom);
+
+      expect(otelMocks.recordException).toHaveBeenCalledWith(boom);
+      expect(otelMocks.setStatus).toHaveBeenCalledWith({ code: SpanStatusCode.ERROR, message: 'boom' });
+      expect(otelMocks.end).toHaveBeenCalled();
+    });
+  });
+
+  // ===========================================================================
+  // addRunSpanEvent + getRunTraceContext (§6c, §6d)
+  // ===========================================================================
+  describe('addRunSpanEvent', () => {
+    it('adds span event to stored run span', () => {
+      const addEvent = jest.fn();
+      otelMocks.startSpan.mockReturnValueOnce({
+        ...makeSpan(),
+        addEvent,
+      } as any);
+
+      service.startRunTrace('run-e', {});
+      service.addRunSpanEvent('run-e', 'signal.emitted', { name: 'anomaly', seq: 3, skip: undefined });
+
+      expect(addEvent).toHaveBeenCalledWith('signal.emitted', { name: 'anomaly', seq: 3 });
+    });
+
+    it('no-ops if run span is unknown', () => {
+      expect(() => service.addRunSpanEvent('nope', 'x')).not.toThrow();
+    });
+  });
+
+  describe('getRunTraceContext', () => {
+    it('returns traceId + spanId for known run', () => {
+      otelMocks.spanContext.mockReturnValue({ traceId: 'trace-1', spanId: 'span-1' });
+      service.startRunTrace('run-ctx', {});
+      const ctx = service.getRunTraceContext('run-ctx');
+      expect(ctx).toEqual({ traceId: 'trace-1', spanId: 'span-1' });
+    });
+
+    it('returns undefined for unknown run', () => {
+      expect(service.getRunTraceContext('unknown')).toBeUndefined();
+    });
+  });
 });

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
   CanonicalEvent,
+  DecisionProposalContribution,
   GraphProjection,
   OutboundMessageSummary,
   ParticipantProjection,
@@ -38,7 +39,8 @@ export class ProjectionService {
       timeline: row.timeline as unknown as RunStateProjection['timeline'],
       trace: row.traceSummary as unknown as RunStateProjection['trace'],
       outboundMessages: (row as unknown as Record<string, unknown>).outboundMessages as OutboundMessageSummary ?? { total: 0, queued: 0, accepted: 0, rejected: 0 },
-      policy: (row as unknown as Record<string, unknown>).policy as RunStateProjection['policy'] ?? { policyVersion: '', commitmentEvaluations: [] }
+      policy: (row as unknown as Record<string, unknown>).policy as RunStateProjection['policy'] ?? { policyVersion: '', commitmentEvaluations: [] },
+      llm: (row as unknown as Record<string, unknown>).llm as RunStateProjection['llm'] ?? { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } }
     };
   }
 
@@ -94,14 +96,43 @@ export class ProjectionService {
             traceId: (event.data.traceId as string | undefined) ?? next.run.traceId,
             modeName: (event.data.modeName as string | undefined) ?? next.run.modeName
           };
+          if (event.type === 'run.created' && typeof event.data.decisionPrompt === 'string') {
+            next.decision.current = {
+              ...(next.decision.current ?? { action: '', finalized: false }),
+              prompt: event.data.decisionPrompt
+            };
+          }
+          if (event.type === 'run.completed') this.sweepTerminal(next, 'completed');
+          if (event.type === 'run.cancelled') this.sweepTerminal(next, 'cancelled');
+          if (event.type === 'run.failed') this.sweepTerminal(next, 'failed');
+
+          if (event.type === 'run.failed' || event.type === 'run.cancelled') {
+            // On terminal non-success, finalize quorum outcome if no allow evaluations were recorded
+            if (next.policy.quorumStatus === 'pending' || next.policy.quorumStatus === undefined) {
+              const hasAllow = next.policy.commitmentEvaluations.some((e) => e.decision === 'allow');
+              next.policy.quorumStatus = hasAllow ? 'reached' : 'failed';
+            }
+          }
           break;
         }
         case 'session.bound':
         case 'session.state.changed': {
           next.run.runtimeSessionId = (event.data.sessionId as string | undefined) ?? next.run.runtimeSessionId;
+          if (event.type === 'session.bound' && Array.isArray(event.data.expectedCommitments)) {
+            next.policy.expectedCommitments = event.data.expectedCommitments as RunStateProjection['policy']['expectedCommitments'];
+            if (next.policy.expectedCommitments && next.policy.expectedCommitments.length > 0) {
+              next.policy.quorumStatus = next.policy.quorumStatus ?? 'pending';
+            }
+          }
           if (typeof event.data.state === 'string') {
-            if (event.data.state === 'SESSION_STATE_RESOLVED') next.run.status = 'completed';
-            if (event.data.state === 'SESSION_STATE_EXPIRED') next.run.status = 'failed';
+            if (event.data.state === 'SESSION_STATE_RESOLVED') {
+              next.run.status = 'completed';
+              this.sweepTerminal(next, 'completed');
+            }
+            if (event.data.state === 'SESSION_STATE_EXPIRED') {
+              next.run.status = 'failed';
+              this.sweepTerminal(next, 'failed');
+            }
           }
           break;
         }
@@ -163,40 +194,85 @@ export class ProjectionService {
               severity: decodedPayload?.severity as string | undefined,
               sourceParticipantId: (event.data.sender as string | undefined) ?? undefined,
               ts: event.ts,
-              confidence: safeOptionalNumber(decodedPayload?.confidence)
+              confidence: safeOptionalNumber(decodedPayload?.confidence),
+              payload: decodedPayload
             }
           ].slice(-200);
+          break;
+        }
+        case 'signal.acknowledged': {
+          const ackPayload = event.data.decodedPayload as Record<string, unknown> | undefined;
+          const targetSignalId = String(
+            ackPayload?.signalId ??
+            ackPayload?.signal_id ??
+            event.subject?.id ??
+            ''
+          );
+          const acknowledger = (event.data.sender as string | undefined) ?? undefined;
+          if (targetSignalId) {
+            const signal = next.signals.signals.find((s) => s.id === targetSignalId);
+            if (signal) {
+              signal.acknowledgedAt = event.ts;
+              if (acknowledger) signal.acknowledgedBy = acknowledger;
+            }
+          }
           break;
         }
         case 'proposal.created':
         case 'proposal.updated': {
           const proposalPayload = event.data.decodedPayload as Record<string, unknown> | undefined;
+          const messageType = String(event.data.messageType ?? '');
+          const sender = String(event.data.sender ?? '');
+          const contribution: DecisionProposalContribution = {
+            participantId: sender,
+            action: inferContributionAction(messageType, proposalPayload),
+            confidence: safeOptionalNumber(proposalPayload?.confidence),
+            reasons: extractReasons(proposalPayload),
+            ts: event.ts,
+            vote: inferContributionVote(messageType, proposalPayload),
+            messageType: messageType || undefined
+          };
+          const existingProposals = next.decision.current?.proposals ?? [];
+          const proposalId = String(proposalPayload?.proposalId ?? proposalPayload?.requestId ?? event.subject?.id ?? '');
           next.decision.current = {
-            action: String(proposalPayload?.proposalId ?? proposalPayload?.requestId ?? event.subject?.id ?? 'proposal'),
+            ...(next.decision.current ?? { finalized: false }),
+            action: proposalId || String(event.subject?.id ?? 'proposal'),
             confidence: safeOptionalNumber(proposalPayload?.confidence) ?? next.decision.current?.confidence,
             reasons: [String(proposalPayload?.reason ?? proposalPayload?.summary ?? proposalPayload?.rationale ?? event.type)].filter(Boolean),
             finalized: false,
-            proposalId: String(proposalPayload?.proposalId ?? proposalPayload?.requestId ?? event.subject?.id ?? '')
+            proposalId,
+            proposals: [...existingProposals, contribution].slice(-50)
           };
+
+          // Update voteTally if this is a vote-bearing contribution
+          if (contribution.vote && proposalId) {
+            this.bumpVoteTally(next, proposalId, contribution.vote, sender);
+          }
           break;
         }
         case 'decision.finalized': {
           const payload = event.data.decodedPayload as Record<string, unknown> | undefined;
+          const action = String(payload?.action ?? 'resolved');
+          const explicitOutcome = payload?.outcomePositive ?? payload?.outcome_positive;
+          const outcomePositive: boolean | null =
+            explicitOutcome != null
+              ? Boolean(explicitOutcome)
+              : inferOutcomePositiveFromAction(action);
+          const sender = (event.data.sender as string | undefined) ?? undefined;
           next.decision.current = {
-            action: String(payload?.action ?? 'resolved'),
+            ...(next.decision.current ?? { finalized: false }),
+            action,
             confidence: safeOptionalNumber(payload?.confidence) ?? next.decision.current?.confidence,
             reasons: [String(payload?.reason ?? 'Commitment observed')],
             finalized: true,
             proposalId: String(payload?.commitmentId ?? next.decision.current?.proposalId ?? ''),
-            outcomePositive: payload?.outcomePositive != null
-              ? Boolean(payload.outcomePositive)
-              : payload?.outcome_positive != null
-                ? Boolean(payload.outcome_positive)
-                : true
+            outcomePositive,
+            resolvedAt: event.ts,
+            resolvedBy: sender
           };
           next.run.status = 'completed';
           // Propagate outcomePositive to policy projection
-          next.policy.outcomePositive = next.decision.current.outcomePositive;
+          next.policy.outcomePositive = outcomePositive;
           break;
         }
         case 'progress.reported': {
@@ -224,17 +300,54 @@ export class ProjectionService {
           next.policy.resolvedAt = event.ts;
           break;
         }
+        case 'llm.call.completed': {
+          const payload = event.data.decodedPayload as Record<string, unknown> | undefined;
+          if (!payload) break;
+          const prompt = safeOptionalNumber(payload.promptTokens) ?? 0;
+          const completion = safeOptionalNumber(payload.completionTokens) ?? 0;
+          const total = safeOptionalNumber(payload.totalTokens) ?? prompt + completion;
+          if (!next.llm) {
+            next.llm = { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } };
+          }
+          next.llm.calls = [
+            ...next.llm.calls,
+            {
+              participantId: String(event.data.sender ?? ''),
+              model: payload.model as string | undefined,
+              promptTokens: prompt,
+              completionTokens: completion,
+              totalTokens: total,
+              latencyMs: safeOptionalNumber(payload.latencyMs),
+              ts: event.ts,
+              messageId: event.data.messageId as string | undefined,
+              artifactId: payload.artifactId as string | undefined,
+              estimatedCostUsd: safeOptionalNumber(payload.estimatedCostUsd),
+            }
+          ].slice(-100);
+          next.llm.totals.callCount += 1;
+          next.llm.totals.promptTokens += prompt;
+          next.llm.totals.completionTokens += completion;
+          next.llm.totals.totalTokens += total;
+          if (payload.estimatedCostUsd != null) {
+            next.llm.totals.estimatedCostUsd += Number(payload.estimatedCostUsd) || 0;
+          }
+          break;
+        }
         case 'policy.commitment.evaluated': {
           const evalPayload = event.data.decodedPayload as Record<string, unknown> | undefined;
+          const decision = (evalPayload?.decision as 'allow' | 'deny') ?? 'allow';
           next.policy.commitmentEvaluations = [
             ...next.policy.commitmentEvaluations,
             {
               commitmentId: String(evalPayload?.commitmentId ?? event.subject?.id ?? ''),
-              decision: (evalPayload?.decision as 'allow' | 'deny') ?? 'allow',
+              decision,
               reasons: (evalPayload?.reasons as string[]) ?? [],
               ts: event.ts
             }
           ].slice(-50);
+          if (decision === 'allow') {
+            next.policy.quorumStatus = 'reached';
+          }
           break;
         }
         default:
@@ -268,8 +381,67 @@ export class ProjectionService {
       timeline: { latestSeq: 0, totalEvents: 0, recent: [] },
       trace: { spanCount: 0, linkedArtifacts: [] },
       outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
-      policy: { policyVersion: '', commitmentEvaluations: [] }
+      policy: { policyVersion: '', commitmentEvaluations: [] },
+      llm: { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } }
     };
+  }
+
+  private bumpVoteTally(projection: RunStateProjection, commitmentId: string, vote: 'allow' | 'deny', voterId: string) {
+    projection.policy.voteTally ??= [];
+    let entry = projection.policy.voteTally.find((e) => e.commitmentId === commitmentId);
+    if (!entry) {
+      entry = {
+        commitmentId,
+        allow: 0,
+        deny: 0,
+        threshold: 0,
+        quorum: { required: 0, cast: 0 }
+      };
+      projection.policy.voteTally.push(entry);
+    }
+    if (vote === 'allow') entry.allow += 1;
+    else entry.deny += 1;
+    entry.quorum.cast = entry.allow + entry.deny;
+
+    // Derive required: prefer voter-role participants, fallback to all participants
+    const voters = projection.participants.filter((p) => p.role === 'voter');
+    const required = voters.length > 0 ? voters.length : projection.participants.length;
+    entry.quorum.required = required;
+    entry.threshold = Math.ceil(required / 2);
+
+    // (bumping voterId is reserved for future vote-uniqueness tracking)
+    void voterId;
+
+    if (projection.policy.quorumStatus === undefined || projection.policy.quorumStatus === 'pending') {
+      projection.policy.quorumStatus = 'pending';
+    }
+  }
+
+  private sweepTerminal(projection: RunStateProjection, outcome: 'completed' | 'failed' | 'cancelled') {
+    const terminal = new Set(['completed', 'failed', 'skipped']);
+    const toSweep = projection.participants.filter((p) => !terminal.has(p.status));
+    if (toSweep.length === 0) return;
+
+    let lastActive: ParticipantProjection | undefined;
+    if (outcome === 'failed') {
+      const withActivity = toSweep.filter((p) => p.latestActivityAt);
+      if (withActivity.length > 0) {
+        lastActive = withActivity.reduce((a, b) =>
+          (a.latestActivityAt ?? '') > (b.latestActivityAt ?? '') ? a : b
+        );
+      }
+    }
+
+    for (const p of toSweep) {
+      const newStatus: ParticipantProjection['status'] = !p.latestActivityAt
+        ? 'skipped'
+        : outcome === 'failed' && p === lastActive
+          ? 'failed'
+          : 'completed';
+      p.status = newStatus;
+      const node = projection.graph.nodes.find((n) => n.id === p.participantId);
+      if (node) node.status = newStatus;
+    }
   }
 
   private touchParticipant(
@@ -299,4 +471,47 @@ function safeOptionalNumber(val: unknown): number | undefined {
   if (val === undefined || val === null) return undefined;
   const n = Number(val);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function inferContributionAction(messageType: string, payload?: Record<string, unknown>): string {
+  // Per-messageType best-known action field, falling back to messageType itself.
+  const vote = payload?.vote ?? payload?.recommendation;
+  if (vote) return String(vote);
+  const action = payload?.action ?? payload?.option ?? payload?.revisedAction;
+  if (action) return String(action);
+  return messageType || 'contribution';
+}
+
+function inferContributionVote(messageType: string, payload?: Record<string, unknown>): 'allow' | 'deny' | undefined {
+  const raw = (payload?.vote ?? payload?.recommendation ?? '').toString().toUpperCase();
+  if (['APPROVE', 'ACCEPT', 'ALLOW', 'YES'].includes(raw)) return 'allow';
+  if (['REJECT', 'DENY', 'BLOCK', 'NO'].includes(raw)) return 'deny';
+  if (messageType === 'Accept' || messageType === 'Approve' || messageType === 'TaskAccept' || messageType === 'HandoffAccept') return 'allow';
+  if (messageType === 'Reject' || messageType === 'TaskReject' || messageType === 'HandoffDecline') return 'deny';
+  return undefined;
+}
+
+function extractReasons(payload?: Record<string, unknown>): string[] {
+  if (!payload) return [];
+  const reasons: string[] = [];
+  for (const field of ['reason', 'rationale', 'summary']) {
+    const value = payload[field];
+    if (typeof value === 'string' && value.length > 0) reasons.push(value);
+  }
+  const list = payload.reasons;
+  if (Array.isArray(list)) {
+    for (const entry of list) {
+      if (typeof entry === 'string' && entry.length > 0) reasons.push(entry);
+    }
+  }
+  return reasons;
+}
+
+// Explicit null (not undefined) means "resolved, no outcome reported" — distinct from "still running" (undefined).
+// Inference aligns with CommitmentPayload.outcome_positive convention documented in CLAUDE.md.
+function inferOutcomePositiveFromAction(action: string): boolean | null {
+  const a = action.toLowerCase();
+  if (['approve', 'approved', 'accept', 'accepted', 'selected', 'completed'].includes(a)) return true;
+  if (['reject', 'rejected', 'decline', 'declined', 'failed'].includes(a)) return false;
+  return null;
 }

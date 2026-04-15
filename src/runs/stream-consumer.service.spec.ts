@@ -63,6 +63,12 @@ describe('StreamConsumerService', () => {
       streamHub,
       config,
       { activeStreams: { inc: jest.fn(), dec: jest.fn() }, streamReconnectsTotal: { inc: jest.fn() } } as unknown as InstrumentationService,
+      {
+        withRunSpan: jest.fn(<T>(_runId: string, _name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
+        withSpan: jest.fn(<T>(_name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
+        addRunSpanEvent: jest.fn(),
+        getRunTraceContext: jest.fn().mockReturnValue(undefined),
+      } as any,
     );
   });
 
