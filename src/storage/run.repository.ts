@@ -21,6 +21,8 @@ export interface NewRunRecord {
   mode: string;
   runtimeKind: string;
   runtimeVersion?: string;
+  /** Pre-allocated sessionId — stored on the run record at creation so it's returned by POST /runs. */
+  runtimeSessionId?: string;
   idempotencyKey?: string;
   tags?: string[];
   sourceKind?: string;
@@ -42,6 +44,7 @@ export class RunRepository {
       mode: input.mode,
       runtimeKind: input.runtimeKind,
       runtimeVersion: input.runtimeVersion,
+      runtimeSessionId: input.runtimeSessionId,
       idempotencyKey: input.idempotencyKey,
       tags: input.tags ?? [],
       sourceKind: input.sourceKind,

@@ -5,6 +5,9 @@ export class CreateRunResponseDto {
   @ApiProperty()
   runId!: string;
 
+  @ApiProperty({ description: 'Control-plane-allocated (or echoed back) session id the initiator agent must open.' })
+  sessionId!: string;
+
   @ApiProperty({ enum: ['queued', 'starting', 'binding_session', 'running', 'completed', 'failed', 'cancelled'] })
   status!: RunStatus;
 

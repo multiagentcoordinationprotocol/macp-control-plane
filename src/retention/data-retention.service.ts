@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { and, inArray, lt, sql } from 'drizzle-orm';
+import { and, inArray, lt } from 'drizzle-orm';
 import { AppConfigService } from '../config/app-config.service';
 import { DatabaseService } from '../db/database.service';
 import { auditLog, runs, webhookDeliveries } from '../db/schema';

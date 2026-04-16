@@ -2,6 +2,7 @@ import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { decisionHappyScript } from '../fixtures/decision-mode';
 import { RuntimeProviderRegistry } from '../../src/runtime/runtime-provider.registry';
 import { testRuntimeKind } from '../helpers/runtime-kind';
+import { waitFor } from '../helpers/wait-for';
 
 const isRealRuntime =
   process.env.INTEGRATION_RUNTIME === 'docker' ||
@@ -27,13 +28,17 @@ describe('Policy Projection in Run State (integration)', () => {
         modeVersion: '1.0.0',
         configurationVersion: '1.0.0',
         ttlMs: 60000,
-        participants: [{ id: 'agent-a', role: 'proposer' }]
+        participants: [{ id: 'agent-a' }],
       }
     });
 
-    await sleep(1000);
-
-    const state = await ctx.client.getState(run.runId) as any;
+    const state = await waitFor(
+      async () => {
+        const s = (await ctx.client.getState(run.runId)) as any;
+        return s.policy ? s : null;
+      },
+      { timeoutMs: 3000, label: 'policy projection populated' },
+    );
 
     expect(state).toHaveProperty('policy');
     expect(state.policy).toHaveProperty('policyVersion');
@@ -105,6 +110,3 @@ describeProviderMethods('Policy Provider Methods (integration)', () => {
   });
 });
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}

@@ -2,33 +2,23 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
-import { context, propagation } from '@opentelemetry/api';
-import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import { AppConfigService } from '../config/app-config.service';
-import { ExecutionRequest, ParticipantRef } from '../contracts/control-plane';
 import {
   RawRuntimeEvent,
-  RuntimeAck,
   RuntimeCancelResult,
   RuntimeCancelSessionRequest,
-  RuntimeEnvelope,
   RuntimeGetSessionRequest,
   RuntimeHealth,
   RuntimeInitializeRequest,
   RuntimeInitializeResult,
   RuntimeManifestResult,
   RuntimeModeDescriptor,
-  RuntimeOpenSessionRequest,
   RuntimeProvider,
   RuntimeRootDescriptor,
-  RuntimeSendRequest,
-  RuntimeSendResult,
   RuntimeSessionHandle,
   RuntimeSessionSnapshot,
-  RuntimeStartSessionRequest,
-  RuntimeStartSessionResult,
-  RuntimeStreamSessionRequest,
+  RuntimeSubscribeSessionRequest,
   RuntimeRegisterPolicyRequest,
   RuntimeRegisterPolicyResult,
   RuntimeUnregisterPolicyRequest,
@@ -37,17 +27,34 @@ import {
   RuntimeListPoliciesRequest,
   RuntimePolicyDescriptor
 } from '../contracts/runtime';
-import { AppException } from '../errors/app-exception';
-import { ErrorCode } from '../errors/error-codes';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { CircuitBreaker } from './circuit-breaker';
-import { ProtoRegistryService } from './proto-registry.service';
+import {
+  buildMetadata,
+  fromAck,
+  fromEnvelope,
+  fromSessionMetadata,
+  getClientMethod,
+} from './grpc-helpers';
 import { RuntimeCredentialResolverService } from './runtime-credential-resolver.service';
 
 export interface GrpcCallOptions {
   deadline?: Date;
 }
 
+/**
+ * Observer-only Rust runtime provider.
+ *
+ * **Invariants (direct-agent-auth.md §Invariants):**
+ *  - Never calls `Send`. Agents emit their own envelopes directly against the runtime.
+ *  - Never allocates a sessionId. The control-plane allocates at POST /runs; the initiator
+ *    agent calls SessionStart with its own Bearer token.
+ *  - `subscribeSession()` attaches a read-only bidi `StreamSession` — the control-plane
+ *    only reads; it does not write the first frame (no SessionStart, no SessionWatch).
+ *
+ * The previously-shipped `openSession()` / `startSession()` / `send()` / `chooseInitiator()`
+ * paths were deleted in CP-3 because they violated §2, §3, and §5 of the plan's invariants.
+ */
 @Injectable()
 export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   readonly kind = 'rust';
@@ -61,7 +68,6 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   constructor(
     private readonly config: AppConfigService,
     private readonly credentialResolver: RuntimeCredentialResolverService,
-    private readonly protoRegistry: ProtoRegistryService,
     private readonly instrumentation: InstrumentationService
   ) {}
 
@@ -122,7 +128,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         name: req.clientName,
         title: req.clientName,
         version: req.clientVersion,
-        description: 'MACP Control Plane',
+        description: 'MACP Control Plane (observer)',
         websiteUrl: ''
       },
       capabilities: {
@@ -160,100 +166,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     };
   }
 
-  async startSession(req: RuntimeStartSessionRequest, opts?: GrpcCallOptions): Promise<RuntimeStartSessionResult> {
-    // Create a fresh gRPC channel per session to avoid stale connection issues
-    this.client = this.createClient();
-    const initiator = this.chooseInitiator(req.execution);
-    const participant = this.findParticipant(req.execution, initiator);
-    const creds = await this.credentialResolver.resolve({
-      runtimeKind: this.kind,
-      requester: req.execution.execution?.requester,
-      participant,
-      fallbackSender: initiator
-    });
-
-    const runtimeSessionId = randomUUID();
-    const payload = this.protoRegistry.encodeMessage('macp.v1.SessionStartPayload', {
-      intent: req.execution.session.metadata?.intent ?? '',
-      participants: req.execution.session.participants.map((item) => item.id),
-      mode_version: req.execution.session.modeVersion,
-      configuration_version: req.execution.session.configurationVersion,
-      policy_version: req.execution.session.policyVersion ?? '',
-      ttl_ms: req.execution.session.ttlMs,
-      context: this.protoRegistry.encodeSessionContext(
-        req.execution.session.context,
-        req.execution.session.contextEnvelope
-      ),
-      roots: (req.execution.session.roots ?? []).map((root) => ({ uri: root.uri, name: root.name ?? '' }))
-    });
-
-    const envelope = this.buildEnvelope({
-      mode: req.execution.session.modeName,
-      messageType: 'SessionStart',
-      messageId: randomUUID(),
-      sessionId: runtimeSessionId,
-      sender: creds.sender,
-      payload
-    });
-
-    const response = await this.unary(
-      'Send',
-      { envelope: this.toGrpcEnvelope(envelope) },
-      this.buildMetadata(creds.metadata),
-      opts
-    );
-
-    const ack = this.fromAck(response.ack);
-    if (!ack.ok && ack.error) {
-      if (ack.error.code === 'INVALID_SESSION_ID') {
-        throw new AppException(
-          ErrorCode.INVALID_SESSION_ID,
-          `Runtime rejected SessionStart: [${ack.error.code}] ${ack.error.message}`,
-          400
-        );
-      }
-      throw new AppException(
-        ErrorCode.RUNTIME_UNAVAILABLE,
-        `Runtime rejected SessionStart: [${ack.error.code}] ${ack.error.message}`,
-        502
-      );
-    }
-    return {
-      runtimeSessionId: ack.sessionId || runtimeSessionId,
-      initiator: creds.sender,
-      ack
-    };
-  }
-
-  openSession(req: RuntimeOpenSessionRequest): RuntimeSessionHandle {
-    const initiator = this.chooseInitiator(req.execution);
-    const participant = this.findParticipant(req.execution, initiator);
-    const runtimeSessionId = randomUUID();
-
-    const payload = this.protoRegistry.encodeMessage('macp.v1.SessionStartPayload', {
-      intent: req.execution.session.metadata?.intent ?? '',
-      participants: req.execution.session.participants.map((item) => item.id),
-      mode_version: req.execution.session.modeVersion,
-      configuration_version: req.execution.session.configurationVersion,
-      policy_version: req.execution.session.policyVersion ?? '',
-      ttl_ms: req.execution.session.ttlMs,
-      context: this.protoRegistry.encodeSessionContext(
-        req.execution.session.context,
-        req.execution.session.contextEnvelope
-      ),
-      roots: (req.execution.session.roots ?? []).map((root) => ({ uri: root.uri, name: root.name ?? '' }))
-    });
-
-    const sessionStartEnvelope = this.buildEnvelope({
-      mode: req.execution.session.modeName,
-      messageType: 'SessionStart',
-      messageId: randomUUID(),
-      sessionId: runtimeSessionId,
-      sender: '',
-      payload
-    });
-
-    // Event-driven async queue for the bidirectional stream
+  subscribeSession(req: RuntimeSubscribeSessionRequest): RuntimeSessionHandle {
+    // Event-driven async queue for the read-only stream
     const buffer: RawRuntimeEvent[] = [];
     let resolveWait: (() => void) | null = null;
     let ended = false;
@@ -277,37 +191,18 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         }
       });
 
-    // Session ack promise — resolved when we receive the SessionStart echo
-    let resolveSessionAck: (result: RuntimeStartSessionResult) => void;
-    let rejectSessionAck: (err: Error) => void;
-    const sessionAck = new Promise<RuntimeStartSessionResult>((resolve, reject) => {
-      resolveSessionAck = resolve;
-      rejectSessionAck = reject;
-    });
-
-    let sessionAckSettled = false;
-
-    // Launch the bidirectional stream asynchronously
     const launch = async () => {
       try {
-        const creds = await this.credentialResolver.resolve({
-          runtimeKind: this.kind,
-          requester: req.execution.execution?.requester,
-          participant,
-          fallbackSender: initiator
-        });
-
-        const metadata = this.buildMetadata(creds.metadata);
-        const streamMethod = this.getClientMethod('StreamSession');
+        const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+        const metadata = buildMetadata(creds.metadata);
+        const streamMethod = getClientMethod(this.client, 'StreamSession');
         grpcCall = streamMethod.call(this.client, metadata);
 
         grpcCall.on('data', (chunk: any) => {
           const receivedAt = new Date().toISOString();
 
-          // StreamSessionResponse oneof: response.envelope | response.error
           const responseBody = chunk.response ?? chunk;
           if (responseBody.error) {
-            // Inline MACPError — non-terminal, stream stays open
             const inlineError = responseBody.error;
             buffer.push({
               kind: 'stream-inline-error',
@@ -326,69 +221,39 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
           const rawEnvelope = responseBody.envelope ?? chunk.envelope;
           if (!rawEnvelope) return;
 
-          const envelope = this.fromEnvelope(rawEnvelope);
-          const event: RawRuntimeEvent = {
-            kind: 'stream-envelope',
-            receivedAt,
-            envelope
-          };
+          // Filter to the session we're observing. Runtime may broadcast across sessions
+          // on a shared stream; we only care about `req.runtimeSessionId`.
+          const envelope = fromEnvelope(rawEnvelope);
+          if (envelope.sessionId && envelope.sessionId !== req.runtimeSessionId) return;
 
-          // First envelope back is the SessionStart echo — resolve the ack
-          if (!sessionAckSettled && envelope.messageType === 'SessionStart') {
-            sessionAckSettled = true;
-            resolveSessionAck({
-              runtimeSessionId: envelope.sessionId || runtimeSessionId,
-              initiator: creds.sender,
-              ack: {
-                ok: true,
-                duplicate: false,
-                messageId: envelope.messageId,
-                sessionId: envelope.sessionId || runtimeSessionId,
-                acceptedAtUnixMs: envelope.timestampUnixMs,
-                sessionState: 'SESSION_STATE_OPEN'
-              }
-            });
-          }
-
-          buffer.push(event);
+          buffer.push({ kind: 'stream-envelope', receivedAt, envelope });
           notify();
         });
 
         grpcCall.on('error', (error: Error) => {
           streamFailure = error;
           ended = true;
-          if (!sessionAckSettled) {
-            sessionAckSettled = true;
-            rejectSessionAck(error);
-          }
           notify();
         });
 
         grpcCall.on('end', () => {
           ended = true;
-          if (!sessionAckSettled) {
-            sessionAckSettled = true;
-            rejectSessionAck(new Error('stream ended before SessionStart ack'));
-          }
           notify();
         });
 
-        // Write the SessionStart envelope as the first frame
-        grpcCall.write({ envelope: this.toGrpcEnvelope(sessionStartEnvelope) });
+        // Observer stream: end the write side immediately — we only read.
+        // This tells the runtime the client is a passive subscriber.
+        try { grpcCall.end(); } catch { /* some gRPC impls no-op on empty streams */ }
 
       } catch (error) {
+        streamFailure = error instanceof Error ? error : new Error(String(error));
         ended = true;
-        if (!sessionAckSettled) {
-          sessionAckSettled = true;
-          rejectSessionAck(error instanceof Error ? error : new Error(String(error)));
-        }
         notify();
       }
     };
 
     void launch();
 
-    // Build the async iterable for events
     const events: AsyncIterable<RawRuntimeEvent> = {
       [Symbol.asyncIterator]() {
         let started = false;
@@ -427,119 +292,36 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       }
     };
 
-    const handle: RuntimeSessionHandle = {
-      send: (envelope: RuntimeEnvelope) => {
-        if (grpcCall && !ended) {
-          grpcCall.write({ envelope: this.toGrpcEnvelope(envelope) });
-        }
-      },
+    return {
       events,
-      closeWrite: () => {
-        if (grpcCall && !ended) {
-          grpcCall.end();
-        }
-      },
       abort: () => {
         ended = true;
         if (grpcCall) {
           try { grpcCall.cancel(); } catch { /* ignore */ }
         }
         notify();
-      },
-      sessionAck
-    };
-
-    return handle;
-  }
-
-  async send(req: RuntimeSendRequest): Promise<RuntimeSendResult> {
-    const participant = { id: req.from } as ParticipantRef;
-    const creds = await this.credentialResolver.resolve({
-      runtimeKind: this.kind,
-      participant,
-      fallbackSender: req.from
-    });
-
-    this.logger.debug(
-      `send() resolved creds: sender=${creds.sender}, metadataKeys=${Object.keys(creds.metadata).join(',')}`
-    );
-
-    const envelope = this.buildEnvelope({
-      mode: req.modeName,
-      messageType: req.messageType,
-      messageId: randomUUID(),
-      sessionId: req.runtimeSessionId,
-      sender: creds.sender,
-      payload: req.payload
-    });
-
-    let response: any;
-    try {
-      response = await this.unary(
-        'Send',
-        { envelope: this.toGrpcEnvelope(envelope) },
-        this.buildMetadata(creds.metadata)
-      );
-    } catch (error) {
-      const grpcError = error as { code?: number; details?: string; metadata?: { toJSON?: () => unknown } };
-      this.logger.error(
-        `send() gRPC error: code=${grpcError.code}, details=${grpcError.details}`
-      );
-      throw error;
-    }
-
-    const ack = this.fromAck(response.ack);
-    if (!ack.ok && ack.error) {
-      if (ack.error.code === 'INVALID_SESSION_ID') {
-        throw new AppException(
-          ErrorCode.INVALID_SESSION_ID,
-          `Runtime rejected message: [${ack.error.code}] ${ack.error.message}`,
-          400
-        );
       }
-      throw new AppException(
-        ErrorCode.RUNTIME_UNAVAILABLE,
-        `Runtime rejected message: [${ack.error.code}] ${ack.error.message}`,
-        502
-      );
-    }
-    return { ack, envelope };
-  }
-
-  async *streamSession(_req: RuntimeStreamSessionRequest): AsyncIterable<RawRuntimeEvent> {
-    // SessionWatch / passive attach is no longer part of the base protocol.
-    // Reconnection now uses getSession() polling in StreamConsumerService.
-    throw new AppException(
-      ErrorCode.INTERNAL_ERROR,
-      'streamSession() is deprecated — reconnection uses getSession() polling',
-      500
-    );
+    };
   }
 
   async getSession(req: RuntimeGetSessionRequest): Promise<RuntimeSessionSnapshot> {
-    const creds = await this.credentialResolver.resolve({
-      runtimeKind: this.kind,
-      fallbackSender: req.requesterId ?? this.config.runtimeDevAgentId
-    });
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
     const response = await this.unary(
       'GetSession',
       { sessionId: req.runtimeSessionId },
-      this.buildMetadata(creds.metadata)
+      buildMetadata(creds.metadata)
     );
-    return this.fromSessionMetadata(response.metadata);
+    return fromSessionMetadata(response.metadata);
   }
 
   async cancelSession(req: RuntimeCancelSessionRequest): Promise<RuntimeCancelResult> {
-    const creds = await this.credentialResolver.resolve({
-      runtimeKind: this.kind,
-      fallbackSender: req.requesterId ?? this.config.runtimeDevAgentId
-    });
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
     const response = await this.unary(
       'CancelSession',
       { sessionId: req.runtimeSessionId, reason: req.reason ?? 'cancelled by control plane' },
-      this.buildMetadata(creds.metadata)
+      buildMetadata(creds.metadata)
     );
-    return { ack: this.fromAck(response.ack) };
+    return { ack: fromAck(response.ack) };
   }
 
   async getManifest(): Promise<RuntimeManifestResult> {
@@ -646,7 +428,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     const start = Date.now();
     try {
       const result = await this.circuitBreaker.execute(() => {
-        const clientMethod = this.getClientMethod(method);
+        const clientMethod = getClientMethod(this.client, method);
         const deadline = opts?.deadline ?? new Date(Date.now() + this.config.runtimeRequestTimeoutMs);
         return new Promise((resolve, reject) => {
           const callback = (error: grpc.ServiceError | null, response: any) => {
@@ -674,166 +456,4 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
-  private getClientMethod(method: string): Function {
-    const direct = this.client[method];
-    if (typeof direct === 'function') return direct;
-    const lowerCamel = method.charAt(0).toLowerCase() + method.slice(1);
-    const fallback = this.client[lowerCamel];
-    if (typeof fallback === 'function') return fallback;
-    throw new Error(`runtime gRPC method '${method}' is not available on client`);
-  }
-
-  private chooseInitiator(execution: ExecutionRequest): string {
-    const explicit = execution.session.initiatorParticipantId;
-    if (explicit) return explicit;
-    const kickoffSender = execution.kickoff?.[0]?.from;
-    if (kickoffSender) return kickoffSender;
-    const requester = execution.execution?.requester?.actorId;
-    if (requester) return requester;
-    const first = execution.session.participants[0];
-    return first.transportIdentity ?? first.id;
-  }
-
-  private findParticipant(execution: ExecutionRequest, sender: string): ParticipantRef | undefined {
-    return execution.session.participants.find(
-      (participant) => participant.id === sender || participant.transportIdentity === sender
-    );
-  }
-
-  private buildEnvelope(input: {
-    mode: string;
-    messageType: string;
-    messageId: string;
-    sessionId: string;
-    sender: string;
-    payload: Buffer;
-  }) {
-    return {
-      macpVersion: '1.0',
-      mode: input.mode,
-      messageType: input.messageType,
-      messageId: input.messageId,
-      sessionId: input.sessionId,
-      sender: input.sender,
-      timestampUnixMs: Date.now(),
-      payload: input.payload
-    };
-  }
-
-  private toGrpcEnvelope(envelope: {
-    macpVersion: string;
-    mode: string;
-    messageType: string;
-    messageId: string;
-    sessionId: string;
-    sender: string;
-    timestampUnixMs: number;
-    payload: Buffer;
-  }) {
-    return {
-      macpVersion: envelope.macpVersion,
-      mode: envelope.mode,
-      messageType: envelope.messageType,
-      messageId: envelope.messageId,
-      sessionId: envelope.sessionId,
-      sender: envelope.sender,
-      timestampUnixMs: String(envelope.timestampUnixMs),
-      payload: envelope.payload
-    };
-  }
-
-  private fromEnvelope(envelope: any) {
-    return {
-      macpVersion: envelope.macpVersion,
-      mode: envelope.mode,
-      messageType: envelope.messageType,
-      messageId: envelope.messageId,
-      sessionId: envelope.sessionId,
-      sender: envelope.sender,
-      timestampUnixMs: Number(envelope.timestampUnixMs ?? Date.now()),
-      payload: Buffer.isBuffer(envelope.payload)
-        ? envelope.payload
-        : Buffer.from(envelope.payload ?? '')
-    };
-  }
-
-  private fromAck(ack: any, trailingMetadata?: grpc.Metadata): RuntimeAck {
-    let reasons: string[] | undefined;
-
-    // Parse structured reasons from error details bytes
-    if (ack?.error?.details) {
-      try {
-        const parsed = JSON.parse(Buffer.from(ack.error.details).toString('utf-8'));
-        if (Array.isArray(parsed.reasons)) reasons = parsed.reasons;
-      } catch { /* ignore parse errors */ }
-    }
-
-    // Also check gRPC trailing metadata for POLICY_DENIED binary details
-    if (!reasons && trailingMetadata) {
-      const detailsBin = trailingMetadata.get('macp-error-details-bin');
-      if (detailsBin && detailsBin.length > 0) {
-        try {
-          const parsed = JSON.parse(Buffer.from(detailsBin[0] as Buffer).toString('utf-8'));
-          if (Array.isArray(parsed.reasons)) reasons = parsed.reasons;
-        } catch { /* ignore parse errors */ }
-      }
-    }
-
-    return {
-      ok: Boolean(ack?.ok),
-      duplicate: Boolean(ack?.duplicate),
-      messageId: ack?.messageId ?? '',
-      sessionId: ack?.sessionId ?? '',
-      acceptedAtUnixMs: Number(ack?.acceptedAtUnixMs ?? Date.now()),
-      sessionState: (ack?.sessionState ?? 'SESSION_STATE_UNSPECIFIED') as RuntimeAck['sessionState'],
-      error: ack?.error
-        ? {
-            code: ack.error.code,
-            message: ack.error.message,
-            sessionId: ack.error.sessionId,
-            messageId: ack.error.messageId,
-            detailsBase64: ack.error.details
-              ? Buffer.from(ack.error.details).toString('base64')
-              : undefined,
-            details: ack.error.details ? Buffer.from(ack.error.details) : undefined,
-            reasons
-          }
-        : undefined
-    };
-  }
-
-  private fromSessionMetadata(metadata: any): RuntimeSessionSnapshot {
-    return {
-      sessionId: metadata?.sessionId ?? '',
-      mode: metadata?.mode ?? '',
-      state: metadata?.state ?? 'SESSION_STATE_UNSPECIFIED',
-      startedAtUnixMs: metadata?.startedAtUnixMs ? Number(metadata.startedAtUnixMs) : undefined,
-      expiresAtUnixMs: metadata?.expiresAtUnixMs ? Number(metadata.expiresAtUnixMs) : undefined,
-      modeVersion: metadata?.modeVersion,
-      configurationVersion: metadata?.configurationVersion,
-      policyVersion: metadata?.policyVersion,
-      initiator: metadata?.initiator ?? undefined
-    };
-  }
-
-  private buildMetadata(metadataInput: Record<string, string>): grpc.Metadata {
-    const metadata = new grpc.Metadata();
-    for (const [key, value] of Object.entries(metadataInput)) {
-      if (value) metadata.set(key, value);
-    }
-    // Propagate W3C trace context so runtime-side spans become children of the
-    // control-plane span. OTel's propagator serializes the active span into
-    // `traceparent` (+ optional `tracestate`) headers.
-    injectTraceContext(metadata);
-    return metadata;
-  }
-}
-
-function injectTraceContext(metadata: grpc.Metadata): void {
-  const carrier: Record<string, string> = {};
-  propagation.inject(context.active(), carrier);
-  for (const [key, value] of Object.entries(carrier)) {
-    if (value) metadata.set(key, value);
-  }
 }

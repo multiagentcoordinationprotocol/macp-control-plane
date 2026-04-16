@@ -1,14 +1,11 @@
-import { ExecutionRequest } from '../../src/contracts/control-plane';
+import { RunDescriptor } from '../../src/contracts/control-plane';
 import {
-  makeStreamOpened,
   makeStreamEnvelope,
-  RuntimeScript
+  RuntimeScript,
 } from '../helpers/scripted-mock-runtime.provider';
 import { testRuntimeKind } from '../helpers/runtime-kind';
 
-export function taskModeRequest(
-  overrides?: Partial<ExecutionRequest>
-): ExecutionRequest {
+export function taskModeRequest(overrides?: Partial<RunDescriptor>): RunDescriptor {
   return {
     mode: 'sandbox',
     runtime: { kind: testRuntimeKind() },
@@ -18,121 +15,111 @@ export function taskModeRequest(
       configurationVersion: '1.0.0',
       policyVersion: 'policy.default',
       ttlMs: 60000,
-      participants: [
-        { id: 'requester', role: 'requester' },
-        { id: 'worker', role: 'worker' }
-      ]
+      participants: [{ id: 'requester' }, { id: 'worker' }],
     },
-    kickoff: [
-      {
-        from: 'requester',
-        to: ['worker'],
-        kind: 'request',
-        messageType: 'TaskRequest',
-        payload: {
-          taskId: 'task-1',
-          description: 'Process integration test data',
-          priority: 'normal'
-        }
-      }
-    ],
-    execution: {
-      tags: ['integration-test', 'task-mode']
-    },
-    ...overrides
+    execution: { tags: ['integration-test', 'task-mode'] },
+    ...overrides,
   };
 }
 
-/**
- * Happy path: TaskRequest -> TaskAccept -> TaskUpdate (50%) -> TaskComplete -> resolved
- */
+/** Happy path: TaskRequest → TaskAccept → TaskUpdate → TaskComplete → Commitment. */
 export function taskHappyScript(): RuntimeScript {
   return {
     supportedModes: ['macp.mode.task.v1'],
+    initiator: 'requester',
     events: [
-      { event: makeStreamOpened() },
       {
-        trigger: { afterMessageType: 'TaskAccept', fromParticipant: 'worker' },
-        event: makeStreamEnvelope('macp.mode.task.v1', 'TaskAccept', 'worker', {
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.task.v1', 'TaskRequest', 'requester', {
           taskId: 'task-1',
-          acceptedAt: new Date().toISOString()
-        })
+          description: 'Process integration test data',
+          priority: 'normal',
+        }),
       },
       {
-        trigger: { afterMessageType: 'TaskUpdate', fromParticipant: 'worker' },
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.task.v1', 'TaskAccept', 'worker', {
+          taskId: 'task-1',
+        }),
+      },
+      {
+        delayMs: 5,
         event: makeStreamEnvelope('macp.mode.task.v1', 'TaskUpdate', 'worker', {
           taskId: 'task-1',
           progress: 0.5,
-          message: 'Processing...'
-        })
+          message: 'Processing...',
+        }),
       },
       {
-        trigger: { afterMessageType: 'TaskComplete', fromParticipant: 'worker' },
-        event: makeStreamEnvelope(
-          'macp.mode.task.v1',
-          'TaskComplete',
-          'worker',
-          {
-            taskId: 'task-1',
-            output: { result: 'success', itemsProcessed: 42 }
-          }
-        )
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.task.v1', 'TaskComplete', 'worker', {
+          taskId: 'task-1',
+          output: { result: 'success', itemsProcessed: 42 },
+        }),
       },
       {
-        trigger: { afterMessageType: 'TaskComplete' },
-        delayMs: 50,
-        event: makeStreamEnvelope('macp.mode.task.v1', 'Commitment', 'system', {
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.task.v1', 'Commitment', 'requester', {
           taskId: 'task-1',
           outcome: 'completed',
           finalized: true,
-          outcome_positive: true
-        })
-      }
-    ]
+          outcome_positive: true,
+        }),
+      },
+    ],
   };
 }
 
-/**
- * Task rejection: TaskRequest -> TaskReject -> no completion
- */
+/** Rejection: TaskRequest → TaskReject. */
 export function taskRejectionScript(): RuntimeScript {
   return {
     supportedModes: ['macp.mode.task.v1'],
+    initiator: 'requester',
     events: [
-      { event: makeStreamOpened() },
       {
-        trigger: { afterMessageType: 'TaskReject', fromParticipant: 'worker' },
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.task.v1', 'TaskRequest', 'requester', {
+          taskId: 'task-1',
+          description: 'Will be rejected',
+        }),
+      },
+      {
+        delayMs: 5,
         event: makeStreamEnvelope('macp.mode.task.v1', 'TaskReject', 'worker', {
           taskId: 'task-1',
-          reason: 'capacity'
-        })
-      }
-    ]
+          reason: 'capacity',
+        }),
+      },
+    ],
   };
 }
 
-/**
- * Task failure: TaskRequest -> TaskAccept -> TaskFail
- */
+/** Failure: TaskRequest → TaskAccept → TaskFail. */
 export function taskFailureScript(): RuntimeScript {
   return {
     supportedModes: ['macp.mode.task.v1'],
+    initiator: 'requester',
     events: [
-      { event: makeStreamOpened() },
       {
-        trigger: { afterMessageType: 'TaskAccept', fromParticipant: 'worker' },
-        event: makeStreamEnvelope('macp.mode.task.v1', 'TaskAccept', 'worker', {
-          taskId: 'task-1'
-        })
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.task.v1', 'TaskRequest', 'requester', {
+          taskId: 'task-1',
+        }),
       },
       {
-        trigger: { afterMessageType: 'TaskFail', fromParticipant: 'worker' },
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.task.v1', 'TaskAccept', 'worker', {
+          taskId: 'task-1',
+        }),
+      },
+      {
+        delayMs: 5,
         event: makeStreamEnvelope('macp.mode.task.v1', 'TaskFail', 'worker', {
           taskId: 'task-1',
           error: 'Processing failed',
-          retryable: true
-        })
-      }
-    ]
+          retryable: true,
+        }),
+      },
+    ],
   };
 }

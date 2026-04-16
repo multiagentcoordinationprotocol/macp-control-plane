@@ -13,115 +13,91 @@ import {
   RuntimeListPoliciesRequest,
   RuntimeManifestResult,
   RuntimeModeDescriptor,
-  RuntimeOpenSessionRequest,
   RuntimePolicyDescriptor,
   RuntimeProvider,
   RuntimeRegisterPolicyRequest,
   RuntimeRegisterPolicyResult,
   RuntimeRootDescriptor,
-  RuntimeSendRequest,
-  RuntimeSendResult,
   RuntimeSessionHandle,
   RuntimeSessionSnapshot,
-  RuntimeStartSessionRequest,
-  RuntimeStartSessionResult,
-  RuntimeStreamSessionRequest,
+  RuntimeSubscribeSessionRequest,
   RuntimeUnregisterPolicyRequest,
-  RuntimeUnregisterPolicyResult
+  RuntimeUnregisterPolicyResult,
 } from '../../src/contracts/runtime';
 
 export interface ScriptedEvent {
-  /** Delay before emitting this event (ms) */
+  /** Delay before emitting this event (ms). */
   delayMs?: number;
-  /** Emit only after a message of this type is received via send() */
-  trigger?: { afterMessageType: string; fromParticipant?: string };
-  /** The raw event to emit */
+  /** The raw event to emit. */
   event: RawRuntimeEvent;
 }
 
 export interface RuntimeScript {
   supportedModes: string[];
+  /** Events the observer will see, in order. */
   events: ScriptedEvent[];
-  /** Called on every send() — can return additional events to emit */
-  onSend?: (req: RuntimeSendRequest) => RawRuntimeEvent[] | undefined;
-}
-
-interface SentMessage {
-  req: RuntimeSendRequest;
-  at: string;
+  /** Optional initiator identity returned from GetSession — defaults to 'mock-initiator'. */
+  initiator?: string;
+  /**
+   * How long GetSession reports a non-OPEN state before flipping to OPEN.
+   * Simulates the initiator agent opening the session. Default: 0ms (immediate).
+   */
+  sessionOpenAfterMs?: number;
 }
 
 /**
- * Enhanced mock runtime that follows a scripted sequence of events.
- * Used for integration testing where we need deterministic, multi-step
- * coordination flows without a real gRPC runtime.
+ * Scripted observer-mode mock runtime (direct-agent-auth CP-3).
+ *
+ * Simulates a runtime that agents have already connected to: `GetSession` flips from
+ * `UNSPECIFIED` → `OPEN` after `sessionOpenAfterMs`, then the scripted event sequence
+ * is streamed from `subscribeSession().events`.
+ *
+ * No `send()` / `openSession()` / `startSession()` methods — agents drive those directly
+ * against the runtime; the control-plane observer never writes envelopes.
  */
 export class ScriptedMockRuntimeProvider implements RuntimeProvider {
   readonly kind = 'scripted-mock';
-  readonly sentMessages: SentMessage[] = [];
 
   private script: RuntimeScript;
   private sessionState: SessionState = 'SESSION_STATE_OPEN';
-  private pendingTriggerEvents: ScriptedEvent[] = [];
-  private eventEmitter: ((event: RawRuntimeEvent) => void) | null = null;
+  private sessionOpenAt: number = 0;
   private policies = new Map<string, RuntimePolicyDescriptor>();
 
   constructor(script: RuntimeScript) {
     this.script = script;
+    this.sessionOpenAt = Date.now() + (script.sessionOpenAfterMs ?? 0);
   }
 
-  /** Stub for HealthController readyz — mock is always CLOSED */
+  /** Stub for HealthController readyz. */
   getCircuitBreakerState(): string {
     return 'CLOSED';
   }
 
-  /** Stub for HealthController */
   resetCircuitBreaker(): void {}
 
-  /** Replace the script (useful for per-test configuration) */
   setScript(script: RuntimeScript): void {
     this.script = script;
-    this.sentMessages.length = 0;
     this.sessionState = 'SESSION_STATE_OPEN';
-    this.pendingTriggerEvents = [];
+    this.sessionOpenAt = Date.now() + (script.sessionOpenAfterMs ?? 0);
   }
 
-  async initialize(
-    _req: RuntimeInitializeRequest
-  ): Promise<RuntimeInitializeResult> {
+  async initialize(_req: RuntimeInitializeRequest): Promise<RuntimeInitializeResult> {
     return {
       selectedProtocolVersion: '1.0',
       runtimeInfo: { name: 'scripted-mock', version: '0.0.1' },
-      supportedModes: this.script.supportedModes
+      supportedModes: this.script.supportedModes,
     };
   }
 
-  openSession(req: RuntimeOpenSessionRequest): RuntimeSessionHandle {
-    const sessionId = randomUUID();
-    const initiator =
-      req.execution.session.participants[0]?.id ?? 'mock-initiator';
-    const ack = this.makeAck(sessionId);
-
-    // Separate trigger-based events from immediate/delayed events
-    const immediateEvents: ScriptedEvent[] = [];
-    this.pendingTriggerEvents = [];
-    for (const se of this.script.events) {
-      if (se.trigger) {
-        this.pendingTriggerEvents.push(se);
-      } else {
-        immediateEvents.push(se);
-      }
-    }
-
-    const self = this;
+  subscribeSession(req: RuntimeSubscribeSessionRequest): RuntimeSessionHandle {
     type ResolverFn = (value: IteratorResult<RawRuntimeEvent>) => void;
     const state = {
       resolveNextEvent: null as ResolverFn | null,
       eventQueue: [] as RawRuntimeEvent[],
-      streamDone: false
+      streamDone: false,
     };
 
-    self.eventEmitter = (event: RawRuntimeEvent) => {
+    const emit = (event: RawRuntimeEvent) => {
       if (state.resolveNextEvent) {
         const resolve = state.resolveNextEvent;
         state.resolveNextEvent = null;
@@ -131,24 +107,33 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
       }
     };
 
-    // Schedule immediate events
+    // Schedule all scripted events unconditionally — observer mode.
     (async () => {
-      for (const se of immediateEvents) {
+      for (const se of this.script.events) {
         if (se.delayMs) {
           await new Promise((r) => setTimeout(r, se.delayMs));
         }
-        self.eventEmitter?.(se.event);
-      }
-      // If no trigger events remain, close after a short delay
-      if (self.pendingTriggerEvents.length === 0) {
-        await new Promise((r) => setTimeout(r, 50));
-        state.streamDone = true;
-        const pending = state.resolveNextEvent;
-        state.resolveNextEvent = null;
-        if (pending) {
-          pending({ done: true, value: undefined });
+        // Re-stamp session id on each envelope so it's routed to this subscriber's sessionId.
+        if (se.event.kind === 'stream-envelope' && se.event.envelope) {
+          emit({
+            ...se.event,
+            envelope: { ...se.event.envelope, sessionId: req.runtimeSessionId },
+          });
+        } else {
+          emit(se.event);
         }
       }
+      // Close the stream shortly after the last event, simulating SESSION_STATE_RESOLVED.
+      await new Promise((r) => setTimeout(r, 50));
+      emit({
+        kind: 'session-snapshot',
+        receivedAt: new Date().toISOString(),
+        sessionSnapshot: { sessionId: req.runtimeSessionId, mode: '', state: 'SESSION_STATE_RESOLVED' },
+      });
+      state.streamDone = true;
+      const pending = state.resolveNextEvent;
+      state.resolveNextEvent = null;
+      if (pending) pending({ done: true, value: undefined });
     })();
 
     const events: AsyncIterable<RawRuntimeEvent> = {
@@ -156,10 +141,7 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
         return {
           next(): Promise<IteratorResult<RawRuntimeEvent>> {
             if (state.eventQueue.length > 0) {
-              return Promise.resolve({
-                done: false,
-                value: state.eventQueue.shift()!
-              });
+              return Promise.resolve({ done: false, value: state.eventQueue.shift()! });
             }
             if (state.streamDone) {
               return Promise.resolve({ done: true, value: undefined });
@@ -171,136 +153,33 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
           return(): Promise<IteratorResult<RawRuntimeEvent>> {
             state.streamDone = true;
             return Promise.resolve({ done: true, value: undefined });
-          }
+          },
         };
-      }
+      },
     };
 
-    const handle: RuntimeSessionHandle = {
-      send: () => {
-        /* Messages from control plane (kickoff) go through here */
-      },
+    return {
       events,
-      closeWrite: () => {
-        /* Half-close write side */
-      },
       abort: () => {
         state.streamDone = true;
         const pending = state.resolveNextEvent;
         state.resolveNextEvent = null;
-        if (pending) {
-          pending({ done: true, value: undefined });
-        }
+        if (pending) pending({ done: true, value: undefined });
       },
-      sessionAck: Promise.resolve({
-        runtimeSessionId: sessionId,
-        initiator,
-        ack
-      })
-    };
-
-    return handle;
-  }
-
-  async send(req: RuntimeSendRequest): Promise<RuntimeSendResult> {
-    const messageId = randomUUID();
-    this.sentMessages.push({ req, at: new Date().toISOString() });
-
-    // Check for triggered events
-    const toFire: ScriptedEvent[] = [];
-    this.pendingTriggerEvents = this.pendingTriggerEvents.filter((se) => {
-      const trigger = se.trigger!;
-      const typeMatch = trigger.afterMessageType === req.messageType;
-      const participantMatch =
-        !trigger.fromParticipant || trigger.fromParticipant === req.from;
-      if (typeMatch && participantMatch) {
-        toFire.push(se);
-        return false; // Remove from pending
-      }
-      return true;
-    });
-
-    // Fire triggered events
-    for (const se of toFire) {
-      if (se.delayMs) {
-        setTimeout(() => this.eventEmitter?.(se.event), se.delayMs);
-      } else {
-        // Small delay to ensure ordering
-        setTimeout(() => this.eventEmitter?.(se.event), 10);
-      }
-    }
-
-    // Call onSend hook
-    if (this.script.onSend) {
-      const extraEvents = this.script.onSend(req);
-      if (extraEvents) {
-        for (const event of extraEvents) {
-          setTimeout(() => this.eventEmitter?.(event), 20);
-        }
-      }
-    }
-
-    // If no more pending triggers and this is a session-bound message,
-    // schedule stream end. Skip for signals (empty sessionId).
-    if (
-      this.pendingTriggerEvents.length === 0 &&
-      req.runtimeSessionId !== ''
-    ) {
-      setTimeout(() => {
-        this.eventEmitter?.(makeSessionResolved(req.runtimeSessionId));
-      }, 100);
-    }
-
-    return {
-      ack: this.makeAck(req.runtimeSessionId, messageId),
-      envelope: {
-        macpVersion: '1.0',
-        mode: req.modeName,
-        messageType: req.messageType,
-        messageId,
-        sessionId: req.runtimeSessionId,
-        sender: req.from,
-        timestampUnixMs: Date.now(),
-        payload: req.payload
-      }
     };
   }
 
-  async startSession(
-    req: RuntimeStartSessionRequest
-  ): Promise<RuntimeStartSessionResult> {
-    const sessionId = randomUUID();
-    return {
-      runtimeSessionId: sessionId,
-      initiator:
-        req.execution.session.participants[0]?.id ?? 'mock-initiator',
-      ack: this.makeAck(sessionId)
-    };
-  }
-
-  async *streamSession(
-    _req: RuntimeStreamSessionRequest
-  ): AsyncIterable<RawRuntimeEvent> {
-    yield {
-      kind: 'stream-status',
-      receivedAt: new Date().toISOString(),
-      streamStatus: { status: 'opened' }
-    };
-  }
-
-  async getSession(
-    req: RuntimeGetSessionRequest
-  ): Promise<RuntimeSessionSnapshot> {
+  async getSession(req: RuntimeGetSessionRequest): Promise<RuntimeSessionSnapshot> {
+    const isOpen = Date.now() >= this.sessionOpenAt && this.sessionState !== 'SESSION_STATE_UNSPECIFIED';
     return {
       sessionId: req.runtimeSessionId,
       mode: this.script.supportedModes[0] ?? 'scripted-mock',
-      state: this.sessionState
+      state: isOpen ? this.sessionState : 'SESSION_STATE_UNSPECIFIED',
+      initiator: this.script.initiator ?? 'mock-initiator',
     };
   }
 
-  async cancelSession(
-    req: RuntimeCancelSessionRequest
-  ): Promise<RuntimeCancelResult> {
+  async cancelSession(req: RuntimeCancelSessionRequest): Promise<RuntimeCancelResult> {
     this.sessionState = 'SESSION_STATE_RESOLVED';
     return { ack: this.makeAck(req.runtimeSessionId) };
   }
@@ -309,9 +188,9 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
     return {
       agentId: 'scripted-mock',
       title: 'Scripted Mock Runtime',
-      description: 'Integration test runtime with scripted event sequences',
+      description: 'Observer-mode mock with scripted event sequences',
       supportedModes: this.script.supportedModes,
-      metadata: {}
+      metadata: {},
     };
   }
 
@@ -321,31 +200,13 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
       modeVersion: '1.0',
       title: `Scripted ${mode}`,
       messageTypes: [
-        'Proposal',
-        'Evaluation',
-        'Objection',
-        'Vote',
-        'Commitment',
-        'TaskRequest',
-        'TaskAccept',
-        'TaskReject',
-        'TaskUpdate',
-        'TaskComplete',
-        'TaskFail',
-        'CounterProposal',
-        'Accept',
-        'Reject',
-        'Withdraw',
-        'HandoffOffer',
-        'HandoffContext',
-        'HandoffAccept',
-        'HandoffDecline',
-        'ApprovalRequest',
-        'Approve',
-        'Abstain',
-        'Signal'
+        'Proposal', 'Evaluation', 'Objection', 'Vote', 'Commitment',
+        'TaskRequest', 'TaskAccept', 'TaskReject', 'TaskUpdate', 'TaskComplete', 'TaskFail',
+        'CounterProposal', 'Accept', 'Reject', 'Withdraw',
+        'HandoffOffer', 'HandoffContext', 'HandoffAccept', 'HandoffDecline',
+        'ApprovalRequest', 'Approve', 'Abstain', 'Signal',
       ],
-      terminalMessageTypes: ['Commitment']
+      terminalMessageTypes: ['Commitment'],
     }));
   }
 
@@ -354,18 +215,11 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
   }
 
   async health(): Promise<RuntimeHealth> {
-    return {
-      ok: true,
-      runtimeKind: this.kind,
-      detail: 'scripted mock runtime always healthy'
-    };
+    return { ok: true, runtimeKind: this.kind, detail: 'scripted mock runtime always healthy' };
   }
 
   async registerPolicy(req: RuntimeRegisterPolicyRequest): Promise<RuntimeRegisterPolicyResult> {
-    this.policies.set(req.descriptor.policyId, {
-      ...req.descriptor,
-      registeredAtUnixMs: Date.now()
-    });
+    this.policies.set(req.descriptor.policyId, { ...req.descriptor, registeredAtUnixMs: Date.now() });
     return { ok: true };
   }
 
@@ -397,7 +251,7 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
       messageId: messageId ?? randomUUID(),
       sessionId,
       acceptedAtUnixMs: Date.now(),
-      sessionState: 'SESSION_STATE_OPEN'
+      sessionState: 'SESSION_STATE_OPEN',
     };
   }
 }
@@ -408,19 +262,19 @@ export function makeStreamOpened(): RawRuntimeEvent {
   return {
     kind: 'stream-status',
     receivedAt: new Date().toISOString(),
-    streamStatus: { status: 'opened' }
+    streamStatus: { status: 'opened' },
   };
 }
 
 export function makeSessionSnapshot(
   sessionId: string,
   mode: string,
-  state: SessionState = 'SESSION_STATE_OPEN'
+  state: SessionState = 'SESSION_STATE_OPEN',
 ): RawRuntimeEvent {
   return {
     kind: 'session-snapshot',
     receivedAt: new Date().toISOString(),
-    sessionSnapshot: { sessionId, mode, state }
+    sessionSnapshot: { sessionId, mode, state },
   };
 }
 
@@ -428,11 +282,7 @@ export function makeSessionResolved(sessionId: string): RawRuntimeEvent {
   return {
     kind: 'session-snapshot',
     receivedAt: new Date().toISOString(),
-    sessionSnapshot: {
-      sessionId,
-      mode: '',
-      state: 'SESSION_STATE_RESOLVED'
-    }
+    sessionSnapshot: { sessionId, mode: '', state: 'SESSION_STATE_RESOLVED' },
   };
 }
 
@@ -441,7 +291,7 @@ export function makeStreamEnvelope(
   messageType: string,
   sender: string,
   payload: Record<string, unknown>,
-  sessionId?: string
+  sessionId?: string,
 ): RawRuntimeEvent {
   return {
     kind: 'stream-envelope',
@@ -454,15 +304,12 @@ export function makeStreamEnvelope(
       sessionId: sessionId ?? randomUUID(),
       sender,
       timestampUnixMs: Date.now(),
-      payload: Buffer.from(JSON.stringify(payload))
-    }
+      payload: Buffer.from(JSON.stringify(payload)),
+    },
   };
 }
 
-export function makeSendAck(
-  sessionId: string,
-  messageId?: string
-): RawRuntimeEvent {
+export function makeSendAck(sessionId: string, messageId?: string): RawRuntimeEvent {
   return {
     kind: 'send-ack',
     receivedAt: new Date().toISOString(),
@@ -472,7 +319,7 @@ export function makeSendAck(
       messageId: messageId ?? randomUUID(),
       sessionId,
       acceptedAtUnixMs: Date.now(),
-      sessionState: 'SESSION_STATE_OPEN'
-    }
+      sessionState: 'SESSION_STATE_OPEN',
+    },
   };
 }

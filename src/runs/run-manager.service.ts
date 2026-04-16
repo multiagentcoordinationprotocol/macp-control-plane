@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { ExecutionRequest, RunStateProjection } from '../contracts/control-plane';
+import { RunDescriptor, RunStateProjection } from '../contracts/control-plane';
 import { AuditService } from '../audit/audit.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { TraceService } from '../telemetry/trace.service';
@@ -29,7 +29,7 @@ export class RunManagerService {
     private readonly instrumentation: InstrumentationService
   ) {}
 
-  async createRun(request: ExecutionRequest) {
+  async createRun(request: RunDescriptor, sessionId: string) {
     const idempotencyKey = request.execution?.idempotencyKey;
     if (idempotencyKey) {
       const existing = await this.runRepository.findByIdempotencyKey(idempotencyKey);
@@ -40,10 +40,10 @@ export class RunManagerService {
     const traceId = this.traceService.startRunTrace(runId, {
       runtime_kind: request.runtime.kind,
       mode_name: request.session.modeName,
-      execution_mode: request.mode
+      execution_mode: request.mode,
     });
 
-    // Phase 3.6: Auto-tag sandbox runs
+    // Auto-tag sandbox runs
     const tags = [...(request.execution?.tags ?? [])];
     if (request.mode === 'sandbox' && !tags.includes('sandbox')) {
       tags.push('sandbox');
@@ -56,20 +56,25 @@ export class RunManagerService {
       mode: request.mode,
       runtimeKind: request.runtime.kind,
       runtimeVersion: request.runtime.version,
+      runtimeSessionId: sessionId,
       idempotencyKey,
       tags,
       sourceKind: request.session.metadata?.source as string | undefined,
       sourceRef: request.session.metadata?.sourceRef as string | undefined,
       metadata: {
         executionRequest: request,
-        requester: request.execution?.requester
+        requester: request.execution?.requester,
+        // Forward opaque UI-cancel hooks (Option A) and policy-delegation flag (Option B)
+        // — see direct-agent-auth §Cancellation design.
+        ...(request.session.metadata?.cancelCallback
+          ? { cancelCallback: request.session.metadata.cancelCallback }
+          : {}),
+        ...(request.session.metadata?.cancellationDelegated
+          ? { cancellationDelegated: request.session.metadata.cancellationDelegated }
+          : {}),
       },
-      traceId
+      traceId,
     });
-
-    const decisionPrompt =
-      (request.session.metadata?.decisionPrompt as string | undefined) ??
-      (request.session.metadata?.decision_prompt as string | undefined);
 
     await this.runEventService.emitControlPlaneEvents(record.id, [
       {
@@ -83,16 +88,16 @@ export class RunManagerService {
           modeName: request.session.modeName,
           runtimeKind: request.runtime.kind,
           runtimeVersion: request.runtime.version,
+          sessionId,
           traceId,
-          ...(decisionPrompt ? { decisionPrompt } : {})
-        }
-      }
+        },
+      },
     ]);
 
     return record;
   }
 
-  async markStarted(runId: string, request: ExecutionRequest) {
+  async markStarted(runId: string, request: RunDescriptor) {
     this.instrumentation.runStateTotal.inc({ status: 'starting' });
     const run = await this.runRepository.markStarted(runId);
     await this.runEventService.emitControlPlaneEvents(runId, [
@@ -107,18 +112,22 @@ export class RunManagerService {
           startedAt: run.startedAt,
           modeName: request.session.modeName,
           runtimeKind: request.runtime.kind,
-          traceId: run.traceId
-        }
-      }
+          traceId: run.traceId,
+        },
+      },
     ]);
     return run;
   }
 
+  /**
+   * Record that the initiator agent has opened the runtime session.
+   * Called from the observer path once `GetSession` reports OPEN state.
+   */
   async bindSession(
     runId: string,
-    request: ExecutionRequest,
+    request: RunDescriptor,
     session: { runtimeSessionId: string; initiator: string; ack: { sessionState: string } },
-    capabilities?: Record<string, unknown>
+    capabilities?: Record<string, unknown>,
   ) {
     const run = await this.runRepository.markBindingSession(runId, session.runtimeSessionId);
     await this.runtimeSessionRepository.upsert({
@@ -129,14 +138,13 @@ export class RunManagerService {
       modeVersion: request.session.modeVersion,
       configurationVersion: request.session.configurationVersion,
       policyVersion: request.session.policyVersion || 'policy.default',
-      initiatorParticipantId: session.initiator,
+      initiatorParticipantId: session.initiator || null,
       sessionState: session.ack.sessionState,
       lastSeenAt: new Date().toISOString(),
       capabilities: (capabilities ?? {}) as Record<string, unknown>,
       metadata: {
         participants: request.session.participants,
-        roots: request.session.roots ?? []
-      }
+      },
     });
 
     const participantEvents = request.session.participants.map((participant) => ({
@@ -146,13 +154,9 @@ export class RunManagerService {
       subject: { kind: 'participant' as const, id: participant.id },
       data: {
         participantId: participant.id,
-        role: participant.role,
-        transportIdentity: participant.transportIdentity,
-        status: 'idle'
-      }
+        status: 'idle',
+      },
     }));
-
-    const expectedCommitments = request.session.commitments;
 
     await this.runEventService.emitControlPlaneEvents(runId, [
       {
@@ -169,10 +173,9 @@ export class RunManagerService {
           configurationVersion: request.session.configurationVersion,
           policyVersion: request.session.policyVersion || 'policy.default',
           participants: request.session.participants.map((item) => item.id),
-          ...(expectedCommitments && expectedCommitments.length > 0 ? { expectedCommitments } : {})
-        }
+        },
       },
-      ...participantEvents
+      ...participantEvents,
     ]);
 
     return run;
@@ -190,15 +193,15 @@ export class RunManagerService {
         trace: run.traceId ? { traceId: run.traceId } : undefined,
         data: {
           sessionId: runtimeSessionId,
-          state: 'SESSION_STATE_OPEN'
-        }
-      }
+          state: 'SESSION_STATE_OPEN',
+        },
+      },
     ]);
     void this.webhookService.fireEvent({
       event: 'run.started',
       runId,
       status: 'running',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
     return run;
   }
@@ -221,15 +224,15 @@ export class RunManagerService {
           status: 'completed',
           endedAt: run.endedAt,
           runtimeSessionId: run.runtimeSessionId,
-          traceId: run.traceId
-        }
-      }
+          traceId: run.traceId,
+        },
+      },
     ]);
     void this.webhookService.fireEvent({
       event: 'run.completed',
       runId,
       status: 'completed',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
     void this.enrichRunMetadata(runId, run);
     return run;
@@ -253,15 +256,15 @@ export class RunManagerService {
           status: 'cancelled',
           endedAt: run.endedAt,
           runtimeSessionId: run.runtimeSessionId,
-          traceId: run.traceId
-        }
-      }
+          traceId: run.traceId,
+        },
+      },
     ]);
     void this.webhookService.fireEvent({
       event: 'run.cancelled',
       runId,
       status: 'cancelled',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
     return run;
   }
@@ -286,16 +289,16 @@ export class RunManagerService {
           endedAt: run.endedAt,
           runtimeSessionId: run.runtimeSessionId,
           traceId: run.traceId,
-          error: message
-        }
-      }
+          error: message,
+        },
+      },
     ]);
     void this.webhookService.fireEvent({
       event: 'run.failed',
       runId,
       status: 'failed',
       timestamp: new Date().toISOString(),
-      data: { error: message }
+      data: { error: message },
     });
     void this.enrichRunMetadata(runId, run);
     return run;
@@ -345,7 +348,7 @@ export class RunManagerService {
       actorType: 'system',
       action: 'run.deleted',
       resource: 'run',
-      resourceId: runId
+      resourceId: runId,
     });
     await this.runRepository.delete(runId);
   }
@@ -357,7 +360,7 @@ export class RunManagerService {
       actorType: 'system',
       action: 'run.archived',
       resource: 'run',
-      resourceId: runId
+      resourceId: runId,
     });
     return this.runRepository.archive(runId);
   }
@@ -375,12 +378,12 @@ export class RunManagerService {
 
   private async enrichRunMetadata(
     runId: string,
-    run: { startedAt?: string | null; endedAt?: string | null; metadata?: Record<string, unknown> | null; status?: string }
+    run: { startedAt?: string | null; endedAt?: string | null; metadata?: Record<string, unknown> | null; status?: string },
   ) {
     try {
       const [metrics, events] = await Promise.all([
         this.metricsService.get(runId),
-        this.eventRepository.listCanonicalByRun(runId, 0, 2000)
+        this.eventRepository.listCanonicalByRun(runId, 0, 2000),
       ]);
 
       const decisionEvent = [...events].reverse().find((e) => e.type === 'decision.finalized');
@@ -392,14 +395,13 @@ export class RunManagerService {
           ? new Date(run.endedAt).getTime() - new Date(run.startedAt).getTime()
           : metrics?.durationMs ?? undefined;
 
-      // Feed latency histogram (§5.4). Only observe when we have a real duration.
       if (durationMs !== undefined && durationMs >= 0) {
         const modeName =
           (run.metadata?.executionRequest as { session?: { modeName?: string } } | undefined)?.session?.modeName
           ?? 'unknown';
         this.instrumentation.runDuration.observe(
           { terminal_status: run.status ?? 'unknown', mode_name: modeName },
-          durationMs / 1000
+          durationMs / 1000,
         );
       }
 
@@ -413,7 +415,7 @@ export class RunManagerService {
 
       if (Object.keys(enrichment).length > 0) {
         await this.runRepository.update(runId, {
-          metadata: { ...(run.metadata ?? {}), ...enrichment }
+          metadata: { ...(run.metadata ?? {}), ...enrichment },
         });
       }
     } catch (err) {

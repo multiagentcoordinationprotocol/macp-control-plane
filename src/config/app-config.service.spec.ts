@@ -274,4 +274,32 @@ describe('AppConfigService', () => {
       expect(() => config.onModuleInit()).not.toThrow();
     });
   });
+
+  describe('session polling config (observer mode, CP-4)', () => {
+    it('defaults sessionPollBaseMs to 100', () => {
+      const config = new AppConfigService();
+      expect(config.sessionPollBaseMs).toBe(100);
+    });
+
+    it('defaults sessionPollMaxMs to 1000', () => {
+      const config = new AppConfigService();
+      expect(config.sessionPollMaxMs).toBe(1000);
+    });
+
+    it('defaults sessionPollTimeoutMs to 60000', () => {
+      const config = new AppConfigService();
+      expect(config.sessionPollTimeoutMs).toBe(60000);
+    });
+
+    it('honours SESSION_POLL_TIMEOUT_MS override', () => {
+      process.env.SESSION_POLL_TIMEOUT_MS = '10000';
+      const config = new AppConfigService();
+      expect(config.sessionPollTimeoutMs).toBe(10000);
+    });
+
+    it('defaults cancelCallbackTimeoutMs to 5000', () => {
+      const config = new AppConfigService();
+      expect(config.cancelCallbackTimeoutMs).toBe(5000);
+    });
+  });
 });

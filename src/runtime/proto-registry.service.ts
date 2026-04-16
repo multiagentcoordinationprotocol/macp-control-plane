@@ -1,7 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as path from 'node:path';
 import * as protobuf from 'protobufjs';
-import { PayloadEnvelopeInput } from '../contracts/control-plane';
 
 const MESSAGE_TYPE_MAP: Record<string, Record<string, string>> = {
   '__core__': {
@@ -94,56 +93,6 @@ export class ProtoRegistryService implements OnModuleInit {
     }
   }
 
-  encodeSessionContext(context?: Record<string, unknown>, contextEnvelope?: PayloadEnvelopeInput): Buffer {
-    if (contextEnvelope) return this.encodePayloadEnvelope(contextEnvelope);
-    if (!context) return Buffer.alloc(0);
-    return Buffer.from(JSON.stringify(context), 'utf8');
-  }
-
-  encodePayloadEnvelope(input: PayloadEnvelopeInput): Buffer {
-    switch (input.encoding) {
-      case 'json':
-        return Buffer.from(JSON.stringify(input.json ?? {}), 'utf8');
-      case 'text':
-        return Buffer.from(input.text ?? '', 'utf8');
-      case 'base64':
-        return Buffer.from(input.base64 ?? '', 'base64');
-      case 'proto': {
-        if (!input.proto) throw new Error('proto payload envelope requires proto value');
-        return this.encodeMessage(input.proto.typeName, input.proto.value);
-      }
-      default:
-        throw new Error(`unsupported payload encoding ${(input as PayloadEnvelopeInput).encoding}`);
-    }
-  }
-
-  encodeMessage(typeName: string, value: Record<string, unknown>): Buffer {
-    const type = this.lookupType(typeName);
-    const normalized = this.normalizeProtoValue(value) as Record<string, unknown>;
-    const message = type.fromObject(normalized);
-    return Buffer.from(type.encode(message).finish());
-  }
-
-  private normalizeProtoValue(value: unknown): unknown {
-    if (Array.isArray(value)) {
-      return value.map((item) => this.normalizeProtoValue(item));
-    }
-
-    if (!value || typeof value !== 'object' || Buffer.isBuffer(value)) {
-      return value;
-    }
-
-    const normalized: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-      const normalizedEntry = this.normalizeProtoValue(entry);
-      const normalizedKey = key.includes('_')
-        ? key.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase())
-        : key;
-      normalized[normalizedKey] = normalizedEntry;
-    }
-    return normalized;
-  }
-
   decodeKnown(modeName: string, messageType: string, payload: Buffer): Record<string, unknown> | undefined {
     const typeName =
       MESSAGE_TYPE_MAP[modeName]?.[messageType] ?? MESSAGE_TYPE_MAP.__core__[messageType];
@@ -154,7 +103,14 @@ export class ProtoRegistryService implements OnModuleInit {
     if (typeName === '__json__') {
       return this.tryDecodeUtf8(payload);
     }
-    return this.decodeMessage(typeName, payload);
+    // Try proto decode first (real Rust runtime). If the bytes aren't valid proto
+    // (e.g. mock runtime sends JSON), fall back to UTF-8/JSON parsing rather than
+    // throwing — the normalizer must be resilient to either wire format.
+    try {
+      return this.decodeMessage(typeName, payload);
+    } catch {
+      return this.tryDecodeUtf8(payload);
+    }
   }
 
   decodeMessage(typeName: string, payload: Buffer): Record<string, unknown> {

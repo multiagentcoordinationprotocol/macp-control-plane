@@ -1,6 +1,7 @@
 import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { decisionHappyScript } from '../fixtures/decision-mode';
 import { testRuntimeKind } from '../helpers/runtime-kind';
+import { waitFor } from '../helpers/wait-for';
 
 describe('Metrics Token Usage (integration)', () => {
   let ctx: TestAppContext;
@@ -13,6 +14,16 @@ describe('Metrics Token Usage (integration)', () => {
     if (ctx) await ctx.app.close();
   });
 
+  async function waitForMetrics(runId: string) {
+    return waitFor(
+      async () => {
+        const metrics = (await ctx.client.request('GET', `/runs/${runId}/metrics`)) as any;
+        return metrics.runId === runId ? metrics : null;
+      },
+      { timeoutMs: 5000, label: 'metrics ready' },
+    );
+  }
+
   it('GET /runs/:id/metrics returns token usage fields', async () => {
     const run = await ctx.client.createRun({
       mode: 'sandbox',
@@ -22,16 +33,11 @@ describe('Metrics Token Usage (integration)', () => {
         modeVersion: '1.0.0',
         configurationVersion: '1.0.0',
         ttlMs: 60000,
-        participants: [
-          { id: 'agent-a', role: 'proposer' },
-          { id: 'agent-b', role: 'evaluator' }
-        ]
-      }
+        participants: [{ id: 'agent-a' }, { id: 'agent-b' }],
+      },
     });
 
-    await sleep(1500);
-
-    const metrics = await ctx.client.request('GET', `/runs/${run.runId}/metrics`) as any;
+    const metrics = await waitForMetrics(run.runId);
 
     expect(metrics).toHaveProperty('runId', run.runId);
     expect(metrics).toHaveProperty('eventCount');
@@ -55,13 +61,11 @@ describe('Metrics Token Usage (integration)', () => {
         modeVersion: '1.0.0',
         configurationVersion: '1.0.0',
         ttlMs: 60000,
-        participants: [{ id: 'agent-a', role: 'proposer' }]
-      }
+        participants: [{ id: 'agent-a' }],
+      },
     });
 
-    await sleep(1500);
-
-    const metrics = await ctx.client.request('GET', `/runs/${run.runId}/metrics`) as any;
+    const metrics = await waitForMetrics(run.runId);
 
     expect(metrics.promptTokens).toBe(0);
     expect(metrics.completionTokens).toBe(0);
@@ -78,23 +82,18 @@ describe('Metrics Token Usage (integration)', () => {
         modeVersion: '1.0.0',
         configurationVersion: '1.0.0',
         ttlMs: 60000,
-        participants: [
-          { id: 'agent-a', role: 'proposer' },
-          { id: 'agent-b', role: 'evaluator' }
-        ]
-      }
+        participants: [{ id: 'agent-a' }, { id: 'agent-b' }],
+      },
     });
 
-    await sleep(1500);
+    const state = await waitFor(
+      async () => {
+        const s = (await ctx.client.getState(run.runId)) as any;
+        return s.timeline?.totalEvents > 0 ? s : null;
+      },
+      { timeoutMs: 5000, label: 'state populated' },
+    );
 
-    const state = await ctx.client.getState(run.runId) as any;
-
-    expect(state).toHaveProperty('timeline');
-    expect(state.timeline).toHaveProperty('totalEvents');
     expect(typeof state.timeline.totalEvents).toBe('number');
   });
 });
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}

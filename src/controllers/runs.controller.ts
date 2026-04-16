@@ -6,13 +6,15 @@ import {
   Get,
   Headers,
   HttpCode,
+  HttpException,
+  HttpStatus,
   MessageEvent,
   Param,
   ParseUUIDPipe,
   Post,
   Query,
   Sse,
-  ValidationPipe
+  ValidationPipe,
 } from '@nestjs/common';
 import {
   ApiAcceptedResponse,
@@ -20,27 +22,24 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiQuery,
-  ApiTags
+  ApiTags,
 } from '@nestjs/swagger';
 import { map, Observable } from 'rxjs';
 import { CanonicalEvent, ReplayRequest, RunStatus } from '../contracts/control-plane';
 import { AppConfigService } from '../config/app-config.service';
-import { ExecutionRequestDto } from '../dto/execution-request.dto';
+import { RunDescriptorDto } from '../dto/run-descriptor.dto';
 import { ListEventsQueryDto } from '../dto/list-events-query.dto';
 import { ListRunsQueryDto } from '../dto/list-runs-query.dto';
 import { ReplayRequestDto } from '../dto/replay-request.dto';
 import { CloneRunDto } from '../dto/clone-run.dto';
-import { SendRunMessageDto } from '../dto/send-run-message.dto';
-import { SendSignalDto } from '../dto/send-signal.dto';
 import { StreamRunQueryDto } from '../dto/stream-run-query.dto';
-import { UpdateContextDto } from '../dto/update-context.dto';
 import { ProjectionService } from '../projection/projection.service';
 import { OutboundMessageRepository } from '../storage/outbound-message.repository';
 import {
   CanonicalEventDto,
   CreateRunResponseDto,
   ReplayDescriptorDto,
-  RunStateResponseDto
+  RunStateResponseDto,
 } from '../dto/run-responses.dto';
 import { StreamHubService, StreamHubMessage } from '../events/stream-hub.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
@@ -48,6 +47,27 @@ import { ReplayService } from '../replay/replay.service';
 import { EventRepository } from '../storage/event.repository';
 import { RunExecutorService } from '../runs/run-executor.service';
 import { RunManagerService } from '../runs/run-manager.service';
+
+/**
+ * RFC-MACP-0001 §5.3 forbids HTTP bypass of MACP. Control-plane removed all
+ * envelope-emission endpoints (direct-agent-auth CP-5/6/7). Agents use the
+ * macp-sdk-python / macp-sdk-typescript clients to emit envelopes directly.
+ */
+const MIGRATION_URL = 'https://github.com/multiagentcoordinationprotocol/docs/blob/main/ONBOARDING_AN_AGENT.md';
+
+function gone(endpoint: string): never {
+  throw new HttpException(
+    {
+      statusCode: HttpStatus.GONE,
+      errorCode: 'ENDPOINT_REMOVED',
+      message: `${endpoint} has been removed. Agents authenticate to the runtime directly via macp-sdk-python / macp-sdk-typescript. See ${MIGRATION_URL}`,
+    },
+    HttpStatus.GONE,
+    {
+      cause: new Error(`${endpoint} removed (direct-agent-auth)`),
+    },
+  );
+}
 
 @ApiTags('runs')
 @Controller('runs')
@@ -61,14 +81,15 @@ export class RunsController {
     private readonly config: AppConfigService,
     private readonly projectionService: ProjectionService,
     private readonly outboundMessageRepository: OutboundMessageRepository,
-    private readonly instrumentation: InstrumentationService
+    private readonly instrumentation: InstrumentationService,
   ) {}
 
   @Post('validate')
-  @ApiOperation({ summary: 'Preflight validation of an execution request without creating a run.' })
-  @ApiBody({ type: ExecutionRequestDto })
+  @ApiOperation({ summary: 'Preflight validation of a RunDescriptor without creating a run.' })
+  @ApiBody({ type: RunDescriptorDto })
   async validateRequest(
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: ExecutionRequestDto
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+    body: RunDescriptorDto,
   ) {
     return this.runExecutor.validate(body);
   }
@@ -76,7 +97,7 @@ export class RunsController {
   @Get()
   @ApiOperation({ summary: 'List runs with optional filtering and pagination.' })
   async listRuns(
-    @Query(new ValidationPipe({ transform: true, whitelist: true })) query: ListRunsQueryDto
+    @Query(new ValidationPipe({ transform: true, whitelist: true })) query: ListRunsQueryDto,
   ) {
     return this.runManager.listRuns({
       status: query.status,
@@ -91,20 +112,27 @@ export class RunsController {
       includeArchived: query.includeArchived,
       environment: query.environment,
       scenarioRef: query.scenarioRef,
-      search: query.search
+      search: query.search,
     });
   }
 
   @Post()
-  @ApiOperation({ summary: 'Create and launch a runtime execution run.' })
+  @ApiOperation({
+    summary:
+      'Create and launch a runtime execution run. Returns {runId, sessionId} — caller distributes sessionId to agents via bootstrap.',
+  })
   @ApiAcceptedResponse({ type: CreateRunResponseDto })
-  @ApiBody({ type: ExecutionRequestDto })
-  async createRun(@Body(new ValidationPipe({ transform: true, whitelist: true })) body: ExecutionRequestDto) {
-    const run = await this.runExecutor.launch(body);
+  @ApiBody({ type: RunDescriptorDto })
+  async createRun(
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+    body: RunDescriptorDto,
+  ) {
+    const { run, sessionId } = await this.runExecutor.launch(body);
     return {
       runId: run.id,
+      sessionId,
       status: run.status as RunStatus,
-      traceId: run.traceId ?? undefined
+      traceId: run.traceId ?? undefined,
     } satisfies CreateRunResponseDto;
   }
 
@@ -122,7 +150,7 @@ export class RunsController {
   }
 
   @Get(':id/events')
-  @ApiOperation({ summary: 'List canonical events for a run with optional time-range and type filters (§4.2).' })
+  @ApiOperation({ summary: 'List canonical events for a run with optional time-range and type filters.' })
   @ApiQuery({ name: 'afterSeq', required: false })
   @ApiQuery({ name: 'limit', required: false })
   @ApiQuery({ name: 'afterTs', required: false })
@@ -131,9 +159,8 @@ export class RunsController {
   @ApiOkResponse({ type: [CanonicalEventDto] })
   async getRunEvents(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Query(new ValidationPipe({ transform: true, whitelist: true })) query: ListEventsQueryDto
+    @Query(new ValidationPipe({ transform: true, whitelist: true })) query: ListEventsQueryDto,
   ) {
-    // Fast path: no time/type filter — keep legacy array response for backward compat.
     if (!query.afterTs && !query.beforeTs && !query.type) {
       return this.eventRepository.listCanonicalByRun(id, query.afterSeq ?? 0, query.limit ?? 200);
     }
@@ -155,7 +182,7 @@ export class RunsController {
   streamRun(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Query(new ValidationPipe({ transform: true, whitelist: true })) query: StreamRunQueryDto,
-    @Headers('last-event-id') lastEventId?: string
+    @Headers('last-event-id') lastEventId?: string,
   ): Observable<MessageEvent> {
     const afterSeq = query.afterSeq ?? (lastEventId ? Number(lastEventId) : 0);
     const includeSnapshot = query.includeSnapshot !== false;
@@ -167,7 +194,6 @@ export class RunsController {
       let backfillDone = false;
       let highSeq = afterSeq;
 
-      // 1. Subscribe to live hub immediately, buffer during backfill
       const liveSub = this.streamHub.stream(id).subscribe({
         next: (msg) => {
           if (!backfillDone) {
@@ -180,14 +206,13 @@ export class RunsController {
           subscriber.next({
             type: msg.event,
             data: msg.data,
-            ...(seq !== undefined ? { id: String(seq) } : {})
+            ...(seq !== undefined ? { id: String(seq) } : {}),
           } as MessageEvent);
         },
         complete: () => subscriber.complete(),
-        error: (err) => subscriber.error(err)
+        error: (err) => subscriber.error(err),
       });
 
-      // 2. Heartbeat
       const heartbeatTimer = setInterval(() => {
         subscriber.next({ type: 'heartbeat', data: { ts: new Date().toISOString() } } as MessageEvent);
       }, heartbeatMs);
@@ -195,16 +220,13 @@ export class RunsController {
         heartbeatTimer.unref();
       }
 
-      // 3. Backfill + drain buffer
       const runBackfill = async () => {
         try {
-          // Emit snapshot if requested
           if (includeSnapshot) {
             const state = await this.runManager.getState(id);
             subscriber.next({ type: 'snapshot', data: state } as MessageEvent);
           }
 
-          // Backfill missed canonical events in batches
           if (afterSeq > 0) {
             let cursor = afterSeq;
             const batchSize = 500;
@@ -216,7 +238,7 @@ export class RunsController {
                 subscriber.next({
                   type: 'canonical_event',
                   data: event,
-                  id: String(event.seq)
+                  id: String(event.seq),
                 } as MessageEvent);
               }
               if (events.length < batchSize) break;
@@ -224,7 +246,6 @@ export class RunsController {
             }
           }
 
-          // Drain buffer, deduplicating by seq
           backfillDone = true;
           for (const msg of buffer) {
             const seq = (msg.data as CanonicalEvent)?.seq;
@@ -233,7 +254,7 @@ export class RunsController {
             subscriber.next({
               type: msg.event,
               data: msg.data,
-              ...(seq !== undefined ? { id: String(seq) } : {})
+              ...(seq !== undefined ? { id: String(seq) } : {}),
             } as MessageEvent);
           }
           buffer.length = 0;
@@ -253,10 +274,14 @@ export class RunsController {
   }
 
   @Post(':id/cancel')
-  @ApiOperation({ summary: 'Cancel a running session in the runtime.' })
+  @ApiOperation({
+    summary:
+      'Cancel a running session. Default: proxies to the initiator agent\'s cancelCallback (Option A). '
+      + 'Policy-delegated fallback (metadata.cancellationDelegated=true) calls runtime.CancelSession (Option B).',
+  })
   async cancelRun(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: { reason?: string }
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: { reason?: string },
   ) {
     return this.runExecutor.cancel(id, body?.reason);
   }
@@ -266,13 +291,13 @@ export class RunsController {
   @ApiAcceptedResponse({ type: ReplayDescriptorDto })
   async createReplay(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: ReplayRequestDto
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) body: ReplayRequestDto,
   ) {
     const replay: ReplayRequest = {
       mode: body.mode ?? 'timed',
       speed: body.speed ?? 1,
       fromSeq: body.fromSeq,
-      toSeq: body.toSeq
+      toSeq: body.toSeq,
     };
     return this.replayService.describe(id, replay);
   }
@@ -281,14 +306,14 @@ export class RunsController {
   @ApiOperation({ summary: 'Replay a run using persisted canonical events.' })
   streamReplay(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Query(new ValidationPipe({ transform: true, whitelist: true })) query: ReplayRequestDto
+    @Query(new ValidationPipe({ transform: true, whitelist: true })) query: ReplayRequestDto,
   ): Observable<MessageEvent> {
     return this.replayService
       .stream(id, {
         mode: query.mode ?? 'timed',
         speed: query.speed ?? 1,
         fromSeq: query.fromSeq,
-        toSeq: query.toSeq
+        toSeq: query.toSeq,
       })
       .pipe(map((item) => ({ type: item.type, data: item.data }) as MessageEvent));
   }
@@ -297,48 +322,62 @@ export class RunsController {
   @ApiOperation({ summary: 'Project run state at a specific event sequence for scrubber/replay UIs.' })
   async getReplayState(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Query('seq') seq?: string
+    @Query('seq') seq?: string,
   ) {
     return this.replayService.stateAt(id, seq ? Number(seq) : undefined);
   }
 
+  // ── REMOVED: envelope-emission endpoints (direct-agent-auth CP-5/6/7) ─────
+  // These endpoints violated the invariant that the control-plane must NEVER call Send.
+  // They return 410 Gone with a migration header pointing to the SDK docs.
+
   @Post(':id/messages')
-  @ApiOperation({ summary: 'Send a session-bound MACP message to a running session.' })
-  @ApiBody({ type: SendRunMessageDto })
-  async sendMessage(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: SendRunMessageDto
-  ) {
-    return this.runExecutor.sendMessage(id, body);
+  @ApiOperation({
+    summary: 'REMOVED. Agents emit session-bound messages via the macp-sdk directly.',
+    deprecated: true,
+  })
+  sendMessage(@Param('id', new ParseUUIDPipe()) _id: string): never {
+    gone('POST /runs/:id/messages');
   }
 
   @Post(':id/signal')
-  @ApiOperation({ summary: 'Send a signal to a running session.' })
-  @ApiBody({ type: SendSignalDto })
-  async sendSignal(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: SendSignalDto
-  ) {
-    // Runtime requires non-empty signal_type when payload is present
-    if (body.payload && Object.keys(body.payload).length > 0 && !body.signalType) {
-      throw new BadRequestException('signalType is required when payload is non-empty');
-    }
-    this.instrumentation.signalsTotal.inc({ signal_type: body.signalType ?? body.messageType ?? 'unknown' });
-    return this.runExecutor.sendSignal(id, body);
+  @ApiOperation({
+    summary: 'REMOVED. Agents emit signals via the macp-sdk directly.',
+    deprecated: true,
+  })
+  sendSignal(@Param('id', new ParseUUIDPipe()) _id: string): never {
+    gone('POST /runs/:id/signal');
+  }
+
+  @Post(':id/context')
+  @ApiOperation({
+    summary: 'REMOVED. Agents emit ContextUpdate envelopes via the macp-sdk directly.',
+    deprecated: true,
+  })
+  updateContext(@Param('id', new ParseUUIDPipe()) _id: string): never {
+    gone('POST /runs/:id/context');
   }
 
   @Post(':id/clone')
-  @ApiOperation({ summary: 'Clone a run with optional overrides.' })
+  @ApiOperation({ summary: 'Clone a run with optional tag overrides (produces a fresh sessionId).' })
   @ApiBody({ type: CloneRunDto })
   async cloneRun(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: CloneRunDto
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CloneRunDto,
   ) {
-    const run = await this.runExecutor.clone(id, body);
+    if (body.context && Object.keys(body.context).length > 0) {
+      throw new BadRequestException(
+        'context overrides are no longer accepted — session context is opaque to the control-plane '
+        + '(direct-agent-auth §Invariants). Pass any scenario-specific overrides via the caller\'s '
+        + 'scenario compiler and submit a fresh POST /runs.',
+      );
+    }
+    const { run, sessionId } = await this.runExecutor.clone(id, { tags: body.tags });
     return {
       runId: run.id,
+      sessionId,
       status: run.status,
-      traceId: run.traceId ?? undefined
+      traceId: run.traceId ?? undefined,
     };
   }
 
@@ -350,19 +389,9 @@ export class RunsController {
   }
 
   @Get(':id/messages')
-  @ApiOperation({ summary: 'List outbound messages for a run.' })
+  @ApiOperation({ summary: 'List outbound messages captured from the runtime stream for a run.' })
   async getRunMessages(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.outboundMessageRepository.listByRunId(id);
-  }
-
-  @Post(':id/context')
-  @ApiOperation({ summary: 'Update context during a running session.' })
-  @ApiBody({ type: UpdateContextDto })
-  async updateContext(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: UpdateContextDto
-  ) {
-    return this.runExecutor.updateContext(id, body);
   }
 
   @Post(':id/projection/rebuild')
@@ -378,5 +407,4 @@ export class RunsController {
   async archiveRun(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.runManager.archiveRun(id);
   }
-
 }

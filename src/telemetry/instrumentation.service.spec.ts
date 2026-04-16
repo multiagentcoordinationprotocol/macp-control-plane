@@ -75,67 +75,98 @@ describe('InstrumentationService', () => {
   });
 
   // ===========================================================================
-  // Metric instances are defined
+  // Metric instances are defined with correct type and (for counters/histograms)
+  // can round-trip an observation / increment.
   // ===========================================================================
   describe('metric instances', () => {
-    it('should define httpRequestDuration histogram', () => {
-      expect(service.httpRequestDuration).toBeDefined();
+    /** Helper — assert the metric has the expected methods for its type. */
+    function assertMetricShape(metric: unknown, type: 'counter' | 'histogram' | 'gauge') {
+      expect(metric).toBeDefined();
+      const m = metric as Record<string, unknown>;
+      if (type === 'counter') {
+        expect(typeof m.inc).toBe('function');
+      } else if (type === 'histogram') {
+        expect(typeof m.observe).toBe('function');
+      } else if (type === 'gauge') {
+        expect(typeof m.inc).toBe('function');
+        expect(typeof m.dec).toBe('function');
+        expect(typeof m.set).toBe('function');
+      }
+    }
+
+    it('httpRequestDuration is a histogram and observes', () => {
+      assertMetricShape(service.httpRequestDuration, 'histogram');
+      expect(() =>
+        service.httpRequestDuration.observe({ method: 'GET', status_code: '200' }, 0.1),
+      ).not.toThrow();
     });
 
-    it('should define httpRequestsTotal counter', () => {
-      expect(service.httpRequestsTotal).toBeDefined();
+    it('httpRequestsTotal is a counter and increments', () => {
+      assertMetricShape(service.httpRequestsTotal, 'counter');
+      expect(() => service.httpRequestsTotal.inc({ method: 'GET', status_code: '200' })).not.toThrow();
     });
 
-    it('should define activeSseConnections gauge', () => {
-      expect(service.activeSseConnections).toBeDefined();
+    it('activeSseConnections is a gauge and inc/dec', () => {
+      assertMetricShape(service.activeSseConnections, 'gauge');
+      expect(() => service.activeSseConnections.inc()).not.toThrow();
+      expect(() => service.activeSseConnections.dec()).not.toThrow();
     });
 
-    it('should define activeStreams gauge', () => {
-      expect(service.activeStreams).toBeDefined();
+    it('activeStreams is a gauge', () => {
+      assertMetricShape(service.activeStreams, 'gauge');
     });
 
-    it('should define runStateTotal counter', () => {
-      expect(service.runStateTotal).toBeDefined();
+    it('runStateTotal is a counter with status label', () => {
+      assertMetricShape(service.runStateTotal, 'counter');
+      expect(() => service.runStateTotal.inc({ status: 'queued' })).not.toThrow();
     });
 
-    it('should define grpcCallDuration histogram', () => {
-      expect(service.grpcCallDuration).toBeDefined();
+    it('grpcCallDuration is a histogram with method + status labels', () => {
+      assertMetricShape(service.grpcCallDuration, 'histogram');
+      expect(() =>
+        service.grpcCallDuration.observe({ method: 'Initialize', status: 'ok' }, 0.05),
+      ).not.toThrow();
     });
 
-    it('should define circuitBreakerState gauge', () => {
-      expect(service.circuitBreakerState).toBeDefined();
+    it('circuitBreakerState is a gauge', () => {
+      assertMetricShape(service.circuitBreakerState, 'gauge');
     });
 
-    it('should define circuitBreakerFailuresTotal counter', () => {
-      expect(service.circuitBreakerFailuresTotal).toBeDefined();
+    it('circuitBreakerFailuresTotal is a counter', () => {
+      assertMetricShape(service.circuitBreakerFailuresTotal, 'counter');
     });
 
-    it('should define circuitBreakerSuccessTotal counter', () => {
-      expect(service.circuitBreakerSuccessTotal).toBeDefined();
+    it('circuitBreakerSuccessTotal is a counter', () => {
+      assertMetricShape(service.circuitBreakerSuccessTotal, 'counter');
     });
 
-    it('should define outboundMessagesTotal counter', () => {
-      expect(service.outboundMessagesTotal).toBeDefined();
+    it('outboundMessagesTotal is a counter with category + status labels', () => {
+      assertMetricShape(service.outboundMessagesTotal, 'counter');
+      expect(() =>
+        service.outboundMessagesTotal.inc({ category: 'observer', status: 'subscribed' }),
+      ).not.toThrow();
     });
 
-    it('should define inboundMessagesTotal counter', () => {
-      expect(service.inboundMessagesTotal).toBeDefined();
+    it('inboundMessagesTotal is a counter', () => {
+      assertMetricShape(service.inboundMessagesTotal, 'counter');
     });
 
-    it('should define signalsTotal counter', () => {
-      expect(service.signalsTotal).toBeDefined();
+    it('signalsTotal is a counter with signal_type label', () => {
+      assertMetricShape(service.signalsTotal, 'counter');
+      expect(() => service.signalsTotal.inc({ signal_type: 'progress' })).not.toThrow();
     });
 
-    it('should define streamReconnectsTotal counter', () => {
-      expect(service.streamReconnectsTotal).toBeDefined();
+    it('streamReconnectsTotal is a counter', () => {
+      assertMetricShape(service.streamReconnectsTotal, 'counter');
     });
 
-    it('should define recoveryTotal counter', () => {
-      expect(service.recoveryTotal).toBeDefined();
+    it('recoveryTotal is a counter with status label', () => {
+      assertMetricShape(service.recoveryTotal, 'counter');
+      expect(() => service.recoveryTotal.inc({ status: 'success' })).not.toThrow();
     });
 
-    it('should define webhookDeliveriesTotal counter', () => {
-      expect(service.webhookDeliveriesTotal).toBeDefined();
+    it('webhookDeliveriesTotal is a counter with event + status labels', () => {
+      assertMetricShape(service.webhookDeliveriesTotal, 'counter');
     });
   });
 

@@ -49,23 +49,33 @@ export class AppConfigService implements OnModuleInit {
   readonly runtimeAddress = process.env.RUNTIME_ADDRESS ?? '127.0.0.1:50051';
   readonly runtimeTls = readBoolean('RUNTIME_TLS', false);
   readonly runtimeAllowInsecure = readBoolean('RUNTIME_ALLOW_INSECURE', process.env.NODE_ENV === 'development');
+  /**
+   * Control-plane's own single Bearer token. The control-plane has exactly one
+   * runtime identity, least-privilege (`can_start_sessions: false`). Per-agent
+   * tokens were removed with direct-agent-auth Phase 4 (CP-9) — agents authenticate
+   * themselves now.
+   */
   readonly runtimeBearerToken = process.env.RUNTIME_BEARER_TOKEN ?? '';
   readonly runtimeUseDevHeader = readBoolean('RUNTIME_USE_DEV_HEADER', process.env.NODE_ENV === 'development');
   readonly runtimeRequestTimeoutMs = readNumber('RUNTIME_REQUEST_TIMEOUT_MS', 30000);
   readonly runtimeDevAgentId = process.env.RUNTIME_DEV_AGENT_ID ?? 'control-plane';
-  /** @deprecated SessionWatch is no longer part of the base protocol. Kept for backward compat. */
-  readonly runtimeStreamSubscriptionMessageType =
-    process.env.RUNTIME_STREAM_SUBSCRIPTION_MESSAGE_TYPE ?? 'SessionWatch';
-  /** @deprecated SessionWatch is no longer part of the base protocol. Kept for backward compat. */
-  readonly runtimeStreamSubscriberId =
-    process.env.RUNTIME_STREAM_SUBSCRIBER_ID ?? this.runtimeDevAgentId;
+  /**
+   * Observer-mode poll cadence. Control-plane polls GetSession after POST /runs
+   * until the initiator agent opens the session. See direct-agent-auth §End-to-end target flow.
+   */
+  readonly sessionPollBaseMs = readNumber('SESSION_POLL_BASE_MS', 100);
+  readonly sessionPollMaxMs = readNumber('SESSION_POLL_MAX_MS', 1000);
+  readonly sessionPollTimeoutMs = readNumber('SESSION_POLL_TIMEOUT_MS', 60000);
+  /** HTTP timeout for proxying UI cancel to the initiator agent's callback (Option A). */
+  readonly cancelCallbackTimeoutMs = readNumber('CANCEL_CALLBACK_TIMEOUT_MS', 5000);
 
   // Circuit breaker
   readonly runtimeCircuitBreakerThreshold = readNumber('RUNTIME_CIRCUIT_BREAKER_THRESHOLD', 5);
   readonly runtimeCircuitBreakerResetMs = readNumber('RUNTIME_CIRCUIT_BREAKER_RESET_MS', 30000);
 
-  // Kickoff retry
-  readonly kickoffMaxRetries = readNumber('KICKOFF_MAX_RETRIES', 3);
+  // Throttler (NestJS @nestjs/throttler)
+  readonly throttleTtlMs = readNumber('THROTTLE_TTL_MS', 60000);
+  readonly throttleLimit = readNumber('THROTTLE_LIMIT', 100);
 
   readonly streamIdleTimeoutMs = readNumber('STREAM_IDLE_TIMEOUT_MS', 120000);
   readonly streamMaxRetries = readNumber('STREAM_MAX_RETRIES', 5);
@@ -108,6 +118,14 @@ export class AppConfigService implements OnModuleInit {
     if (!this.runtimeBearerToken && this.runtimeUseDevHeader) {
       throw new Error(
         'RUNTIME_BEARER_TOKEN must be set in production when RUNTIME_USE_DEV_HEADER is enabled'
+      );
+    }
+
+    // Warn (don't fail) when the control-plane has no runtime identity configured —
+    // observer calls (GetSession, StreamSession, ListPolicies) will be rejected as unauthenticated.
+    if (!this.runtimeBearerToken) {
+      this.logger.warn(
+        'Production start: RUNTIME_BEARER_TOKEN is not set. Runtime calls will be rejected as unauthenticated.'
       );
     }
 

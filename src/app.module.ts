@@ -60,10 +60,14 @@ import { WebhookService } from './webhooks/webhook.service';
     ConfigModule,
     DatabaseModule,
     AuthModule,
-    ThrottlerModule.forRoot([{
-      ttl: Number(process.env.THROTTLE_TTL_MS ?? 60000),
-      limit: Number(process.env.THROTTLE_LIMIT ?? 100)
-    }])
+    ThrottlerModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [AppConfigService],
+      useFactory: (config: AppConfigService) => [{
+        ttl: config.throttleTtlMs,
+        limit: config.throttleLimit,
+      }],
+    })
   ],
   controllers: [RunsController, RunInsightsController, RuntimeController, ObservabilityController, HealthController, MetricsController, AdminController, AuditController, WebhookController, DashboardController, EventsController],
   providers: [
