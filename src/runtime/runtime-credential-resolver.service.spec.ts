@@ -1,179 +1,80 @@
 import { RuntimeCredentialResolverService } from './runtime-credential-resolver.service';
 import { AppConfigService } from '../config/app-config.service';
 
-describe('RuntimeCredentialResolverService', () => {
-  let service: RuntimeCredentialResolverService;
-  let mockConfig: Partial<AppConfigService>;
-
-  function buildConfig(overrides: Partial<AppConfigService> = {}): AppConfigService {
-    return {
+describe('RuntimeCredentialResolverService (single-bearer, CP-9)', () => {
+  function makeService(config: Partial<AppConfigService>): RuntimeCredentialResolverService {
+    const merged = {
       runtimeDevAgentId: 'control-plane',
       runtimeBearerToken: '',
       runtimeUseDevHeader: false,
-      ...overrides,
+      ...config,
     } as AppConfigService;
+    return new RuntimeCredentialResolverService(merged);
   }
 
-  beforeEach(() => {
-    mockConfig = buildConfig();
-    service = new RuntimeCredentialResolverService(mockConfig as AppConfigService);
-  });
-
-  // ===========================================================================
-  // Sender resolution priority
-  // ===========================================================================
-  describe('sender resolution', () => {
-    it('uses participant.id as highest priority (ignores transportIdentity for sender consistency)', async () => {
-      // participant.id must equal the sender string used in startSession so that
-      // session.initiator_sender matches later Commitment sender checks.
-      // transportIdentity is accepted in the input for symmetry with the
-      // runtime contract but is intentionally NOT used as the sender id.
-      const result = await service.resolve({
-        runtimeKind: 'rust',
-        requester: { actorId: 'actor-1' },
-        participant: { id: 'part-1', transportIdentity: 'transport-id' },
-        fallbackSender: 'fallback',
-      });
-
-      expect(result.sender).toBe('part-1');
+  describe('sender identity', () => {
+    it('always returns the control-plane dev agent id as sender', async () => {
+      const service = makeService({ runtimeDevAgentId: 'my-control-plane' });
+      const result = await service.resolve({ runtimeKind: 'rust' });
+      expect(result.sender).toBe('my-control-plane');
     });
 
-    it('uses participant.id when only it is provided', async () => {
-      const result = await service.resolve({
-        runtimeKind: 'rust',
-        requester: { actorId: 'actor-1' },
-        participant: { id: 'part-1' },
-        fallbackSender: 'fallback',
-      });
-
-      expect(result.sender).toBe('part-1');
-    });
-
-    it('falls back to requester.actorId when no participant', async () => {
-      const result = await service.resolve({
-        runtimeKind: 'rust',
-        requester: { actorId: 'actor-1' },
-        fallbackSender: 'fallback',
-      });
-
-      expect(result.sender).toBe('actor-1');
-    });
-
-    it('falls back to fallbackSender when no participant or requester actorId', async () => {
-      const result = await service.resolve({
-        runtimeKind: 'rust',
-        requester: {},
-        fallbackSender: 'fallback',
-      });
-
-      expect(result.sender).toBe('fallback');
-    });
-
-    it('falls back to config.runtimeDevAgentId as last resort', async () => {
-      service = new RuntimeCredentialResolverService(
-        buildConfig({ runtimeDevAgentId: 'dev-agent-99' }) as AppConfigService,
-      );
-
-      const result = await service.resolve({
-        runtimeKind: 'rust',
-      });
-
-      expect(result.sender).toBe('dev-agent-99');
-    });
-
-    it('uses config.runtimeDevAgentId when all optional fields are undefined', async () => {
-      const result = await service.resolve({
-        runtimeKind: 'rust',
-        requester: undefined,
-        participant: undefined,
-        fallbackSender: undefined,
-      });
-
+    it('defaults sender to "control-plane" when no dev agent id is configured', async () => {
+      const service = makeService({});
+      const result = await service.resolve({ runtimeKind: 'rust' });
       expect(result.sender).toBe('control-plane');
     });
   });
 
-  // ===========================================================================
-  // Metadata — bearer token
-  // ===========================================================================
-  describe('bearer token in metadata', () => {
-    it('sets authorization header when runtimeBearerToken is configured', async () => {
-      service = new RuntimeCredentialResolverService(
-        buildConfig({ runtimeBearerToken: 'my-secret-token' }) as AppConfigService,
-      );
-
+  describe('bearer token', () => {
+    it('attaches the configured bearer token as Authorization', async () => {
+      const service = makeService({ runtimeBearerToken: 'obs-token' });
       const result = await service.resolve({ runtimeKind: 'rust' });
-
-      expect(result.metadata.authorization).toBe('Bearer my-secret-token');
+      expect(result.metadata.authorization).toBe('Bearer obs-token');
     });
 
-    it('does not set x-macp-agent-id when bearer token is present (even if useDevHeader is true)', async () => {
-      service = new RuntimeCredentialResolverService(
-        buildConfig({
-          runtimeBearerToken: 'token',
-          runtimeUseDevHeader: true,
-        }) as AppConfigService,
-      );
-
+    it('does not attach an x-macp-agent-id header when a bearer token is present', async () => {
+      const service = makeService({
+        runtimeBearerToken: 'obs-token',
+        runtimeUseDevHeader: true,
+      });
       const result = await service.resolve({ runtimeKind: 'rust' });
-
-      expect(result.metadata.authorization).toBe('Bearer token');
       expect(result.metadata['x-macp-agent-id']).toBeUndefined();
     });
   });
 
-  // ===========================================================================
-  // Metadata — dev header
-  // ===========================================================================
-  describe('dev header in metadata', () => {
-    it('sets x-macp-agent-id when useDevHeader is true and no bearer token', async () => {
-      service = new RuntimeCredentialResolverService(
-        buildConfig({
-          runtimeBearerToken: '',
-          runtimeUseDevHeader: true,
-          runtimeDevAgentId: 'dev-agent',
-        }) as AppConfigService,
-      );
-
-      const result = await service.resolve({ runtimeKind: 'rust' });
-
-      expect(result.metadata['x-macp-agent-id']).toBe('dev-agent');
-      expect(result.metadata.authorization).toBeUndefined();
-    });
-
-    it('uses the resolved sender for x-macp-agent-id (not the config value)', async () => {
-      service = new RuntimeCredentialResolverService(
-        buildConfig({
-          runtimeBearerToken: '',
-          runtimeUseDevHeader: true,
-          runtimeDevAgentId: 'default-agent',
-        }) as AppConfigService,
-      );
-
-      const result = await service.resolve({
-        runtimeKind: 'rust',
-        participant: { id: 'agent-42' },
+  describe('dev header fallback', () => {
+    it('falls back to x-macp-agent-id when no bearer token and dev header is enabled', async () => {
+      const service = makeService({
+        runtimeBearerToken: '',
+        runtimeUseDevHeader: true,
+        runtimeDevAgentId: 'control-plane',
       });
-
-      expect(result.metadata['x-macp-agent-id']).toBe('agent-42');
+      const result = await service.resolve({ runtimeKind: 'rust' });
+      expect(result.metadata['x-macp-agent-id']).toBe('control-plane');
+      expect(result.metadata.authorization).toBeUndefined();
     });
   });
 
-  // ===========================================================================
-  // No auth headers
-  // ===========================================================================
-  describe('no auth headers', () => {
-    it('returns empty metadata when no bearer token and useDevHeader is false', async () => {
-      service = new RuntimeCredentialResolverService(
-        buildConfig({
-          runtimeBearerToken: '',
-          runtimeUseDevHeader: false,
-        }) as AppConfigService,
-      );
-
+  describe('no credentials configured', () => {
+    it('returns empty metadata when neither bearer token nor dev header is enabled', async () => {
+      const service = makeService({});
       const result = await service.resolve({ runtimeKind: 'rust' });
-
       expect(result.metadata).toEqual({});
+    });
+  });
+
+  describe('invariant — no per-sender overrides (direct-agent-auth §Invariants)', () => {
+    it('ignores any extra fields in the request (participant, requester, fallbackSender)', async () => {
+      const service = makeService({ runtimeBearerToken: 'obs-token' });
+      const result = await service.resolve({
+        runtimeKind: 'rust',
+        // Cast — these fields are no longer accepted, but the resolver must tolerate them
+        // during the deprecation window without routing on them.
+        ...( { participant: { id: 'risk-agent' }, requester: { actorId: 'user-1' } } as unknown as Record<string, unknown>),
+      } as { runtimeKind: string });
+      expect(result.metadata.authorization).toBe('Bearer obs-token');
+      expect(result.sender).toBe('control-plane');
     });
   });
 });

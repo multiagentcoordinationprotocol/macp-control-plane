@@ -1,57 +1,15 @@
-export type ExecutionMode = 'live' | 'replay' | 'sandbox';
-
-export type PayloadEncoding = 'json' | 'text' | 'base64' | 'proto';
-
-export interface ProtoPayload {
-  typeName: string;
-  value: Record<string, unknown>;
-}
-
-export interface PayloadEnvelopeInput {
-  encoding: PayloadEncoding;
-  mediaType?: string;
-  json?: Record<string, unknown>;
-  text?: string;
-  base64?: string;
-  proto?: ProtoPayload;
-}
-
-export interface RootRef {
-  uri: string;
-  name?: string;
-}
+export type ExecutionMode = 'live' | 'sandbox';
 
 export interface ParticipantRef {
+  /** Bare sender string — must match the agent's identity in the runtime. */
   id: string;
-  role?: string;
-  transportIdentity?: string;
-  metadata?: Record<string, unknown>;
 }
 
-export interface KickoffMessage {
-  from: string;
-  to?: string[];
-  kind: 'request' | 'broadcast' | 'proposal' | 'context';
-  messageType: string;
-  payload?: Record<string, unknown>;
-  payloadEnvelope?: PayloadEnvelopeInput;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ExecutionRequester {
-  actorId?: string;
-  actorType?: 'user' | 'service' | 'system';
-}
-
-export interface RunMessageInput {
-  from: string;
-  to?: string[];
-  messageType: string;
-  payload?: Record<string, unknown>;
-  payloadEnvelope?: PayloadEnvelopeInput;
-  metadata?: Record<string, unknown>;
-}
-
+/**
+ * Populated on the `policy.expectedCommitments[]` projection when (future) runtime
+ * `PolicyResolved` events supply commitment expectations. Not part of the inbound
+ * HTTP contract — the control-plane does not accept commitments from callers.
+ */
 export interface ExpectedCommitment {
   id: string;
   title?: string;
@@ -60,33 +18,64 @@ export interface ExpectedCommitment {
   policyRef?: string;
 }
 
-export interface ExecutionRequest {
+export interface ExecutionRequester {
+  actorId?: string;
+  actorType?: 'user' | 'service' | 'system';
+}
+
+/**
+ * Scenario-agnostic cancellation callback (Option A, direct-agent-auth plan §Cancellation design).
+ * Points to a per-initiator HTTP endpoint the control-plane POSTs when the UI cancels a run.
+ * `bearer` is optional and opaque; the initiator validates it.
+ */
+export interface CancelCallback {
+  url: string;
+  bearer?: string;
+}
+
+/**
+ * Scenario-agnostic run descriptor — the control-plane accepts only these fields.
+ *
+ * No scenario-specific fields cross this boundary: no kickoff templates, no policy hints,
+ * no participant roles, no initiator designation. Agents authenticate to the runtime
+ * directly; the control-plane is an observer. See direct-agent-auth.md §Generic contracts.
+ */
+export interface RunDescriptor {
   mode: ExecutionMode;
   runtime: {
     kind: string;
     version?: string;
   };
   session: {
+    /**
+     * Optional caller-allocated session id. Must satisfy runtime validator
+     * (UUID v4/v7 or base64url 22+ chars). When omitted, control-plane allocates a UUID v4.
+     */
+    sessionId?: string;
     modeName: string;
     modeVersion: string;
     configurationVersion: string;
+    /** Opaque; control-plane never interprets it. */
     policyVersion?: string;
     ttlMs: number;
-    initiatorParticipantId?: string;
+    /** Bare sender strings; for audit / projection only. */
     participants: ParticipantRef[];
-    roots?: RootRef[];
-    context?: Record<string, unknown>;
-    contextEnvelope?: PayloadEnvelopeInput;
+    /**
+     * Opaque metadata bag. Reserved keys:
+     *   - `source`, `sourceRef`          — scenario provenance tags (for filtering)
+     *   - `environment`, `scenarioRef`   — filter facets
+     *   - `cancelCallback`               — CancelCallback (Option A)
+     *   - `cancellationDelegated`        — boolean (Option B — control-plane may cancel directly)
+     */
     metadata?: Record<string, unknown>;
-    commitments?: ExpectedCommitment[];
   };
-  kickoff?: KickoffMessage[];
   execution?: {
     idempotencyKey?: string;
     tags?: string[];
     requester?: ExecutionRequester;
   };
 }
+
 
 export type RunStatus =
   | 'queued'

@@ -40,24 +40,29 @@ MACP distinguishes between two communication planes:
 └─────────────────────────────────────┘    └───────────────────────────────────┘
 ```
 
-## Request Flow
+## Request Flow (observer mode — direct-agent-auth 2026-04-15)
 
 ```
-POST /runs
+POST /runs  (RunDescriptor — scenario-agnostic; see CP-1)
   → RunsController.createRun()
     → RunExecutorService.launch()
-      → RunManagerService.createRun()        [status: queued]
+      → resolveSessionId()                   [UUID v4 allocated or validated]
+      → RunManagerService.createRun(request, sessionId)   [status: queued]
+      → return { runId, sessionId, status, traceId }      [synchronous 202]
       → async execute():
         → markStarted()                      [status: starting]
         → provider.initialize()              [gRPC — mode validation]
-        → provider.openSession()             [gRPC — bidirectional stream]
-        → await sessionAck                   [runtime confirms session]
+        → pollForOpenSession(sessionId)      [GetSession backoff 100ms→1s]
+            ↑ waits for initiator agent to emit SessionStart directly
         → bindSession()                      [status: binding_session]
-        → send kickoff messages              [through stream handle]
-        → handle.closeWrite()                [half-close write side]
+        → provider.subscribeSession()        [gRPC — read-only StreamSession]
         → markRunning()                      [status: running]
         → StreamConsumerService.start()      [begins event consumption]
 ```
+
+The control-plane **never** calls `Send` — agents drive the session via their own gRPC
+connection with their own Bearer tokens (RFC-MACP-0004 §4). The read-only observer stream
+filters envelopes by `sessionId` and never writes a frame.
 
 ## Event Pipeline
 
@@ -72,30 +77,13 @@ Runtime gRPC stream
         → StreamHubService.publishEvent (SSE → live UI subscribers)
 ```
 
-## Message Flow (POST /runs/:id/messages)
+## Message / Signal / Context — removed (direct-agent-auth CP-5/6/7)
 
-```
-POST /runs/:id/messages
-  → RunsController.sendMessage()
-    → RunExecutorService.sendMessage()
-      → validate run state (binding_session | running)
-      → resolve modeName from RuntimeSession
-      → encode payload (JSON or proto via ProtoRegistryService)
-      → provider.send()                    [gRPC unary]
-      → emit message.sent canonical event
-      → return { messageId, ack }
-```
-
-## Signal Flow (POST /runs/:id/signal)
-
-```
-POST /runs/:id/signal
-  → RunsController.sendSignal()
-    → RunExecutorService.sendSignal()
-      → validate run state (running)
-      → provider.send() with empty sessionId + modeName    [ambient plane]
-      → emit message.sent canonical event (subject.kind = 'signal')
-```
+The `POST /runs/:id/{messages,signal,context}` endpoints were removed 2026-04-15 and now
+return `410 Gone` with `errorCode: ENDPOINT_REMOVED`. Agents emit envelopes directly
+against the runtime using `macp-sdk-python` / `macp-sdk-typescript`. The control-plane
+observes those envelopes through its read-only `subscribeSession` stream and normalizes
+them into canonical events via the pipeline above.
 
 ## Layer Map
 
@@ -153,9 +141,9 @@ All modes terminate with `Commitment` (from `macp.v1.CommitmentPayload`).
 
 ## Key Design Decisions
 
-1. **Scenario-agnostic**: Accepts only fully resolved `ExecutionRequest` — no scenario resolution.
+1. **Scenario-agnostic**: Accepts only a generic `RunDescriptor` — scenario-specific fields (`kickoff[]`, `participants[].role`, `policyHints`, `commitments[]`, `initiatorParticipantId`) are rejected with 400 via `forbidNonWhitelisted: true`.
 2. **Three-layer event pipeline**: Raw → canonical → projections. Raw preserves original data; canonical provides normalized, typed view.
-3. **Bidirectional streaming**: `openSession()` returns a `RuntimeSessionHandle` with send/events/closeWrite/abort.
+3. **Observer-only streaming**: `subscribeSession({runId, sessionId})` returns a read-only `RuntimeSessionHandle` — `events` async iterable + `abort()`. No `send()`.
 4. **Transactional event persistence**: Sequence allocation + persistence in single DB transaction.
 5. **Snake_case → camelCase normalization**: ProtoRegistryService converts Python/JSON snake_case to protobufjs camelCase.
 6. **Proto-encoded payloads**: Real runtime requires proto encoding; control plane supports JSON fallback for testing.

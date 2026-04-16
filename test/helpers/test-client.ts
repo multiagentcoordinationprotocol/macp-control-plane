@@ -22,6 +22,7 @@ export class TestClient {
 
   async createRun(body: Record<string, unknown> | object): Promise<{
     runId: string;
+    sessionId: string;
     status: string;
     traceId?: string;
   }> {
@@ -51,28 +52,9 @@ export class TestClient {
     });
   }
 
-  // ── Messaging ──────────────────────────────────────────────────
-
-  async sendMessage(
-    runId: string,
-    body: Record<string, unknown> | object
-  ): Promise<{ messageId: string; ack: Record<string, unknown> | object }> {
-    return this.request('POST', `/runs/${runId}/messages`, { body });
-  }
-
-  async sendSignal(
-    runId: string,
-    body: Record<string, unknown> | object
-  ): Promise<Record<string, unknown> | object> {
-    return this.request('POST', `/runs/${runId}/signal`, { body });
-  }
-
-  async updateContext(
-    runId: string,
-    body: Record<string, unknown> | object
-  ): Promise<Record<string, unknown> | object> {
-    return this.request('POST', `/runs/${runId}/context`, { body });
-  }
+  // ── Removed endpoints (direct-agent-auth CP-5/6/7) ─────────────
+  // sendMessage / sendSignal / updateContext are deleted. Agents emit envelopes
+  // directly via macp-sdk-python / macp-sdk-typescript.
 
   // ── Events ─────────────────────────────────────────────────────
 

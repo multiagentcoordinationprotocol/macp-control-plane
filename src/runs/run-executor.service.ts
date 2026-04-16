@@ -1,13 +1,12 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { ExecutionRequest, RunMessageInput } from '../contracts/control-plane';
+import { RunDescriptor } from '../contracts/control-plane';
 import { ArtifactService } from '../artifacts/artifact.service';
 import { AppConfigService } from '../config/app-config.service';
 import { RunEventService } from '../events/run-event.service';
 import { StreamHubService } from '../events/stream-hub.service';
 import { AppException } from '../errors/app-exception';
 import { ErrorCode } from '../errors/error-codes';
-import { ProtoRegistryService } from '../runtime/proto-registry.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { TraceService } from '../telemetry/trace.service';
@@ -16,6 +15,32 @@ import { RuntimeSessionRepository } from '../storage/runtime-session.repository'
 import { RunManagerService } from './run-manager.service';
 import { StreamConsumerService } from './stream-consumer.service';
 
+/**
+ * Validates a sessionId against the runtime's session validator (UUID v4/v7 or base64url 22+).
+ * Mirrors `runtime/src/session.rs:146-177`.
+ */
+function isValidSessionId(candidate: string): boolean {
+  // UUID v4 / v7 pattern (any version 1-7).
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-7][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (uuid.test(candidate)) return true;
+  // base64url, 22+ chars.
+  const base64url = /^[A-Za-z0-9_-]{22,}$/;
+  return base64url.test(candidate);
+}
+
+/**
+ * Observer-mode RunExecutor (direct-agent-auth CP-4).
+ *
+ * Flow:
+ *  1. `launch(descriptor)` — creates the run record, pre-allocates sessionId if omitted,
+ *     returns `{runId, sessionId}` immediately.
+ *  2. Async `execute()` — initializes the runtime, polls `GetSession(sessionId)` until the
+ *     initiator agent opens it, then subscribes to a read-only `StreamSession` and passes
+ *     the handle to `StreamConsumerService`.
+ *
+ * **No `Send` call anywhere.** Agents emit their own envelopes. The control-plane never
+ * forges SessionStart, kickoff, messages, signals, or context updates.
+ */
 @Injectable()
 export class RunExecutorService {
   private readonly logger = new Logger(RunExecutorService.name);
@@ -25,7 +50,6 @@ export class RunExecutorService {
     private readonly runRepository: RunRepository,
     private readonly runtimeSessionRepository: RuntimeSessionRepository,
     private readonly runtimeRegistry: RuntimeProviderRegistry,
-    private readonly protoRegistry: ProtoRegistryService,
     private readonly traceService: TraceService,
     private readonly eventService: RunEventService,
     private readonly artifactService: ArtifactService,
@@ -35,7 +59,7 @@ export class RunExecutorService {
     private readonly instrumentation: InstrumentationService
   ) {}
 
-  async validate(request: ExecutionRequest) {
+  async validate(request: RunDescriptor) {
     const errors: string[] = [];
     const warnings: string[] = [];
 
@@ -52,15 +76,8 @@ export class RunExecutorService {
       errors.push('session.modeName is required');
     }
 
-    if (request.kickoff) {
-      for (const msg of request.kickoff) {
-        if (!msg.messageType) {
-          errors.push('kickoff message is missing messageType');
-        }
-        if (!msg.from) {
-          errors.push('kickoff message is missing from');
-        }
-      }
+    if (request.session.sessionId && !isValidSessionId(request.session.sessionId)) {
+      errors.push('session.sessionId must be a UUID v4/v7 or base64url 22+ chars');
     }
 
     let runtimeInfo: { reachable: boolean; supportedModes: string[]; capabilities?: unknown } = {
@@ -101,285 +118,149 @@ export class RunExecutorService {
     };
   }
 
-  async launch(request: ExecutionRequest) {
-    if (request.mode === 'replay') {
-      throw new BadRequestException('Use /runs/:id/replay for replay mode. POST /runs launches live or sandbox executions.');
+  /**
+   * Allocate a sessionId if the caller didn't provide one, validating when they did.
+   * The sessionId is returned to the caller so they can propagate it to agents via bootstrap.
+   */
+  private resolveSessionId(request: RunDescriptor): string {
+    if (request.session.sessionId) {
+      if (!isValidSessionId(request.session.sessionId)) {
+        throw new BadRequestException(
+          'session.sessionId must be a UUID v4/v7 or base64url 22+ chars',
+        );
+      }
+      return request.session.sessionId;
     }
-
-    const run = await this.runManager.createRun(request);
-    void this.execute(run.id, request);
-    return run;
+    return randomUUID();
   }
 
+  async launch(request: RunDescriptor): Promise<{ run: Awaited<ReturnType<RunManagerService['createRun']>>; sessionId: string }> {
+    const sessionId = this.resolveSessionId(request);
+    const requestWithSessionId: RunDescriptor = {
+      ...request,
+      session: { ...request.session, sessionId }
+    };
+    const run = await this.runManager.createRun(requestWithSessionId, sessionId);
+    void this.execute(run.id, requestWithSessionId, sessionId);
+    return { run, sessionId };
+  }
+
+  /**
+   * UI-initiated cancel.
+   *
+   * Option A (default): proxy to the initiator agent's `cancelCallback` over HTTP.
+   * Option B (scenario opt-in, `metadata.cancellationDelegated: true`): call
+   * `provider.cancelSession()` directly with the control-plane's own identity.
+   *
+   * See direct-agent-auth.md §Cancellation design.
+   */
   async cancel(runId: string, reason?: string) {
     const run = await this.runManager.getRun(runId);
     if (!run.runtimeSessionId) {
       throw new BadRequestException('run has no bound runtime session');
     }
-    const provider = this.runtimeRegistry.get(run.runtimeKind);
-    const session = await this.runtimeSessionRepository.findByRunId(runId);
-    const requesterId = session?.initiatorParticipantId ?? undefined;
-    try {
-      await provider.cancelSession({
-        runId,
-        runtimeSessionId: run.runtimeSessionId,
-        reason,
-        requesterId
-      });
-    } catch (cancelError) {
-      // Session may have already expired on the runtime — proceed with local cancellation
-      this.logger.warn(
-        `cancelSession failed for run ${runId} (proceeding with local cancel): ${cancelError instanceof Error ? cancelError.message : String(cancelError)}`
+
+    const metadata = (run.metadata ?? {}) as Record<string, unknown>;
+    const delegated = Boolean(metadata.cancellationDelegated);
+    const cancelCallback = metadata.cancelCallback as { url?: string; bearer?: string } | undefined;
+
+    if (delegated) {
+      // Option B: scenario policy delegates cancellation authority to the control-plane.
+      const provider = this.runtimeRegistry.get(run.runtimeKind);
+      try {
+        await provider.cancelSession({
+          runId,
+          runtimeSessionId: run.runtimeSessionId,
+          reason,
+        });
+      } catch (cancelError) {
+        this.logger.warn(
+          `cancelSession failed for run ${runId} (proceeding with local cancel): ${cancelError instanceof Error ? cancelError.message : String(cancelError)}`,
+        );
+      }
+    } else if (cancelCallback?.url) {
+      // Option A: proxy UI cancel to the initiator agent's local callback.
+      await this.invokeCancelCallback(runId, cancelCallback, reason);
+    } else {
+      // No callback registered and no policy delegation — fail closed.
+      throw new BadRequestException(
+        'run has no cancelCallback in metadata and no policy delegation — cannot cancel from control-plane',
       );
     }
+
     const cancelled = await this.runManager.markCancelled(runId);
     await this.streamConsumer.stop(runId);
     this.streamHub.complete(runId);
     return cancelled;
   }
 
-  async sendMessage(runId: string, params: RunMessageInput) {
-    return this.traceService.withRunSpan(
-      runId,
-      'runtime.send_message',
-      { 'macp.message_type': params.messageType, 'macp.sender': params.from },
-      () => this.sendMessageInner(runId, params)
-    );
-  }
-
-  private async sendMessageInner(runId: string, params: RunMessageInput) {
-    const run = await this.runManager.getRun(runId);
-    if (!run.runtimeSessionId || !['binding_session', 'running'].includes(run.status)) {
-      throw new BadRequestException('run is not ready to accept session-bound messages');
-    }
-
-    const executionRequest = run.metadata?.executionRequest as ExecutionRequest | undefined;
-    const runtimeSession = await this.runtimeSessionRepository.findByRunId(runId);
-    const modeName = runtimeSession?.modeName ?? executionRequest?.session?.modeName;
-    if (!modeName) {
-      throw new BadRequestException('run does not have a bound mode name');
-    }
-
-    const provider = this.runtimeRegistry.get(run.runtimeKind);
-    let payload: Buffer;
-    if (params.payloadEnvelope) {
-      payload = this.protoRegistry.encodePayloadEnvelope(params.payloadEnvelope);
-    } else {
-      // Try to auto-encode plain JSON payload as proto using the known type for this mode+messageType
-      const knownType = this.protoRegistry.getKnownTypeName(modeName, params.messageType);
-      if (knownType && params.payload) {
-        payload = this.protoRegistry.encodeMessage(knownType, params.payload as Record<string, unknown>);
-      } else {
-        payload = Buffer.from(JSON.stringify(params.payload ?? {}), 'utf8');
-      }
-    }
-
-    this.logger.log(
-      `sendMessage debug: type=${params.messageType} mode=${modeName} payloadLen=${payload.length} payloadHex=${payload.toString('hex').slice(0, 80)} sessionId=${run.runtimeSessionId}`
-    );
-
-    const sendResult = await provider.send({
-      runId,
-      runtimeSessionId: run.runtimeSessionId,
-      modeName,
-      from: params.from,
-      to: params.to ?? [],
-      messageType: params.messageType,
-      payload,
-      payloadDescriptor: (params.payloadEnvelope as unknown as Record<string, unknown>) ?? params.payload ?? {},
-      metadata: params.metadata
-    });
-
-    if (!sendResult.ack.ok && sendResult.ack.error) {
-      const errorCode = sendResult.ack.error.code;
-
-      // Map runtime policy errors to specific error codes
-      if (errorCode === 'POLICY_DENIED') {
+  private async invokeCancelCallback(
+    runId: string,
+    callback: { url?: string; bearer?: string },
+    reason?: string,
+  ): Promise<void> {
+    if (!callback.url) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.config.cancelCallbackTimeoutMs);
+    try {
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (callback.bearer) headers.authorization = `Bearer ${callback.bearer}`;
+      const body = JSON.stringify({ runId, reason: reason ?? null });
+      const res = await fetch(callback.url, {
+        method: 'POST',
+        headers,
+        body,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
         throw new AppException(
-          ErrorCode.POLICY_DENIED,
-          `Policy denied commitment: ${sendResult.ack.error.message}`,
-          403
+          ErrorCode.INTERNAL_ERROR,
+          `cancel callback ${callback.url} returned ${res.status}`,
+          502,
         );
       }
-      if (errorCode === 'UNKNOWN_POLICY_VERSION') {
-        throw new AppException(
-          ErrorCode.UNKNOWN_POLICY_VERSION,
-          `Unknown policy version: ${sendResult.ack.error.message}`,
-          400
-        );
-      }
-      if (errorCode === 'INVALID_POLICY_DEFINITION') {
-        throw new AppException(
-          ErrorCode.INVALID_POLICY_DEFINITION,
-          `Invalid policy definition: ${sendResult.ack.error.message}`,
-          400
-        );
-      }
-      if (errorCode === 'SESSION_ALREADY_EXISTS') {
-        throw new AppException(
-          ErrorCode.SESSION_ALREADY_EXISTS,
-          `Session already exists: ${sendResult.ack.error.message}`,
-          409
-        );
-      }
-
+    } catch (error) {
+      if (error instanceof AppException) throw error;
       throw new AppException(
-        ErrorCode.MESSAGE_SEND_FAILED,
-        `Runtime rejected message: [${errorCode}] ${sendResult.ack.error.message}`,
-        errorCode === 'INVALID_SESSION_ID' ? 400 : 502
+        ErrorCode.INTERNAL_ERROR,
+        `cancel callback ${callback.url} failed: ${error instanceof Error ? error.message : String(error)}`,
+        502,
       );
+    } finally {
+      clearTimeout(timer);
     }
-
-    await this.eventService.emitControlPlaneEvents(runId, [
-      {
-        ts: new Date().toISOString(),
-        type: 'message.sent',
-        source: { kind: 'control-plane', name: 'run-executor' },
-        subject: { kind: 'message', id: sendResult.envelope.messageId },
-        data: {
-          sessionId: run.runtimeSessionId,
-          sender: params.from,
-          to: params.to ?? [],
-          messageType: params.messageType,
-          ack: sendResult.ack,
-          payloadDescriptor: (params.payloadEnvelope as unknown as Record<string, unknown>) ?? params.payload ?? {},
-          metadata: params.metadata ?? {}
-        }
-      }
-    ]);
-
-    this.instrumentation.outboundMessagesTotal.inc({ category: 'message', status: 'sent' });
-    return { messageId: sendResult.envelope.messageId, ack: sendResult.ack };
   }
 
-  async sendSignal(runId: string, params: {
-    from: string;
-    to: string[];
-    messageType: string;
-    payload?: Record<string, unknown>;
-  }) {
+  async clone(runId: string, overrides?: { tags?: string[] }): Promise<{ run: Awaited<ReturnType<RunManagerService['createRun']>>; sessionId: string }> {
     const run = await this.runManager.getRun(runId);
-    if (!run.runtimeSessionId || run.status !== 'running') {
-      throw new BadRequestException('run is not in running state');
-    }
-    const provider = this.runtimeRegistry.get(run.runtimeKind);
-
-    // Runtime requires empty session_id and mode for Signal messages
-    const sendResult = await provider.send({
-      runId,
-      runtimeSessionId: '',
-      modeName: '',
-      from: params.from,
-      to: params.to,
-      messageType: 'Signal',
-      payload: Buffer.from(JSON.stringify(params.payload ?? {}), 'utf8'),
-      payloadDescriptor: params.payload
-    });
-
-    // Check ack for errors
-    if (!sendResult.ack.ok && sendResult.ack.error) {
-      throw new AppException(
-        ErrorCode.SIGNAL_DISPATCH_FAILED,
-        `Runtime rejected signal: [${sendResult.ack.error.code}] ${sendResult.ack.error.message}`,
-        502
-      );
-    }
-
-    await this.eventService.emitControlPlaneEvents(runId, [
-      {
-        ts: new Date().toISOString(),
-        type: 'message.sent',
-        source: { kind: 'control-plane', name: 'run-executor' },
-        subject: { kind: 'signal', id: sendResult.envelope.messageId },
-        data: {
-          sessionId: run.runtimeSessionId,
-          sender: params.from,
-          to: params.to,
-          messageType: params.messageType,
-          ack: sendResult.ack,
-          payloadDescriptor: params.payload ?? {}
-        }
-      }
-    ]);
-
-    return { messageId: sendResult.envelope.messageId, ack: sendResult.ack };
-  }
-
-  async updateContext(runId: string, dto: { from: string; context: Record<string, unknown> }) {
-    const run = await this.runManager.getRun(runId);
-    if (!run.runtimeSessionId || run.status !== 'running') {
-      throw new BadRequestException('run is not in running state');
-    }
-    const provider = this.runtimeRegistry.get(run.runtimeKind);
-
-    const sendResult = await provider.send({
-      runId,
-      runtimeSessionId: '',
-      modeName: '',
-      from: dto.from,
-      to: [],
-      messageType: 'ContextUpdate',
-      payload: Buffer.from(JSON.stringify(dto.context), 'utf8'),
-      payloadDescriptor: dto.context
-    });
-
-    if (!sendResult.ack.ok && sendResult.ack.error) {
-      throw new AppException(
-        ErrorCode.CONTEXT_UPDATE_FAILED,
-        `Runtime rejected context update: [${sendResult.ack.error.code}] ${sendResult.ack.error.message}`,
-        502
-      );
-    }
-
-    await this.eventService.emitControlPlaneEvents(runId, [
-      {
-        ts: new Date().toISOString(),
-        type: 'message.sent',
-        source: { kind: 'control-plane', name: 'run-executor' },
-        subject: { kind: 'message', id: sendResult.envelope.messageId },
-        data: {
-          sessionId: run.runtimeSessionId,
-          sender: dto.from,
-          to: [],
-          messageType: 'ContextUpdate',
-          ack: sendResult.ack,
-          payloadDescriptor: dto.context
-        }
-      }
-    ]);
-
-    return { messageId: sendResult.envelope.messageId, ack: sendResult.ack };
-  }
-
-  async clone(runId: string, overrides?: { tags?: string[]; context?: Record<string, unknown> }) {
-    const run = await this.runManager.getRun(runId);
-    const executionRequest = run.metadata?.executionRequest as ExecutionRequest | undefined;
+    const executionRequest = run.metadata?.executionRequest as RunDescriptor | undefined;
     if (!executionRequest) {
       throw new BadRequestException('run does not have an execution request in metadata');
     }
 
-    const cloned = { ...executionRequest };
+    const cloned: RunDescriptor = { ...executionRequest };
     if (overrides?.tags) {
       cloned.execution = { ...cloned.execution, tags: overrides.tags };
     }
-    if (overrides?.context) {
-      cloned.session = { ...cloned.session, context: overrides.context };
-    }
-    // Clear idempotency key so clone creates a new run
+    // Always clear idempotency key + sessionId so clone creates a new run+session.
     if (cloned.execution) {
       delete (cloned.execution as unknown as Record<string, unknown>).idempotencyKey;
     }
+    cloned.session = { ...cloned.session, sessionId: undefined };
 
     return this.launch(cloned);
   }
 
-  private async execute(runId: string, request: ExecutionRequest): Promise<void> {
+  /**
+   * Observer execute loop. Runs async after POST /runs returns.
+   * Never writes envelopes; polls GetSession, then subscribes read-only.
+   */
+  private async execute(runId: string, request: RunDescriptor, sessionId: string): Promise<void> {
     const provider = this.runtimeRegistry.get(request.runtime.kind);
     const deadlineMs = this.config.runtimeRequestTimeoutMs;
     try {
       await this.runManager.markStarted(runId, request);
 
-      // Mode validation via Initialize
       const initResult = await this.traceService.withSpan(
         'runtime.initialize',
         {
@@ -410,108 +291,37 @@ export class RunExecutorService {
         );
       }
 
-      // Open unified bidirectional session stream
-      const handle = provider.openSession({ runId, execution: request });
-
-      // Wait for SessionStart confirmation
-      const session = await this.traceService.withSpan(
-        'runtime.open_session',
-        {
-          run_id: runId,
-          runtime_kind: request.runtime.kind,
-          mode_name: request.session.modeName
-        },
-        async () => handle.sessionAck
+      // Poll GetSession until the initiator agent opens it, or timeout.
+      const snapshot = await this.traceService.withSpan(
+        'runtime.await_session_open',
+        { run_id: runId, runtime_kind: request.runtime.kind, session_id: sessionId },
+        async () => this.pollForOpenSession(provider, runId, sessionId)
       );
 
-      await this.runManager.bindSession(runId, request, session, initResult.capabilities as unknown as Record<string, unknown>);
+      await this.runManager.bindSession(
+        runId,
+        request,
+        {
+          runtimeSessionId: sessionId,
+          initiator: snapshot.initiator ?? '',
+          ack: { sessionState: snapshot.state },
+        },
+        initResult.capabilities as unknown as Record<string, unknown>,
+      );
 
-      // Send kickoff messages via unary Send RPC (more reliable than bidi stream)
-      for (const message of request.kickoff ?? []) {
-        try {
-          const payload = message.payloadEnvelope
-            ? this.protoRegistry.encodePayloadEnvelope(message.payloadEnvelope)
-            : Buffer.from(JSON.stringify(message.payload ?? {}), 'utf8');
+      // Subscribe read-only — never writes.
+      const handle = provider.subscribeSession({ runId, runtimeSessionId: sessionId });
 
-          const sendResult = await this.retryKickoff(async () => {
-            return provider.send({
-              runId,
-              runtimeSessionId: session.runtimeSessionId,
-              modeName: request.session.modeName,
-              from: message.from,
-              to: message.to ?? [],
-              messageType: message.messageType,
-              payload,
-              payloadDescriptor: (message.payloadEnvelope as unknown as Record<string, unknown>) ?? message.payload ?? {},
-              metadata: { kickoff: true }
-            });
-          });
+      const run = await this.runManager.markRunning(runId, sessionId);
+      const subscriberId = snapshot.initiator ?? '';
 
-          const kickoffMessageId = sendResult.envelope?.messageId ?? randomUUID();
-
-          await this.eventService.emitControlPlaneEvents(runId, [
-            {
-              ts: new Date().toISOString(),
-              type: 'message.sent',
-              source: { kind: 'control-plane', name: 'run-executor' },
-              subject: { kind: 'message', id: kickoffMessageId },
-              data: {
-                sessionId: session.runtimeSessionId,
-                sender: message.from,
-                to: message.to,
-                messageType: message.messageType,
-                kind: message.kind,
-                ack: {
-                  ok: sendResult.ack.ok,
-                  duplicate: sendResult.ack.duplicate,
-                  messageId: kickoffMessageId,
-                  sessionId: session.runtimeSessionId,
-                  acceptedAtUnixMs: sendResult.ack.acceptedAtUnixMs ?? Date.now(),
-                  sessionState: sendResult.ack.sessionState ?? 'SESSION_STATE_OPEN'
-                },
-                payloadDescriptor: (message.payloadEnvelope as unknown as Record<string, unknown>) ?? message.payload ?? {}
-              }
-            }
-          ]);
-        } catch (kickoffError) {
-          this.logger.error(
-            `kickoff message failed for run ${runId}, messageType=${message.messageType}: ${kickoffError instanceof Error ? kickoffError.message : String(kickoffError)}`
-          );
-          await this.eventService.emitControlPlaneEvents(runId, [
-            {
-              ts: new Date().toISOString(),
-              type: 'message.send_failed',
-              source: { kind: 'control-plane', name: 'run-executor' },
-              subject: { kind: 'message', id: message.messageType },
-              data: {
-                sessionId: session.runtimeSessionId,
-                sender: message.from,
-                to: message.to,
-                messageType: message.messageType,
-                error: kickoffError instanceof Error ? kickoffError.message : String(kickoffError)
-              }
-            }
-          ]);
-          handle.abort();
-          await this.runManager.markFailed(runId, kickoffError);
-          return;
-        }
-      }
-
-      // Half-close the write side — kickoff phase done
-      handle.closeWrite();
-
-      const run = await this.runManager.markRunning(runId, session.runtimeSessionId);
-      const subscriberId = session.initiator;
-
-      // Pass the session handle to the stream consumer
       await this.streamConsumer.start({
         runId,
         execution: request,
         runtimeKind: request.runtime.kind,
-        runtimeSessionId: session.runtimeSessionId,
+        runtimeSessionId: sessionId,
         subscriberId,
-        sessionHandle: handle
+        sessionHandle: handle,
       });
 
       if (run.traceId) {
@@ -537,66 +347,91 @@ export class RunExecutorService {
           }
         ]);
       }
+      this.instrumentation.outboundMessagesTotal.inc({ category: 'observer', status: 'subscribed' });
     } catch (error) {
-      // Surface policy-specific errors with appropriate error codes
-      try {
-        if (error instanceof Error) {
-          const msg = error.message ?? '';
-          if (msg.includes('UNKNOWN_POLICY_VERSION')) {
-            await this.runManager.markFailed(
-              runId,
-              new AppException(ErrorCode.UNKNOWN_POLICY_VERSION, `Unknown policy version: ${msg}`, 400)
-            );
-            return;
-          }
-          if (msg.includes('POLICY_DENIED')) {
-            await this.runManager.markFailed(
-              runId,
-              new AppException(ErrorCode.POLICY_DENIED, `Policy denied: ${msg}`, 403)
-            );
-            return;
-          }
-          if (msg.includes('INVALID_POLICY_DEFINITION')) {
-            await this.runManager.markFailed(
-              runId,
-              new AppException(ErrorCode.INVALID_POLICY_DEFINITION, `Invalid policy definition: ${msg}`, 400)
-            );
-            return;
-          }
-          if (msg.includes('SESSION_ALREADY_EXISTS') || msg.includes('SessionAlreadyExists')) {
-            await this.runManager.markFailed(
-              runId,
-              new AppException(ErrorCode.SESSION_ALREADY_EXISTS, `Session already exists: ${msg}`, 409)
-            );
-            return;
-          }
-        }
-        await this.runManager.markFailed(runId, error);
-      } catch (markFailedError) {
-        this.logger.error(
-          `failed to mark run ${runId} as failed (run may have been deleted): ${markFailedError instanceof Error ? markFailedError.message : String(markFailedError)}`
-        );
-      }
+      await this.handleExecuteError(runId, error);
     }
   }
 
-  private async retryKickoff<T>(fn: () => Promise<T>): Promise<T> {
-    const maxRetries = this.config.kickoffMaxRetries;
-    let lastError: unknown;
+  private async pollForOpenSession(
+    provider: ReturnType<RuntimeProviderRegistry['get']>,
+    runId: string,
+    sessionId: string,
+  ) {
+    const startedAt = Date.now();
+    const base = this.config.sessionPollBaseMs;
+    const max = this.config.sessionPollMaxMs;
+    const totalTimeout = this.config.sessionPollTimeoutMs;
+    let attempt = 0;
 
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    while (Date.now() - startedAt < totalTimeout) {
       try {
-        return await fn();
-      } catch (error) {
-        lastError = error;
-        if (attempt < maxRetries) {
-          const backoffMs = Math.min(250 * 2 ** attempt, 5000);
-          const jitter = Math.random() * backoffMs * 0.2;
-          this.logger.warn(`kickoff attempt ${attempt + 1} failed, retrying in ${Math.round(backoffMs + jitter)}ms`);
-          await new Promise((resolve) => setTimeout(resolve, backoffMs + jitter));
+        const snapshot = await provider.getSession({ runId, runtimeSessionId: sessionId });
+        if (snapshot.state === 'SESSION_STATE_OPEN') return snapshot;
+        if (snapshot.state === 'SESSION_STATE_EXPIRED') {
+          throw new AppException(
+            ErrorCode.SESSION_EXPIRED,
+            `session ${sessionId} expired before any agent opened it`,
+            400,
+          );
+        }
+      } catch (pollError) {
+        if (pollError instanceof AppException) throw pollError;
+        // getSession failing with NotFound is normal while the agent hasn't called SessionStart yet.
+        this.logger.debug(
+          `getSession(${sessionId}) attempt ${attempt + 1}: ${pollError instanceof Error ? pollError.message : String(pollError)}`,
+        );
+      }
+      attempt += 1;
+      const delay = Math.min(base * 2 ** (attempt - 1), max);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+
+    throw new AppException(
+      ErrorCode.RUNTIME_TIMEOUT,
+      `timed out after ${totalTimeout}ms waiting for initiator agent to open session ${sessionId}`,
+      504,
+    );
+  }
+
+  private async handleExecuteError(runId: string, error: unknown): Promise<void> {
+    try {
+      if (error instanceof Error) {
+        const msg = error.message ?? '';
+        if (msg.includes('UNKNOWN_POLICY_VERSION')) {
+          await this.runManager.markFailed(
+            runId,
+            new AppException(ErrorCode.UNKNOWN_POLICY_VERSION, `Unknown policy version: ${msg}`, 400),
+          );
+          return;
+        }
+        if (msg.includes('POLICY_DENIED')) {
+          await this.runManager.markFailed(
+            runId,
+            new AppException(ErrorCode.POLICY_DENIED, `Policy denied: ${msg}`, 403),
+          );
+          return;
+        }
+        if (msg.includes('INVALID_POLICY_DEFINITION')) {
+          await this.runManager.markFailed(
+            runId,
+            new AppException(ErrorCode.INVALID_POLICY_DEFINITION, `Invalid policy definition: ${msg}`, 400),
+          );
+          return;
+        }
+        if (msg.includes('SESSION_ALREADY_EXISTS') || msg.includes('SessionAlreadyExists')) {
+          await this.runManager.markFailed(
+            runId,
+            new AppException(ErrorCode.SESSION_ALREADY_EXISTS, `Session already exists: ${msg}`, 409),
+          );
+          return;
         }
       }
+      await this.runManager.markFailed(runId, error);
+    } catch (markFailedError) {
+      this.logger.error(
+        `failed to mark run ${runId} as failed (run may have been deleted): ${markFailedError instanceof Error ? markFailedError.message : String(markFailedError)}`,
+      );
     }
-    throw lastError;
   }
 }

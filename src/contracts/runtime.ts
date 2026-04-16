@@ -1,7 +1,6 @@
 import {
   CanonicalEvent,
-  ExecutionRequest,
-  ParticipantRef,
+  RunDescriptor,
   SessionState
 } from './control-plane';
 
@@ -44,6 +43,11 @@ export interface RawRuntimeEvent {
   receivedAt: string;
   envelope?: RuntimeEnvelope;
   sessionSnapshot?: RuntimeSessionSnapshot;
+  /**
+   * Retained on the raw-event discriminator for the normalizer's shape-union, but
+   * the control-plane observer no longer produces `send-ack` events — all outbound
+   * envelopes are emitted by agents directly against the runtime. See direct-agent-auth.md §Invariants.
+   */
   ack?: RuntimeAck;
   streamStatus?: {
     status: 'opened' | 'reconnecting' | 'closed';
@@ -76,39 +80,15 @@ export interface RuntimeInitializeResult {
   instructions?: string;
 }
 
-export interface RuntimeStartSessionRequest {
-  runId: string;
-  execution: ExecutionRequest;
-}
-
-export interface RuntimeStartSessionResult {
+/**
+ * Result shape returned once the observer has confirmed the session is OPEN.
+ * `initiator` is learned from the runtime's session metadata (GetSession response),
+ * never chosen by the control-plane.
+ */
+export interface RuntimeSessionOpenResult {
   runtimeSessionId: string;
   initiator: string;
   ack: RuntimeAck;
-}
-
-export interface RuntimeSendRequest {
-  runId: string;
-  runtimeSessionId: string;
-  modeName: string;
-  from: string;
-  to: string[];
-  messageType: string;
-  payload: Buffer;
-  payloadDescriptor?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
-}
-
-export interface RuntimeSendResult {
-  ack: RuntimeAck;
-  envelope: RuntimeEnvelope;
-}
-
-export interface RuntimeStreamSessionRequest {
-  runId: string;
-  runtimeSessionId: string;
-  modeName: string;
-  subscriberId: string;
 }
 
 export interface RuntimeGetSessionRequest {
@@ -176,24 +156,24 @@ export interface RuntimeCallOptions {
   deadline?: Date;
 }
 
-/** Request to open a unified bidirectional session stream */
-export interface RuntimeOpenSessionRequest {
+/** Request to subscribe to an existing session's event stream (read-only). */
+export interface RuntimeSubscribeSessionRequest {
   runId: string;
-  execution: ExecutionRequest;
+  runtimeSessionId: string;
 }
 
-/** Handle to an open bidirectional StreamSession */
+/**
+ * Handle to an observer-only StreamSession.
+ *
+ * **Invariant (direct-agent-auth §Invariants #5):** the control-plane NEVER writes envelopes
+ * on this stream. There is intentionally no `send()` on this handle. Agents authenticate
+ * to the runtime directly with their own Bearer tokens and emit their own envelopes.
+ */
 export interface RuntimeSessionHandle {
-  /** Send an envelope through the open stream */
-  send(envelope: RuntimeEnvelope): void;
-  /** Async iterable of raw events from the stream */
+  /** Async iterable of raw events from the stream. */
   events: AsyncIterable<RawRuntimeEvent>;
-  /** Close the write side (after all kickoff messages sent) */
-  closeWrite(): void;
-  /** Abort the stream immediately */
+  /** Abort the stream immediately. */
   abort(): void;
-  /** The ack derived from the SessionStart echo (resolved after first response) */
-  sessionAck: Promise<RuntimeStartSessionResult>;
 }
 
 /** Stored runtime capabilities from Initialize response */
@@ -207,21 +187,31 @@ export interface RuntimeCapabilities {
   policyRegistry?: { registerPolicy?: boolean; listPolicies?: boolean; listChanged?: boolean };
 }
 
+/**
+ * Observer-only runtime provider surface.
+ *
+ * The control-plane does not call `Send` for any reason — agents authenticate directly to
+ * the runtime (RFC-MACP-0004 §4). The provider's job is to initialize, observe, inspect,
+ * and (conditionally) cancel sessions. See direct-agent-auth.md §Invariants.
+ */
 export interface RuntimeProvider {
   readonly kind: string;
 
   initialize(req: RuntimeInitializeRequest, opts?: RuntimeCallOptions): Promise<RuntimeInitializeResult>;
 
-  /** Open a unified bidirectional session — replaces startSession() + streamSession() */
-  openSession(req: RuntimeOpenSessionRequest): RuntimeSessionHandle;
+  /** Attach a read-only StreamSession observer. Never writes. */
+  subscribeSession(req: RuntimeSubscribeSessionRequest): RuntimeSessionHandle;
 
-  /** @deprecated Use openSession() for new session creation. Kept for backward compat. */
-  startSession(req: RuntimeStartSessionRequest, opts?: RuntimeCallOptions): Promise<RuntimeStartSessionResult>;
-  send(req: RuntimeSendRequest): Promise<RuntimeSendResult>;
-  /** @deprecated Use openSession().events for streaming. Kept for reconnection fallback. */
-  streamSession(req: RuntimeStreamSessionRequest): AsyncIterable<RawRuntimeEvent>;
   getSession(req: RuntimeGetSessionRequest): Promise<RuntimeSessionSnapshot>;
+
+  /**
+   * Policy-delegated cancellation (direct-agent-auth §Cancellation design — Option B).
+   * Only called when the run's metadata records `cancellationDelegated: true`. Default
+   * cancellation flow (Option A) proxies through the initiator agent's callback and
+   * does not invoke this method.
+   */
   cancelSession(req: RuntimeCancelSessionRequest): Promise<RuntimeCancelResult>;
+
   getManifest(): Promise<RuntimeManifestResult>;
   listModes(): Promise<RuntimeModeDescriptor[]>;
   listRoots(): Promise<RuntimeRootDescriptor[]>;
@@ -273,18 +263,18 @@ export interface RuntimeListPoliciesRequest {
 
 // ── Credential types ────────────────────────────────────────────────
 
+/**
+ * Single-bearer credential resolver (CP-9). The control-plane has exactly one
+ * runtime identity — its own least-privilege Bearer token with `can_start_sessions: false`.
+ * Per-sender token maps were removed in direct-agent-auth Phase 4.
+ */
 export interface RuntimeCredentialResolver {
-  resolve(req: {
-    runtimeKind: string;
-    requester?: { actorId?: string; actorType?: string };
-    participant?: ParticipantRef;
-    fallbackSender?: string;
-  }): Promise<RuntimeCredentials>;
+  resolve(req: { runtimeKind: string }): Promise<RuntimeCredentials>;
 }
 
 export interface NormalizeContext {
   knownParticipants: Set<string>;
-  execution: ExecutionRequest;
+  execution: RunDescriptor;
   runtimeSessionId: string;
 }
 

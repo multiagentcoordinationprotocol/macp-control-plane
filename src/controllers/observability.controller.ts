@@ -48,7 +48,7 @@ export class ObservabilityController {
   @ApiCreatedResponse({ description: 'Artifact created.' })
   async createArtifact(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: CreateArtifactDto
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CreateArtifactDto
   ) {
     await this.runManager.getRun(id);
     const artifact = await this.artifactService.register({

@@ -24,7 +24,7 @@ export class WebhookController {
   @ApiOperation({ summary: 'Register a new webhook subscription.' })
   @ApiBody({ type: CreateWebhookDto })
   async createWebhook(
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: CreateWebhookDto
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CreateWebhookDto
   ) {
     return this.webhookService.register({
       url: body.url,
@@ -44,7 +44,7 @@ export class WebhookController {
   @ApiBody({ type: UpdateWebhookDto })
   async updateWebhook(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: UpdateWebhookDto
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateWebhookDto
   ) {
     return this.webhookService.update(id, body);
   }

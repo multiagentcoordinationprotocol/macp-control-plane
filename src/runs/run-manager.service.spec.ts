@@ -11,9 +11,11 @@ import { TraceService } from '../telemetry/trace.service';
 import { WebhookService } from '../webhooks/webhook.service';
 import { MetricsService } from '../metrics/metrics.service';
 import { EventRepository } from '../storage/event.repository';
-import { ExecutionRequest, RunStateProjection } from '../contracts/control-plane';
+import { RunDescriptor, RunStateProjection } from '../contracts/control-plane';
 
-function makeExecutionRequest(overrides?: Partial<ExecutionRequest>): ExecutionRequest {
+const FIXED_SESSION_ID = '123e4567-e89b-42d3-a456-426614174000';
+
+function makeExecutionRequest(overrides?: Partial<RunDescriptor>): RunDescriptor {
   return {
     mode: 'live',
     runtime: { kind: 'rust', version: '0.1.0' },
@@ -22,10 +24,7 @@ function makeExecutionRequest(overrides?: Partial<ExecutionRequest>): ExecutionR
       modeVersion: '1.0.0',
       configurationVersion: '1.0.0',
       ttlMs: 30000,
-      participants: [
-        { id: 'agent-a', role: 'proposer' },
-        { id: 'agent-b', role: 'evaluator' },
-      ],
+      participants: [{ id: 'agent-a' }, { id: 'agent-b' }],
     },
     ...overrides,
   };
@@ -163,7 +162,7 @@ describe('RunManagerService', () => {
         execution: { idempotencyKey: 'key-123' },
       });
 
-      const result = await service.createRun(request);
+      const result = await service.createRun(request, FIXED_SESSION_ID);
 
       expect(result).toBe(existing);
       expect(runRepository.findByIdempotencyKey).toHaveBeenCalledWith('key-123');
@@ -176,7 +175,7 @@ describe('RunManagerService', () => {
       runRepository.create.mockResolvedValue(created as any);
 
       const request = makeExecutionRequest();
-      const result = await service.createRun(request);
+      const result = await service.createRun(request, FIXED_SESSION_ID);
 
       expect(result).toEqual(created);
       expect(runRepository.findByIdempotencyKey).not.toHaveBeenCalled();
@@ -198,7 +197,7 @@ describe('RunManagerService', () => {
       const request = makeExecutionRequest({
         execution: { idempotencyKey: 'new-key' },
       });
-      const result = await service.createRun(request);
+      const result = await service.createRun(request, FIXED_SESSION_ID);
 
       expect(result).toEqual(created);
       expect(runRepository.findByIdempotencyKey).toHaveBeenCalledWith('new-key');

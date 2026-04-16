@@ -73,7 +73,7 @@ export class RunInsightsController {
   @ApiBody({ type: CompareRunsDto })
   @ApiOkResponse({ type: RunComparisonResultDto })
   async compareRuns(
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: CompareRunsDto
+    @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CompareRunsDto
   ) {
     return this.insightsService.compareRuns(body.leftRunId, body.rightRunId);
   }

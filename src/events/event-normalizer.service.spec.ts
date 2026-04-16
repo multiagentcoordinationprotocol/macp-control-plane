@@ -2,7 +2,7 @@ import { EventNormalizerService } from './event-normalizer.service';
 import { ProtoRegistryService } from '../runtime/proto-registry.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { RawRuntimeEvent, NormalizeContext } from '../contracts/runtime';
-import { ExecutionRequest } from '../contracts/control-plane';
+import { RunDescriptor } from '../contracts/control-plane';
 
 function makeContext(overrides?: Partial<NormalizeContext>): NormalizeContext {
   return {
@@ -18,7 +18,7 @@ function makeContext(overrides?: Partial<NormalizeContext>): NormalizeContext {
         ttlMs: 30000,
         participants: [{ id: 'agent-a' }, { id: 'agent-b' }],
       },
-    } as ExecutionRequest,
+    } as RunDescriptor,
     ...overrides,
   };
 }

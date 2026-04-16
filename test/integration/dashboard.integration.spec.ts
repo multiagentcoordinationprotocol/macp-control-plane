@@ -1,6 +1,7 @@
 import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { decisionHappyScript } from '../fixtures/decision-mode';
 import { testRuntimeKind } from '../helpers/runtime-kind';
+import { waitFor } from '../helpers/wait-for';
 
 describe('Dashboard Overview (integration)', () => {
   let ctx: TestAppContext;
@@ -76,13 +77,17 @@ describe('Dashboard Overview (integration)', () => {
         modeVersion: '1.0.0',
         configurationVersion: '1.0.0',
         ttlMs: 60000,
-        participants: [{ id: 'alice', role: 'proposer' }]
+        participants: [{ id: 'alice' }]
       }
     });
 
-    await sleep(500);
-
-    const result = await ctx.client.request('GET', '/dashboard/overview');
+    const result = await waitFor(
+      async () => {
+        const r = (await ctx.client.request('GET', '/dashboard/overview')) as any;
+        return r.kpis.totalRuns >= 1 ? r : null;
+      },
+      { timeoutMs: 3000, label: 'dashboard KPIs' },
+    );
     expect(result.kpis.totalRuns).toBeGreaterThanOrEqual(1);
   });
 
@@ -122,15 +127,19 @@ describe('Dashboard Agent Metrics (integration)', () => {
         configurationVersion: '1.0.0',
         ttlMs: 60000,
         participants: [
-          { id: 'agent-a', role: 'proposer' },
-          { id: 'agent-b', role: 'evaluator' }
+          { id: 'agent-a' },
+          { id: 'agent-b' },
         ]
       }
     });
 
-    await sleep(1000);
-
-    const result = await ctx.client.request('GET', '/dashboard/agents/metrics');
+    const result = await waitFor(
+      async () => {
+        const r = (await ctx.client.request('GET', '/dashboard/agents/metrics')) as any[];
+        return Array.isArray(r) ? r : null;
+      },
+      { timeoutMs: 3000, label: 'agent metrics' },
+    );
     expect(Array.isArray(result)).toBe(true);
 
     if (result.length > 0) {
@@ -165,16 +174,19 @@ describe('Run Listing Filters (integration)', () => {
         modeVersion: '1.0.0',
         configurationVersion: '1.0.0',
         ttlMs: 60000,
-        participants: [{ id: 'alice', role: 'proposer' }],
+        participants: [{ id: 'alice' }],
         metadata: { environment: 'staging' }
       },
       execution: { tags: ['env-test'] }
     });
 
-    await sleep(500);
-
-    // Filter by environment — should not error
-    const result = await ctx.client.listRuns({ environment: 'staging' }) as any;
+    const result = await waitFor(
+      async () => {
+        const r = (await ctx.client.listRuns({ environment: 'staging' })) as any;
+        return r.data ? r : null;
+      },
+      { timeoutMs: 3000, label: 'environment filter' },
+    );
     expect(result).toHaveProperty('data');
   });
 
@@ -191,6 +203,3 @@ describe('Run Listing Filters (integration)', () => {
   });
 });
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}

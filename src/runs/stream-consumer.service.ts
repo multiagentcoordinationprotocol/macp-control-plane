@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { ExecutionRequest } from '../contracts/control-plane';
+import { RunDescriptor } from '../contracts/control-plane';
 import { RawRuntimeEvent, RuntimeSessionHandle } from '../contracts/runtime';
 import { AppConfigService } from '../config/app-config.service';
 import { EventNormalizerService } from '../events/event-normalizer.service';
@@ -45,7 +45,7 @@ export class StreamConsumerService implements OnModuleDestroy {
 
   async start(params: {
     runId: string;
-    execution: ExecutionRequest;
+    execution: RunDescriptor;
     runtimeKind: string;
     runtimeSessionId: string;
     subscriberId: string;
@@ -118,7 +118,7 @@ export class StreamConsumerService implements OnModuleDestroy {
     marker: ActiveStream,
     params: {
       runId: string;
-      execution: ExecutionRequest;
+      execution: RunDescriptor;
       runtimeKind: string;
       runtimeSessionId: string;
       subscriberId: string;
@@ -128,7 +128,9 @@ export class StreamConsumerService implements OnModuleDestroy {
   ): Promise<void> {
     const provider = this.runtimeRegistry.get(params.runtimeKind);
     const context = {
-      knownParticipants: new Set(params.execution.session.participants.map((item) => item.id)),
+      knownParticipants: new Set<string>(
+        params.execution.session.participants.map((item) => item.id),
+      ),
       execution: params.execution,
       runtimeSessionId: params.runtimeSessionId
     };

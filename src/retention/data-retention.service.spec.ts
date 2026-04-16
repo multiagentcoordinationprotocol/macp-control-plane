@@ -142,9 +142,7 @@ describe('DataRetentionService', () => {
       mockDb.select.mockReturnValue(makeSelectChain([]));
       mockDb.delete.mockReturnValue(makeDeleteChain(0));
 
-      const before = Date.now();
       await service.runRetention();
-      const after = Date.now();
 
       // Verify the advisory lock was used (proving the method ran)
       expect(mockDatabase.tryAdvisoryLock).toHaveBeenCalled();

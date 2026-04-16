@@ -1,15 +1,18 @@
-import { ExecutionRequest } from '../../src/contracts/control-plane';
+import { RunDescriptor } from '../../src/contracts/control-plane';
 import {
-  makeStreamOpened,
   makeStreamEnvelope,
   RuntimeScript,
-  ScriptedEvent
 } from '../helpers/scripted-mock-runtime.provider';
 import { testRuntimeKind } from '../helpers/runtime-kind';
 
-export function decisionModeRequest(
-  overrides?: Partial<ExecutionRequest>
-): ExecutionRequest {
+/**
+ * Observer-mode fixtures (direct-agent-auth CP-3).
+ *
+ * No `kickoff[]` — agents emit the Proposal/Evaluation/Vote/Commitment sequence
+ * directly against the runtime. Tests verify the control-plane's observer sees them
+ * and projects them correctly.
+ */
+export function decisionModeRequest(overrides?: Partial<RunDescriptor>): RunDescriptor {
   return {
     mode: 'sandbox',
     runtime: { kind: testRuntimeKind() },
@@ -19,149 +22,123 @@ export function decisionModeRequest(
       configurationVersion: '1.0.0',
       policyVersion: 'policy.default',
       ttlMs: 60000,
-      participants: [
-        { id: 'proposer', role: 'proposer' },
-        { id: 'evaluator', role: 'evaluator' },
-        { id: 'voter', role: 'voter' }
-      ]
+      participants: [{ id: 'proposer' }, { id: 'evaluator' }, { id: 'voter' }],
     },
-    kickoff: [
-      {
-        from: 'proposer',
-        to: ['evaluator', 'voter'],
-        kind: 'proposal',
-        messageType: 'Proposal',
-        payload: {
-          proposalId: 'prop-1',
-          option: 'Deploy feature X',
-          rationale: 'Integration test proposal'
-        }
-      }
-    ],
     execution: {
-      tags: ['integration-test', 'decision-mode']
+      tags: ['integration-test', 'decision-mode'],
     },
-    ...overrides
+    ...overrides,
   };
 }
 
-/**
- * Happy path: Proposal -> Evaluation -> Vote -> Commitment -> resolved
- * The runtime echoes messages as stream-envelope events and triggers
- * Commitment after receiving a Vote.
- */
+/** Happy path: Proposal → Evaluation → Vote → Commitment (outcome_positive: true). */
 export function decisionHappyScript(): RuntimeScript {
   return {
     supportedModes: ['macp.mode.decision.v1'],
+    initiator: 'proposer',
     events: [
-      // Stream opens immediately
-      { event: makeStreamOpened() },
-      // After evaluator sends Evaluation, echo it back
       {
-        trigger: { afterMessageType: 'Evaluation', fromParticipant: 'evaluator' },
-        event: makeStreamEnvelope(
-          'macp.mode.decision.v1',
-          'Evaluation',
-          'evaluator',
-          { recommendation: 'APPROVE', rationale: 'Looks good' }
-        )
-      },
-      // After voter sends Vote, echo it and then emit Commitment
-      {
-        trigger: { afterMessageType: 'Vote', fromParticipant: 'voter' },
-        event: makeStreamEnvelope(
-          'macp.mode.decision.v1',
-          'Vote',
-          'voter',
-          { vote: 'approve', rationale: 'Approved' }
-        )
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Proposal', 'proposer', {
+          proposalId: 'prop-1',
+          option: 'Deploy feature X',
+          rationale: 'Integration test proposal',
+        }),
       },
       {
-        trigger: { afterMessageType: 'Vote' },
-        delayMs: 50,
-        event: makeStreamEnvelope(
-          'macp.mode.decision.v1',
-          'Commitment',
-          'system',
-          {
-            proposalId: 'prop-1',
-            outcome: 'approved',
-            finalized: true,
-            outcome_positive: true,
-            rationale: 'Consensus reached'
-          }
-        )
-      }
-    ]
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Evaluation', 'evaluator', {
+          recommendation: 'APPROVE',
+          rationale: 'Looks good',
+        }),
+      },
+      {
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Vote', 'voter', {
+          vote: 'approve',
+          rationale: 'Approved',
+        }),
+      },
+      {
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Commitment', 'proposer', {
+          proposalId: 'prop-1',
+          outcome: 'approved',
+          finalized: true,
+          outcome_positive: true,
+          rationale: 'Consensus reached',
+        }),
+      },
+    ],
   };
 }
 
-/**
- * Objection flow: Proposal -> Objection -> revised Proposal -> Evaluation -> Vote -> Commitment
- */
+/** Objection flow: Proposal → Objection → revised Proposal → Evaluation → Vote → Commitment. */
 export function decisionObjectionScript(): RuntimeScript {
   return {
     supportedModes: ['macp.mode.decision.v1'],
+    initiator: 'proposer',
     events: [
-      { event: makeStreamOpened() },
       {
-        trigger: { afterMessageType: 'Objection', fromParticipant: 'evaluator' },
-        event: makeStreamEnvelope(
-          'macp.mode.decision.v1',
-          'Objection',
-          'evaluator',
-          { severity: 'high', reason: 'Needs revision' }
-        )
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Proposal', 'proposer', {
+          proposalId: 'prop-2',
+          option: 'Deploy feature Y',
+          rationale: 'Initial',
+        }),
       },
       {
-        trigger: { afterMessageType: 'Evaluation', fromParticipant: 'evaluator' },
-        event: makeStreamEnvelope(
-          'macp.mode.decision.v1',
-          'Evaluation',
-          'evaluator',
-          { recommendation: 'APPROVE', rationale: 'Revised version approved' }
-        )
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Objection', 'evaluator', {
+          severity: 'high',
+          reason: 'Needs revision',
+        }),
       },
       {
-        trigger: { afterMessageType: 'Vote', fromParticipant: 'voter' },
-        event: makeStreamEnvelope(
-          'macp.mode.decision.v1',
-          'Vote',
-          'voter',
-          { vote: 'approve' }
-        )
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Evaluation', 'evaluator', {
+          recommendation: 'APPROVE',
+          rationale: 'Revised version approved',
+        }),
       },
       {
-        trigger: { afterMessageType: 'Vote' },
-        delayMs: 50,
-        event: makeStreamEnvelope(
-          'macp.mode.decision.v1',
-          'Commitment',
-          'system',
-          { proposalId: 'prop-2', outcome: 'approved', finalized: true, outcome_positive: true }
-        )
-      }
-    ]
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Vote', 'voter', { vote: 'approve' }),
+      },
+      {
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Commitment', 'proposer', {
+          proposalId: 'prop-2',
+          outcome: 'approved',
+          finalized: true,
+          outcome_positive: true,
+        }),
+      },
+    ],
   };
 }
 
-/**
- * Rejection: Proposal -> Vote (reject) -> session does not resolve (no Commitment)
- */
+/** Rejection: Proposal → Vote(reject) — no Commitment emitted. */
 export function decisionRejectionScript(): RuntimeScript {
   return {
     supportedModes: ['macp.mode.decision.v1'],
+    initiator: 'proposer',
     events: [
-      { event: makeStreamOpened() },
       {
-        trigger: { afterMessageType: 'Vote', fromParticipant: 'voter' },
-        event: makeStreamEnvelope(
-          'macp.mode.decision.v1',
-          'Vote',
-          'voter',
-          { vote: 'reject', rationale: 'Insufficient evidence' }
-        )
-      }
-    ]
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Proposal', 'proposer', {
+          proposalId: 'prop-3',
+          option: 'Deploy feature Z',
+          rationale: 'Speculative',
+        }),
+      },
+      {
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Vote', 'voter', {
+          vote: 'reject',
+          rationale: 'Insufficient evidence',
+        }),
+      },
+    ],
   };
 }

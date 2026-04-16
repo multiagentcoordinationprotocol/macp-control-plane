@@ -1,14 +1,11 @@
-import { ExecutionRequest } from '../../src/contracts/control-plane';
+import { RunDescriptor } from '../../src/contracts/control-plane';
 import {
-  makeStreamOpened,
   makeStreamEnvelope,
-  RuntimeScript
+  RuntimeScript,
 } from '../helpers/scripted-mock-runtime.provider';
 import { testRuntimeKind } from '../helpers/runtime-kind';
 
-export function handoffModeRequest(
-  overrides?: Partial<ExecutionRequest>
-): ExecutionRequest {
+export function handoffModeRequest(overrides?: Partial<RunDescriptor>): RunDescriptor {
   return {
     mode: 'sandbox',
     runtime: { kind: testRuntimeKind() },
@@ -18,92 +15,67 @@ export function handoffModeRequest(
       configurationVersion: '1.0.0',
       policyVersion: 'policy.default',
       ttlMs: 60000,
-      participants: [
-        { id: 'source', role: 'source_agent' },
-        { id: 'target', role: 'target_agent' }
-      ]
+      participants: [{ id: 'source' }, { id: 'target' }],
     },
-    kickoff: [
-      {
-        from: 'source',
-        to: ['target'],
-        kind: 'request',
-        messageType: 'HandoffOffer',
-        payload: {
-          reason: 'Specialized knowledge required',
-          contextSummary: 'User needs help with billing'
-        }
-      }
-    ],
-    execution: {
-      tags: ['integration-test', 'handoff-mode']
-    },
-    ...overrides
+    execution: { tags: ['integration-test', 'handoff-mode'] },
+    ...overrides,
   };
 }
 
-/** Successful handoff: HandoffOffer -> HandoffContext -> HandoffAccept -> Commitment */
 export function handoffAcceptScript(): RuntimeScript {
   return {
     supportedModes: ['macp.mode.handoff.v1'],
+    initiator: 'source',
     events: [
-      { event: makeStreamOpened() },
       {
-        trigger: {
-          afterMessageType: 'HandoffContext',
-          fromParticipant: 'source'
-        },
-        event: makeStreamEnvelope(
-          'macp.mode.handoff.v1',
-          'HandoffContext',
-          'source',
-          { conversationHistory: ['msg1', 'msg2'], metadata: { topic: 'billing' } }
-        )
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.handoff.v1', 'HandoffOffer', 'source', {
+          reason: 'Specialized knowledge required',
+          contextSummary: 'User needs help with billing',
+        }),
       },
       {
-        trigger: {
-          afterMessageType: 'HandoffAccept',
-          fromParticipant: 'target'
-        },
-        event: makeStreamEnvelope(
-          'macp.mode.handoff.v1',
-          'HandoffAccept',
-          'target',
-          { acceptedAt: new Date().toISOString() }
-        )
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.handoff.v1', 'HandoffContext', 'source', {
+          conversationHistory: ['msg1', 'msg2'],
+          metadata: { topic: 'billing' },
+        }),
       },
       {
-        trigger: { afterMessageType: 'HandoffAccept' },
-        delayMs: 50,
-        event: makeStreamEnvelope(
-          'macp.mode.handoff.v1',
-          'Commitment',
-          'system',
-          { outcome: 'handoff_completed', finalized: true, outcome_positive: true }
-        )
-      }
-    ]
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.handoff.v1', 'HandoffAccept', 'target', {
+          acceptedAt: new Date().toISOString(),
+        }),
+      },
+      {
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.handoff.v1', 'Commitment', 'source', {
+          outcome: 'handoff_completed',
+          finalized: true,
+          outcome_positive: true,
+        }),
+      },
+    ],
   };
 }
 
-/** Declined handoff: HandoffOffer -> HandoffDecline */
 export function handoffDeclineScript(): RuntimeScript {
   return {
     supportedModes: ['macp.mode.handoff.v1'],
+    initiator: 'source',
     events: [
-      { event: makeStreamOpened() },
       {
-        trigger: {
-          afterMessageType: 'HandoffDecline',
-          fromParticipant: 'target'
-        },
-        event: makeStreamEnvelope(
-          'macp.mode.handoff.v1',
-          'HandoffDecline',
-          'target',
-          { reason: 'Not available' }
-        )
-      }
-    ]
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.handoff.v1', 'HandoffOffer', 'source', {
+          reason: 'Specialized',
+        }),
+      },
+      {
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.handoff.v1', 'HandoffDecline', 'target', {
+          reason: 'Not available',
+        }),
+      },
+    ],
   };
 }

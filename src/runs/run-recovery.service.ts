@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
-import { ExecutionRequest } from '../contracts/control-plane';
+import { RunDescriptor } from '../contracts/control-plane';
 import { AppConfigService } from '../config/app-config.service';
 import { DatabaseService } from '../db/database.service';
 import { RunEventService } from '../events/run-event.service';
@@ -86,7 +86,7 @@ export class RunRecoveryService implements OnApplicationBootstrap {
     lastEventSeq: number;
     metadata: Record<string, unknown>;
   }): Promise<void> {
-    const executionRequest = run.metadata?.executionRequest as ExecutionRequest | undefined;
+    const executionRequest = run.metadata?.executionRequest as RunDescriptor | undefined;
     if (!executionRequest) {
       throw new Error('missing executionRequest in run metadata');
     }
@@ -97,11 +97,10 @@ export class RunRecoveryService implements OnApplicationBootstrap {
       throw new Error('no runtime session ID available for recovery');
     }
 
-    const subscriberId =
-      session?.initiatorParticipantId ??
-      executionRequest.session.initiatorParticipantId ??
-      executionRequest.session.participants[0]?.id ??
-      'control-plane';
+    // Observer mode: the initiator sender is whatever the runtime's session metadata said
+    // at bind time (stored in runtime_sessions.initiator_participant_id). The control-plane
+    // no longer chooses an initiator from the descriptor.
+    const subscriberId = session?.initiatorParticipantId ?? 'control-plane';
 
     // Promote binding_session → running if needed
     if (run.status === 'binding_session') {

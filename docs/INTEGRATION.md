@@ -6,73 +6,47 @@
 2. Register it as a NestJS provider in `app.module.ts`
 3. Add it to `RuntimeProviderRegistry` so it can be looked up by `kind`
 
-Key methods to implement:
-- `initialize()` — protocol version negotiation
-- `openSession()` — bidirectional session stream (preferred)
-- `send()` — unary message send with ack
-- `getSession()` / `cancelSession()` — session management
-- `getManifest()` / `listModes()` — metadata
+Key methods to implement (observer-only surface, post direct-agent-auth):
+- `initialize()` — protocol version negotiation.
+- `subscribeSession({runId, runtimeSessionId})` — read-only `StreamSession` observer; returns `{events, abort}`. **Never writes envelopes.**
+- `getSession()` — poll for session state (used by the observer's `pollForOpenSession` loop).
+- `cancelSession()` — only called when `run.metadata.cancellationDelegated === true` (Option B in direct-agent-auth §Cancellation design).
+- `getManifest()` / `listModes()` / `listRoots()` / `health()` — metadata.
+- `registerPolicy()` / `unregisterPolicy()` / `getPolicy()` / `listPolicies()` — governance (RFC-MACP-0012).
 
-## Sending Messages from External Agents
+## Agents emit envelopes directly
 
-Agents communicate with active runs via HTTP:
+Agents authenticate to the runtime with their own Bearer tokens (RFC-MACP-0004 §4) and emit envelopes via `macp-sdk-python` / `macp-sdk-typescript`:
 
-```bash
-# Send an Evaluation (JSON payload — for mock runtime)
-curl -X POST http://localhost:3001/runs/{runId}/messages \
-  -H 'Authorization: Bearer <key>' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "from": "evaluator",
-    "to": ["proposer"],
-    "messageType": "Evaluation",
-    "payload": { "recommendation": "APPROVE", "confidence": 0.95 }
-  }'
+```python
+# Python example (direct-agent-auth)
+from macp_sdk import MacpClient, AuthConfig, DecisionSession, new_session_id
 
-# Send an Evaluation (proto-encoded — required by real Rust runtime)
-curl -X POST http://localhost:3001/runs/{runId}/messages \
-  -H 'Authorization: Bearer <key>' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "from": "evaluator",
-    "to": ["proposer"],
-    "messageType": "Evaluation",
-    "payloadEnvelope": {
-      "encoding": "proto",
-      "proto": {
-        "typeName": "macp.modes.decision.v1.EvaluationPayload",
-        "value": {
-          "proposalId": "p-1",
-          "recommendation": "APPROVE",
-          "confidence": 0.95,
-          "reason": "Meets all criteria"
-        }
-      }
-    }
-  }'
+auth = AuthConfig.for_bearer(os.environ["MACP_BEARER_TOKEN"], expected_sender="evaluator")
+client = MacpClient(target="runtime.internal:50051", secure=True, auth=auth)
+await client.initialize()
+session = DecisionSession(client, session_id=bootstrap.run.sessionId, auth=auth)
+stream = session.open_stream()
+await session.evaluate(proposal_id="prop-1", recommendation="APPROVE", confidence=0.95)
 ```
 
-## Sending Signals (Ambient Plane)
+```typescript
+// TypeScript example
+import { MacpClient, Auth, DecisionSession } from 'macp-sdk-typescript';
 
-Signals are non-binding, non-session-bound messages for observability:
-
-```bash
-curl -X POST http://localhost:3001/runs/{runId}/signal \
-  -H 'Authorization: Bearer <key>' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "from": "evaluator",
-    "to": ["proposer"],
-    "messageType": "Signal",
-    "payload": {
-      "signalType": "progress",
-      "data": "Starting analysis",
-      "confidence": 0.0
-    }
-  }'
+const client = new MacpClient({
+  address: 'runtime.internal:50051',
+  secure: true,
+  auth: Auth.bearer(process.env.MACP_BEARER_TOKEN!, { expectedSender: 'evaluator' }),
+});
+await client.initialize();
+const session = new DecisionSession(client, { sessionId: bootstrap.run.sessionId });
+const stream = session.openStream();
+await session.evaluate({ proposalId: 'prop-1', recommendation: 'APPROVE', confidence: 0.95 });
 ```
 
-Signals use empty `sessionId` and `modeName` at the gRPC level. They do NOT enter session history but appear as `signal.emitted` canonical events when echoed by the runtime.
+The control-plane's old HTTP escalation endpoints (`POST /runs/:id/{messages,signal,context}`)
+now return **410 Gone**. See `../plans/../../ui-console/plans/direct-agent-auth.md` for the full migration story.
 
 ## Consuming SSE Streams
 
@@ -114,7 +88,8 @@ Replay modes: `timed` (proportional timing), `step` (all at once), `instant` (no
 1. Add proto definitions under `proto/macp/modes/{mode}/v1/`
 2. Update `MESSAGE_TYPE_MAP` in `src/runtime/proto-registry.service.ts`
 3. Update `deriveEventType()` in `src/events/event-normalizer.service.ts` for new message types
-4. Add mode to `src/runtime/mock-runtime.provider.ts` supported modes list
+4. Add mode to `test/helpers/scripted-mock-runtime.provider.ts` supported modes list (integration tests)
+5. Add a projection reducer branch in `src/projection/projection.service.ts` — the `projection-coverage.spec.ts` invariant will fail CI otherwise
 
 ## Webhooks
 
@@ -147,7 +122,7 @@ INTEGRATION_RUNTIME=remote RUNTIME_ADDRESS=127.0.0.1:50051 npm run test:integrat
 ./scripts/run-e2e.sh decision
 ```
 
-See `test/` for TypeScript integration tests and `test-agents/` for Python agent harnesses.
+See `test/integration/` for TypeScript integration tests. Python agent harnesses now live in the `examples-service` repo (not `test-agents/`).
 
 ## Environment Variables
 

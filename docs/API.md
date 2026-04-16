@@ -15,12 +15,30 @@ curl -H 'Authorization: Bearer <api-key>' http://localhost:3001/runs
 
 Rate limit: 100 requests per 60 seconds per client. Payload limit: 1MB.
 
+### Upstream runtime auth (observer identity)
+
+The control-plane has **exactly one** runtime identity — its own least-privilege
+Bearer token. It never calls `Send`; agents authenticate to the runtime directly
+(RFC-MACP-0004 §4). Its entry in the runtime's `MACP_AUTH_TOKENS_JSON` must have
+`can_start_sessions: false`.
+
+| Env var | Purpose |
+| --- | --- |
+| `RUNTIME_BEARER_TOKEN` | Control-plane's own observer Bearer token. Used for every runtime call (`Initialize`, `GetSession`, `StreamSession`, `ListPolicies`, etc.). |
+| `RUNTIME_USE_DEV_HEADER` | Local dev fallback — sends `x-macp-agent-id: <RUNTIME_DEV_AGENT_ID>` when no Bearer token is configured. Requires `MACP_ALLOW_DEV_SENDER_HEADER=1` on the runtime. |
+
+Per-agent tokens are **not** held by the control-plane. They live in the scenario
+layer (examples-service) and flow to agents via their bootstrap.
+
 ---
 
 ## Runs
 
 ### `POST /runs`
-Create and launch a runtime execution run.
+
+Create and launch a runtime execution run. Accepts only a **scenario-agnostic `RunDescriptor`**.
+Scenario-specific fields (`kickoff[]`, `participants[].role`, `commitments[]`,
+`policyHints`, `initiatorParticipantId`) are rejected with 400.
 
 ```bash
 curl -X POST http://localhost:3001/runs \
@@ -35,17 +53,13 @@ curl -X POST http://localhost:3001/runs \
       "configurationVersion": "config.default",
       "ttlMs": 60000,
       "participants": [
-        { "id": "agent-1", "role": "proposer" },
-        { "id": "agent-2", "role": "evaluator" }
-      ]
+        { "id": "agent-1" },
+        { "id": "agent-2" }
+      ],
+      "metadata": {
+        "cancelCallback": { "url": "http://initiator/agent/cancel", "bearer": "opt-shared-secret" }
+      }
     },
-    "kickoff": [{
-      "from": "agent-1",
-      "to": ["agent-2"],
-      "kind": "proposal",
-      "messageType": "Proposal",
-      "payload": { "proposalId": "p-1", "option": "Deploy" }
-    }],
     "execution": {
       "idempotencyKey": "unique-key",
       "tags": ["production"],
@@ -54,7 +68,15 @@ curl -X POST http://localhost:3001/runs \
   }'
 ```
 
-**Response (202):** `{ "runId": "uuid", "status": "queued", "traceId": "..." }`
+**Response (202):** `{ "runId": "<uuid>", "sessionId": "<uuid>", "status": "queued", "traceId": "..." }`
+
+The caller distributes `sessionId` to every agent via bootstrap. The initiator agent
+uses its own Bearer token to call `SessionStart(sessionId)` on the runtime. The
+control-plane's async observer loop polls `GetSession(sessionId)` until `OPEN`,
+then subscribes read-only.
+
+If the caller provides `session.sessionId`, the control-plane validates it (must
+be UUID v4/v7 or base64url 22+ chars) and echoes it back in the response.
 
 ### `POST /runs/validate`
 Preflight validation without creating a run.
@@ -100,13 +122,13 @@ Fetch the projected run state for UI rendering. Returns:
 
 **Decision projection enrichments (§2.1 – §2.3):**
 
-- `decision.current.prompt` — scenario-supplied decision prompt, sourced from `ExecutionRequest.session.metadata.decisionPrompt` at run-creation time. Use this instead of reading prompt text from `reasons[]`.
+- `decision.current.prompt` — populated from the initiator's `Proposal` envelope when the runtime includes a `prompt` / `rationale` field. The control-plane no longer reads scenario-specific fields from the request body.
 - `decision.current.proposals[]` — per-contributor breakdown built from `proposal.created` and `proposal.updated` events. Each entry: `{ participantId, action, confidence?, reasons[], ts, vote?: 'allow'|'deny', messageType? }`. Capped at 50 most-recent.
 - `decision.current.resolvedAt` / `resolvedBy` — populated from the `decision.finalized` event's `ts` and `sender`.
 
 **Policy projection enrichments (§2.4 – §2.5):**
 
-- `policy.expectedCommitments[]` — seeded from `ExecutionRequest.session.commitments` at `session.bound` time. Each entry: `{ id, title?, description?, requiredRoles?, policyRef? }`.
+- `policy.expectedCommitments[]` — populated from runtime `PolicyResolved` events when the runtime attaches commitment expectations. The control-plane no longer seeds this from the request body.
 - `policy.voteTally[]` — derived from vote-bearing `proposal.updated` events (Vote / Approve / Reject / Accept / Evaluation). Each entry: `{ commitmentId (≈ proposalId until finalized), allow, deny, threshold, quorum: { required, cast } }`. `required` is the count of `role === 'voter'` participants (fallback: total participants); `threshold` is the simple majority `ceil(required/2)`.
 - `policy.quorumStatus` — `pending` until a `policy.commitment.evaluated` with `decision === 'allow'` arrives (→ `reached`). On run terminal (`failed` / `cancelled`) with no `allow` evaluation, flips to `failed`.
 
@@ -166,6 +188,11 @@ The following list endpoints return `{ data, total, limit, offset | nextCursor }
 ### `POST /runs/:id/cancel`
 Cancel a running session. Body: `{ "reason": "optional" }`
 
+Two flows, selected via run metadata:
+
+- **Option A (default)** — control-plane HTTP-POSTs to the initiator agent's `cancelCallback` URL (recorded in the run's `metadata.cancelCallback`). The agent then calls `runtime.CancelSession` with its own identity. Fails with 400 if no callback is registered.
+- **Option B (policy-delegated)** — when the run's `metadata.cancellationDelegated` is `true`, the control-plane calls `runtime.CancelSession` directly using its own observer identity. Requires the scenario's policy to grant cancel authority to the control-plane.
+
 ### `POST /runs/:id/clone`
 Clone a run with optional overrides. Body: `{ "tags": [...], "context": {...} }`
 
@@ -180,55 +207,24 @@ Rebuild the projection from canonical events.
 
 ---
 
-## Messages & Signals
+## Messages & Signals — emission is NOT via the control-plane
 
-### `POST /runs/:id/messages`
-Send a session-bound MACP message into an active run.
+Agents emit envelopes directly against the runtime via `macp-sdk-python` or
+`macp-sdk-typescript`. The control-plane observes them via `StreamSession` and
+exposes read-only views.
 
-```bash
-curl -X POST http://localhost:3001/runs/{id}/messages \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "from": "evaluator",
-    "to": ["proposer"],
-    "messageType": "Evaluation",
-    "payload": { "recommendation": "APPROVE", "confidence": 0.95 }
-  }'
-```
+### Removed endpoints (return 410 Gone)
 
-For proto-encoded payloads (required by real runtime):
-```json
-{
-  "from": "evaluator",
-  "to": ["proposer"],
-  "messageType": "Evaluation",
-  "payloadEnvelope": {
-    "encoding": "proto",
-    "proto": {
-      "typeName": "macp.modes.decision.v1.EvaluationPayload",
-      "value": { "proposalId": "p-1", "recommendation": "APPROVE", "confidence": 0.95 }
-    }
-  }
-}
-```
+| Endpoint | Migration |
+| --- | --- |
+| `POST /runs/:id/messages` | `from macp_sdk import DecisionSession; DecisionSession(client, session_id=…).evaluate(...)` |
+| `POST /runs/:id/signal`   | `session.signal(...)` via the SDK (or build an `Envelope` with `messageType='Signal'` and unary-`Send` it) |
+| `POST /runs/:id/context`  | Construct an envelope with `messageType='ContextUpdate'` via `macp_sdk.build_envelope()` |
 
-### `POST /runs/:id/signal`
-Send a signal (ambient plane, non-binding). Signals use empty `sessionId` and `modeName`.
-
-```json
-{
-  "from": "evaluator",
-  "to": ["proposer"],
-  "messageType": "Signal",
-  "payload": { "signalType": "progress", "data": "Analyzing...", "confidence": 0.5 }
-}
-```
+Each response: `{ "statusCode": 410, "errorCode": "ENDPOINT_REMOVED", "message": "…" }`.
 
 ### `GET /runs/:id/messages`
-List outbound messages for a run.
-
-### `POST /runs/:id/context`
-Update session context during execution.
+List outbound messages captured from the runtime stream.
 
 ---
 

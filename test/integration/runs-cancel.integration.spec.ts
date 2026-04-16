@@ -1,7 +1,14 @@
 import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { decisionModeRequest, decisionHappyScript } from '../fixtures/decision-mode';
+import { waitFor } from '../helpers/wait-for';
 
-describe('Run Cancellation (integration)', () => {
+/**
+ * Observer-mode cancel flow (direct-agent-auth CP-8).
+ *
+ * Default (Option A): control-plane POSTs to initiator agent's cancelCallback.
+ * Opt-in (Option B): metadata.cancellationDelegated=true lets control-plane call CancelSession directly.
+ */
+describe('Run Cancellation (integration, observer mode)', () => {
   let ctx: TestAppContext;
 
   beforeAll(async () => {
@@ -16,39 +23,55 @@ describe('Run Cancellation (integration)', () => {
     await ctx.cleanup();
   });
 
-  it('cancels a running session', async () => {
+  it('rejects cancel when neither cancelCallback nor delegation is configured (Option A/B unmet)', async () => {
     const { runId } = await ctx.client.createRun(decisionModeRequest());
-    await sleep(500);
+    // Wait until the run record exists, then confirm cancel is rejected.
+    await waitFor(
+      async () => {
+        const r = (await ctx.client.getRun(runId)) as any;
+        return r.id === runId ? r : null;
+      },
+      { timeoutMs: 3000, label: 'run visible' },
+    );
 
-    const result = await ctx.client.cancelRun(runId, 'Integration test cancellation');
-    expect(result).toBeDefined();
-
-    await sleep(500);
-
-    const run = await ctx.client.getRun(runId) as any;
-    expect(['cancelled', 'completed', 'failed']).toContain(run.status);
+    const result = (await ctx.client.cancelRun(runId)) as any;
+    expect(result.statusCode ?? 0).toBeGreaterThanOrEqual(400);
   });
 
-  it('cancel emits run.cancelled event', async () => {
-    const { runId } = await ctx.client.createRun(decisionModeRequest());
-    await sleep(500);
+  it('Option B: cancels when metadata.cancellationDelegated=true', async () => {
+    const request = decisionModeRequest({
+      session: {
+        ...decisionModeRequest().session,
+        metadata: { cancellationDelegated: true },
+      },
+    });
+    const { runId } = await ctx.client.createRun(request);
 
-    await ctx.client.cancelRun(runId);
-    await sleep(500);
+    await waitFor(
+      async () => {
+        const r = (await ctx.client.getRun(runId)) as any;
+        return ['binding_session', 'running', 'completed'].includes(r.status) ? r : null;
+      },
+      { timeoutMs: 5000, label: 'run bound' },
+    );
 
-    const events = await ctx.client.listEvents(runId) as any[];
-    // Should have lifecycle events
-    expect(events.length).toBeGreaterThan(0);
+    const result = (await ctx.client.cancelRun(runId, 'integration test cancel')) as any;
+    expect(result.statusCode).toBeUndefined();
+
+    const terminal = await waitFor(
+      async () => {
+        const r = (await ctx.client.getRun(runId)) as any;
+        return ['cancelled', 'completed'].includes(r.status) ? r : null;
+      },
+      { timeoutMs: 3000, label: 'run terminal after cancel' },
+    );
+    expect(['cancelled', 'completed']).toContain(terminal.status);
   });
 
   it('cancel of non-existent run returns error', async () => {
-    const result = await ctx.client.cancelRun(
-      '00000000-0000-0000-0000-000000000000'
-    ) as any;
+    const result = (await ctx.client.cancelRun(
+      '00000000-0000-0000-0000-000000000000',
+    )) as any;
     expect(result.statusCode || result.errorCode).toBeDefined();
   });
 });
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}

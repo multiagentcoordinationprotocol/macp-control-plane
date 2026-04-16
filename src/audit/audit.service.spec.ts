@@ -100,7 +100,6 @@ describe('AuditService', () => {
       // Second select call (count) — needs its own chain
       const countWhere = jest.fn().mockResolvedValue([{ count: 42 }]);
       const countFrom = jest.fn().mockReturnValue({ where: countWhere });
-      const countSelect = jest.fn().mockReturnValue({ from: countFrom });
 
       // Promise.all calls select twice: once for data, once for count
       mockSelect
