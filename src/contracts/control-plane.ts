@@ -39,6 +39,8 @@ export interface CancelCallback {
  * No scenario-specific fields cross this boundary: no kickoff templates, no policy hints,
  * no participant roles, no initiator designation. Agents authenticate to the runtime
  * directly; the control-plane is an observer. See direct-agent-auth.md §Generic contracts.
+ *
+ * Canonical JSON Schema: multiagentcoordinationprotocol/schemas/json/macp-run-descriptor.schema.json
  */
 export interface RunDescriptor {
   mode: ExecutionMode;
