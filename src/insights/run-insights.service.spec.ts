@@ -134,13 +134,9 @@ describe('RunInsightsService', () => {
         decision: { current: { confidence: 0.8 } }
       };
 
-      mockProjectionService.get
-        .mockResolvedValueOnce(leftProjection)
-        .mockResolvedValueOnce(rightProjection);
+      mockProjectionService.get.mockResolvedValueOnce(leftProjection).mockResolvedValueOnce(rightProjection);
 
-      mockMetricsRepo.get
-        .mockResolvedValueOnce({ durationMs: 1000 })
-        .mockResolvedValueOnce({ durationMs: 1500 });
+      mockMetricsRepo.get.mockResolvedValueOnce({ durationMs: 1000 }).mockResolvedValueOnce({ durationMs: 1500 });
 
       const result = await service.compareRuns('run-1', 'run-2');
 

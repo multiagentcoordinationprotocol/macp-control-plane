@@ -8,12 +8,7 @@ import { webhookDeliveries } from '../db/schema';
 export class WebhookDeliveryRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  async create(input: {
-    webhookId: string;
-    event: string;
-    runId: string;
-    payload: Record<string, unknown>;
-  }) {
+  async create(input: { webhookId: string; event: string; runId: string; payload: Record<string, unknown> }) {
     const id = randomUUID();
     const now = new Date().toISOString();
     await this.database.db.insert(webhookDeliveries).values({
@@ -58,16 +53,10 @@ export class WebhookDeliveryRepository {
   }
 
   async listPending() {
-    return this.database.db
-      .select()
-      .from(webhookDeliveries)
-      .where(eq(webhookDeliveries.status, 'pending'));
+    return this.database.db.select().from(webhookDeliveries).where(eq(webhookDeliveries.status, 'pending'));
   }
 
   async listByWebhookId(webhookId: string) {
-    return this.database.db
-      .select()
-      .from(webhookDeliveries)
-      .where(eq(webhookDeliveries.webhookId, webhookId));
+    return this.database.db.select().from(webhookDeliveries).where(eq(webhookDeliveries.webhookId, webhookId));
   }
 }

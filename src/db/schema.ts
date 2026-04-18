@@ -48,7 +48,9 @@ export const runs = pgTable(
 export const runtimeSessions = pgTable(
   'runtime_sessions',
   {
-    runId: uuid('run_id').notNull().references(() => runs.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
     runtimeKind: varchar('runtime_kind', { length: 64 }).notNull(),
     runtimeSessionId: varchar('runtime_session_id', { length: 255 }).notNull(),
     modeName: varchar('mode_name', { length: 255 }).notNull(),
@@ -78,7 +80,9 @@ export const runEventsRaw = pgTable(
   'run_events_raw',
   {
     id: uuid('id').primaryKey(),
-    runId: uuid('run_id').notNull().references(() => runs.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
     seq: integer('seq').notNull(),
     ts: timestamp('ts', { withTimezone: true, mode: 'string' }).notNull(),
     kind: varchar('kind', { length: 64 }).notNull(),
@@ -98,7 +102,9 @@ export const runEventsCanonical = pgTable(
   'run_events_canonical',
   {
     id: uuid('id').primaryKey(),
-    runId: uuid('run_id').notNull().references(() => runs.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
     seq: integer('seq').notNull(),
     ts: timestamp('ts', { withTimezone: true, mode: 'string' }).notNull(),
     type: varchar('type', { length: 128 }).notNull(),
@@ -125,7 +131,9 @@ export const runEventsCanonical = pgTable(
 export const runProjections = pgTable(
   'run_projections',
   {
-    runId: uuid('run_id').notNull().references(() => runs.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
     version: integer('version').notNull().default(0),
     schemaVersion: integer('schema_version').notNull().default(1),
     runSummary: jsonb('run_summary').$type<Record<string, unknown>>().notNull().default({}),
@@ -133,8 +141,14 @@ export const runProjections = pgTable(
     graph: jsonb('graph').$type<Record<string, unknown>>().notNull().default({ nodes: [], edges: [] }),
     decision: jsonb('decision').$type<Record<string, unknown>>().notNull().default({}),
     signals: jsonb('signals').$type<Record<string, unknown>>().notNull().default({ signals: [] }),
-    timeline: jsonb('timeline').$type<Record<string, unknown>>().notNull().default({ latestSeq: 0, totalEvents: 0, recent: [] }),
-    traceSummary: jsonb('trace_summary').$type<Record<string, unknown>>().notNull().default({ spanCount: 0, linkedArtifacts: [] }),
+    timeline: jsonb('timeline')
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({ latestSeq: 0, totalEvents: 0, recent: [] }),
+    traceSummary: jsonb('trace_summary')
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({ spanCount: 0, linkedArtifacts: [] }),
     progress: jsonb('progress').$type<Record<string, unknown>>().notNull().default({ entries: [] }),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
   },
@@ -147,7 +161,9 @@ export const runArtifacts = pgTable(
   'run_artifacts',
   {
     id: uuid('id').primaryKey(),
-    runId: uuid('run_id').notNull().references(() => runs.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
     kind: varchar('kind', { length: 64 }).notNull(),
     label: varchar('label', { length: 255 }).notNull(),
     uri: text('uri'),
@@ -184,7 +200,9 @@ export const auditLog = pgTable(
 export const runMetrics = pgTable(
   'run_metrics',
   {
-    runId: uuid('run_id').notNull().references(() => runs.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
     eventCount: integer('event_count').notNull().default(0),
     messageCount: integer('message_count').notNull().default(0),
     signalCount: integer('signal_count').notNull().default(0),
@@ -212,7 +230,9 @@ export const runOutboundMessages = pgTable(
   'run_outbound_messages',
   {
     id: uuid('id').primaryKey(),
-    runId: uuid('run_id').notNull().references(() => runs.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => runs.id, { onDelete: 'cascade' }),
     runtimeSessionId: varchar('runtime_session_id', { length: 255 }).notNull(),
     messageId: varchar('message_id', { length: 255 }).notNull(),
     messageType: varchar('message_type', { length: 128 }).notNull(),
@@ -254,7 +274,9 @@ export const webhookDeliveries = pgTable(
   'webhook_deliveries',
   {
     id: uuid('id').primaryKey(),
-    webhookId: uuid('webhook_id').notNull().references(() => webhooks.id, { onDelete: 'cascade' }),
+    webhookId: uuid('webhook_id')
+      .notNull()
+      .references(() => webhooks.id, { onDelete: 'cascade' }),
     event: varchar('event', { length: 128 }).notNull(),
     runId: uuid('run_id').notNull(),
     payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),

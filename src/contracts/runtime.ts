@@ -1,8 +1,4 @@
-import {
-  CanonicalEvent,
-  RunDescriptor,
-  SessionState
-} from './control-plane';
+import { CanonicalEvent, RunDescriptor, SessionState } from './control-plane';
 
 export interface RuntimeCredentials {
   metadata: Record<string, string>;
@@ -194,6 +190,14 @@ export interface RuntimeCapabilities {
  * the runtime (RFC-MACP-0004 §4). The provider's job is to initialize, observe, inspect,
  * and (conditionally) cancel sessions. See direct-agent-auth.md §Invariants.
  */
+export type SessionLifecycleEventType = 'created' | 'resolved' | 'expired';
+
+export interface SessionLifecycleEvent {
+  eventType: SessionLifecycleEventType;
+  session: RuntimeSessionSnapshot;
+  observedAtUnixMs: number;
+}
+
 export interface RuntimeProvider {
   readonly kind: string;
 
@@ -204,18 +208,16 @@ export interface RuntimeProvider {
 
   getSession(req: RuntimeGetSessionRequest): Promise<RuntimeSessionSnapshot>;
 
-  /**
-   * Policy-delegated cancellation (direct-agent-auth §Cancellation design — Option B).
-   * Only called when the run's metadata records `cancellationDelegated: true`. Default
-   * cancellation flow (Option A) proxies through the initiator agent's callback and
-   * does not invoke this method.
-   */
   cancelSession(req: RuntimeCancelSessionRequest): Promise<RuntimeCancelResult>;
 
   getManifest(): Promise<RuntimeManifestResult>;
   listModes(): Promise<RuntimeModeDescriptor[]>;
   listRoots(): Promise<RuntimeRootDescriptor[]>;
   health(): Promise<RuntimeHealth>;
+
+  // Session lifecycle observation
+  listSessions(): Promise<RuntimeSessionSnapshot[]>;
+  watchSessions(): AsyncIterable<SessionLifecycleEvent>;
 
   // Governance policy lifecycle (RFC-MACP-0012)
   registerPolicy(req: RuntimeRegisterPolicyRequest): Promise<RuntimeRegisterPolicyResult>;

@@ -24,9 +24,9 @@ function makeExecutionRequest(overrides?: Partial<RunDescriptor>): RunDescriptor
       modeVersion: '1.0.0',
       configurationVersion: '1.0.0',
       ttlMs: 30000,
-      participants: [{ id: 'agent-a' }, { id: 'agent-b' }],
+      participants: [{ id: 'agent-a' }, { id: 'agent-b' }]
     },
-    ...overrides,
+    ...overrides
   };
 }
 
@@ -39,7 +39,7 @@ function makeRunRecord(overrides?: Record<string, unknown>) {
     createdAt: '2026-01-01T00:00:00.000Z',
     tags: [],
     metadata: {},
-    ...overrides,
+    ...overrides
   };
 }
 
@@ -55,7 +55,10 @@ function makeEmptyProjection(runId: string): RunStateProjection {
     trace: { spanCount: 0, linkedArtifacts: [] },
     outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
     policy: { policyVersion: '', commitmentEvaluations: [] },
-    llm: { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } },
+    llm: {
+      calls: [],
+      totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 }
+    }
   };
 }
 
@@ -82,67 +85,67 @@ describe('RunManagerService', () => {
             markRunning: jest.fn(),
             markCompleted: jest.fn(),
             markCancelled: jest.fn(),
-            markFailed: jest.fn(),
-          },
+            markFailed: jest.fn()
+          }
         },
         {
           provide: RuntimeSessionRepository,
           useValue: {
-            upsert: jest.fn(),
-          },
+            upsert: jest.fn()
+          }
         },
         {
           provide: ProjectionService,
           useValue: {
             get: jest.fn(),
-            empty: jest.fn(),
-          },
+            empty: jest.fn()
+          }
         },
         {
           provide: RunEventService,
           useValue: {
-            emitControlPlaneEvents: jest.fn().mockResolvedValue([]),
-          },
+            emitControlPlaneEvents: jest.fn().mockResolvedValue([])
+          }
         },
         {
           provide: TraceService,
           useValue: {
             startRunTrace: jest.fn().mockReturnValue('trace-abc'),
-            endRunTrace: jest.fn(),
-          },
+            endRunTrace: jest.fn()
+          }
         },
         {
           provide: AuditService,
           useValue: {
-            record: jest.fn().mockResolvedValue(undefined),
-          },
+            record: jest.fn().mockResolvedValue(undefined)
+          }
         },
         {
           provide: WebhookService,
           useValue: {
-            fireEvent: jest.fn(),
-          },
+            fireEvent: jest.fn()
+          }
         },
         {
           provide: MetricsService,
           useValue: {
-            get: jest.fn().mockResolvedValue(null),
-          },
+            get: jest.fn().mockResolvedValue(null)
+          }
         },
         {
           provide: EventRepository,
           useValue: {
-            listCanonicalByRun: jest.fn().mockResolvedValue([]),
-          },
+            listCanonicalByRun: jest.fn().mockResolvedValue([])
+          }
         },
         {
           provide: InstrumentationService,
           useValue: {
             runStateTotal: { inc: jest.fn() },
-            runDuration: { observe: jest.fn() },
-          },
-        },
-      ],
+            runDuration: { observe: jest.fn() }
+          }
+        }
+      ]
     }).compile();
 
     service = module.get(RunManagerService);
@@ -159,7 +162,7 @@ describe('RunManagerService', () => {
       runRepository.findByIdempotencyKey.mockResolvedValue(existing as any);
 
       const request = makeExecutionRequest({
-        execution: { idempotencyKey: 'key-123' },
+        execution: { idempotencyKey: 'key-123' }
       });
 
       const result = await service.createRun(request, FIXED_SESSION_ID);
@@ -183,9 +186,7 @@ describe('RunManagerService', () => {
       expect(traceService.startRunTrace).toHaveBeenCalled();
       expect(runEventService.emitControlPlaneEvents).toHaveBeenCalledWith(
         created.id,
-        expect.arrayContaining([
-          expect.objectContaining({ type: 'run.created' }),
-        ]),
+        expect.arrayContaining([expect.objectContaining({ type: 'run.created' })])
       );
     });
 
@@ -195,7 +196,7 @@ describe('RunManagerService', () => {
       runRepository.create.mockResolvedValue(created as any);
 
       const request = makeExecutionRequest({
-        execution: { idempotencyKey: 'new-key' },
+        execution: { idempotencyKey: 'new-key' }
       });
       const result = await service.createRun(request, FIXED_SESSION_ID);
 
@@ -210,7 +211,7 @@ describe('RunManagerService', () => {
       const run = makeRunRecord({
         status: 'starting',
         startedAt: '2026-01-01T00:01:00.000Z',
-        traceId: 'trace-abc',
+        traceId: 'trace-abc'
       });
       runRepository.markStarted.mockResolvedValue(run as any);
 
@@ -224,9 +225,9 @@ describe('RunManagerService', () => {
         expect.arrayContaining([
           expect.objectContaining({
             type: 'run.started',
-            data: expect.objectContaining({ status: 'starting' }),
-          }),
-        ]),
+            data: expect.objectContaining({ status: 'starting' })
+          })
+        ])
       );
     });
   });
@@ -235,7 +236,7 @@ describe('RunManagerService', () => {
     it('should return existing run without emitting events if already completed', async () => {
       const completedRun = makeRunRecord({
         status: 'completed',
-        endedAt: '2026-01-01T00:05:00.000Z',
+        endedAt: '2026-01-01T00:05:00.000Z'
       });
       runRepository.findById.mockResolvedValue(completedRun as any);
 
@@ -254,7 +255,7 @@ describe('RunManagerService', () => {
         status: 'completed',
         endedAt: '2026-01-01T00:05:00.000Z',
         traceId: 'trace-abc',
-        runtimeSessionId: 'sess-1',
+        runtimeSessionId: 'sess-1'
       });
       runRepository.markCompleted.mockResolvedValue(completedRun as any);
 
@@ -267,9 +268,9 @@ describe('RunManagerService', () => {
         expect.arrayContaining([
           expect.objectContaining({
             type: 'run.completed',
-            data: expect.objectContaining({ status: 'completed' }),
-          }),
-        ]),
+            data: expect.objectContaining({ status: 'completed' })
+          })
+        ])
       );
     });
   });
@@ -293,7 +294,7 @@ describe('RunManagerService', () => {
       const failedRun = makeRunRecord({
         status: 'failed',
         endedAt: '2026-01-01T00:05:00.000Z',
-        traceId: 'trace-abc',
+        traceId: 'trace-abc'
       });
       runRepository.markFailed.mockResolvedValue(failedRun as any);
 
@@ -308,10 +309,10 @@ describe('RunManagerService', () => {
             type: 'run.failed',
             data: expect.objectContaining({
               status: 'failed',
-              error: 'something broke',
-            }),
-          }),
-        ]),
+              error: 'something broke'
+            })
+          })
+        ])
       );
     });
   });
@@ -446,7 +447,11 @@ describe('RunManagerService', () => {
     it('also enriches on markFailed', async () => {
       const runningRun = makeRunRecord({ status: 'running' });
       runRepository.findById.mockResolvedValue(runningRun as any);
-      const failedRun = makeRunRecord({ status: 'failed', startedAt: '2026-01-01T00:00:00.000Z', endedAt: '2026-01-01T00:00:30.000Z' });
+      const failedRun = makeRunRecord({
+        status: 'failed',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        endedAt: '2026-01-01T00:00:30.000Z'
+      });
       runRepository.markFailed.mockResolvedValue(failedRun as any);
 
       metricsService.get.mockResolvedValue({ eventCount: 5 });

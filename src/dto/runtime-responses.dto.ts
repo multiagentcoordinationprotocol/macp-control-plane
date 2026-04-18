@@ -29,7 +29,10 @@ export class RuntimePolicyDescriptorDto {
   @ApiProperty() policyId!: string;
   @ApiProperty() mode!: string;
   @ApiProperty() description!: string;
-  @ApiProperty({ description: 'Parsed policy rules object (RFC-MACP-0012 per-mode schema: voting, objection_handling, evaluation, commitment for decision; threshold, abstention, commitment for quorum; etc.)' })
+  @ApiProperty({
+    description:
+      'Parsed policy rules object (RFC-MACP-0012 per-mode schema: voting, objection_handling, evaluation, commitment for decision; threshold, abstention, commitment for quorum; etc.)'
+  })
   rules!: Record<string, unknown>;
   @ApiProperty() schemaVersion!: number;
   @ApiPropertyOptional() registeredAtUnixMs?: number;

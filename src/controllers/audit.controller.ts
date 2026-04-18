@@ -10,9 +10,7 @@ export class AuditController {
 
   @Get()
   @ApiOperation({ summary: 'List audit log entries with optional filtering.' })
-  async listAuditLogs(
-    @Query(new ValidationPipe({ transform: true, whitelist: true })) query: ListAuditQueryDto
-  ) {
+  async listAuditLogs(@Query(new ValidationPipe({ transform: true, whitelist: true })) query: ListAuditQueryDto) {
     return this.auditService.list({
       actor: query.actor,
       action: query.action,

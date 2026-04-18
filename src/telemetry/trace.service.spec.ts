@@ -1,4 +1,3 @@
-
 // ---------------------------------------------------------------------------
 // Mock @opentelemetry/api — all mock references live inside the factory
 // so they are available when Jest hoists the mock call.
@@ -13,7 +12,7 @@ const otelMocks = {
   startSpan: jest.fn(),
   with: jest.fn(),
   active: jest.fn().mockReturnValue({}),
-  setSpan: jest.fn().mockReturnValue({}),
+  setSpan: jest.fn().mockReturnValue({})
 };
 
 // Build the span object that startSpan returns
@@ -23,7 +22,7 @@ function makeSpan() {
     setAttribute: otelMocks.setAttribute,
     setStatus: otelMocks.setStatus,
     recordException: otelMocks.recordException,
-    spanContext: otelMocks.spanContext,
+    spanContext: otelMocks.spanContext
   };
 }
 
@@ -33,16 +32,16 @@ otelMocks.with.mockImplementation((_ctx: any, fn: any) => fn());
 jest.mock('@opentelemetry/api', () => ({
   trace: {
     getTracer: jest.fn().mockReturnValue({ startSpan: otelMocks.startSpan }),
-    setSpan: otelMocks.setSpan,
+    setSpan: otelMocks.setSpan
   },
   context: {
     with: otelMocks.with,
-    active: otelMocks.active,
+    active: otelMocks.active
   },
   SpanStatusCode: {
     OK: 1,
-    ERROR: 2,
-  },
+    ERROR: 2
+  }
 }));
 
 // Import AFTER mock is set up
@@ -78,11 +77,7 @@ describe('TraceService', () => {
     });
 
     it('sets multiple attributes on the span', async () => {
-      await service.withSpan(
-        'multi.attr',
-        { a: 'alpha', b: 123, c: true },
-        async () => 'ok',
-      );
+      await service.withSpan('multi.attr', { a: 'alpha', b: 123, c: true }, async () => 'ok');
 
       expect(otelMocks.setAttribute).toHaveBeenCalledWith('a', 'alpha');
       expect(otelMocks.setAttribute).toHaveBeenCalledWith('b', 123);
@@ -90,11 +85,7 @@ describe('TraceService', () => {
     });
 
     it('skips undefined attribute values', async () => {
-      await service.withSpan(
-        'skip.undef',
-        { defined: 'yes', missing: undefined },
-        async () => 'ok',
-      );
+      await service.withSpan('skip.undef', { defined: 'yes', missing: undefined }, async () => 'ok');
 
       expect(otelMocks.setAttribute).toHaveBeenCalledWith('defined', 'yes');
       expect(otelMocks.setAttribute).not.toHaveBeenCalledWith('missing', expect.anything());
@@ -109,13 +100,13 @@ describe('TraceService', () => {
       await expect(
         service.withSpan('fail.op', {}, async () => {
           throw error;
-        }),
+        })
       ).rejects.toThrow('boom');
 
       expect(otelMocks.recordException).toHaveBeenCalledWith(error);
       expect(otelMocks.setStatus).toHaveBeenCalledWith({
         code: SpanStatusCode.ERROR,
-        message: 'boom',
+        message: 'boom'
       });
       expect(otelMocks.end).toHaveBeenCalledTimes(1);
     });
@@ -125,13 +116,11 @@ describe('TraceService', () => {
         throw 'string-error';
       });
 
-      await expect(
-        service.withSpan('fail.string', {}, async () => 'unreachable'),
-      ).rejects.toBe('string-error');
+      await expect(service.withSpan('fail.string', {}, async () => 'unreachable')).rejects.toBe('string-error');
 
       expect(otelMocks.setStatus).toHaveBeenCalledWith({
         code: SpanStatusCode.ERROR,
-        message: 'string-error',
+        message: 'string-error'
       });
       expect(otelMocks.end).toHaveBeenCalledTimes(1);
     });
@@ -141,9 +130,7 @@ describe('TraceService', () => {
         throw new Error('fail');
       });
 
-      await expect(
-        service.withSpan('always.end', {}, async () => 'x'),
-      ).rejects.toThrow('fail');
+      await expect(service.withSpan('always.end', {}, async () => 'x')).rejects.toThrow('fail');
 
       expect(otelMocks.end).toHaveBeenCalledTimes(1);
     });
@@ -205,7 +192,7 @@ describe('TraceService', () => {
       expect(otelMocks.setAttribute).toHaveBeenCalledWith('run.terminal_status', 'failed');
       expect(otelMocks.setStatus).toHaveBeenCalledWith({
         code: SpanStatusCode.ERROR,
-        message: 'runtime crashed',
+        message: 'runtime crashed'
       });
       expect(otelMocks.recordException).toHaveBeenCalledWith(new Error('runtime crashed'));
       expect(otelMocks.end).toHaveBeenCalledTimes(1);
@@ -219,7 +206,7 @@ describe('TraceService', () => {
 
       expect(otelMocks.setStatus).toHaveBeenCalledWith({
         code: SpanStatusCode.ERROR,
-        message: 'run failed',
+        message: 'run failed'
       });
       // No recordException when error string is undefined
       expect(otelMocks.recordException).not.toHaveBeenCalled();
@@ -281,7 +268,9 @@ describe('TraceService', () => {
 
       const boom = new Error('boom');
       await expect(
-        service.withRunSpan('run-err', 'child.fail', {}, async () => { throw boom; })
+        service.withRunSpan('run-err', 'child.fail', {}, async () => {
+          throw boom;
+        })
       ).rejects.toBe(boom);
 
       expect(otelMocks.recordException).toHaveBeenCalledWith(boom);
@@ -298,7 +287,7 @@ describe('TraceService', () => {
       const addEvent = jest.fn();
       otelMocks.startSpan.mockReturnValueOnce({
         ...makeSpan(),
-        addEvent,
+        addEvent
       } as any);
 
       service.startRunTrace('run-e', {});

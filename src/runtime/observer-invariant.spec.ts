@@ -14,27 +14,27 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; message: string }> = [
   {
     pattern: /provider\.send\s*\(/,
     message:
-      'provider.send() is forbidden — the control-plane must never emit envelopes. '
-      + 'Agents speak for themselves via macp-sdk-* (direct-agent-auth §Invariants #5).',
+      'provider.send() is forbidden — the control-plane must never emit envelopes. ' +
+      'Agents speak for themselves via macp-sdk-* (direct-agent-auth §Invariants #5).'
   },
   {
     pattern: /openSession\s*\(/,
     message:
-      'openSession() is forbidden — it forges SessionStart on the agent\'s behalf. '
-      + 'Use provider.subscribeSession() for read-only observation (CP-3).',
+      "openSession() is forbidden — it forges SessionStart on the agent's behalf. " +
+      'Use provider.subscribeSession() for read-only observation (CP-3).'
   },
   {
     pattern: /chooseInitiator\s*\(/,
     message:
-      'chooseInitiator() is forbidden — the control-plane must not pick an initiator. '
-      + 'The initiator is whichever agent calls SessionStart; learned via GetSession (CP-3).',
+      'chooseInitiator() is forbidden — the control-plane must not pick an initiator. ' +
+      'The initiator is whichever agent calls SessionStart; learned via GetSession (CP-3).'
   },
   {
     pattern: /retryKickoff\s*\(/,
     message:
-      'retryKickoff() is forbidden — kickoff messages are emitted by the initiator agent '
-      + 'via its SDK, not by the control-plane (CP-4).',
-  },
+      'retryKickoff() is forbidden — kickoff messages are emitted by the initiator agent ' +
+      'via its SDK, not by the control-plane (CP-4).'
+  }
 ];
 
 function walk(dir: string): string[] {
@@ -82,9 +82,7 @@ describe('Observer invariant — no envelope-forging paths in src/', () => {
       }
 
       if (violations.length > 0) {
-        const msg = violations
-          .map((v) => `  ${v.file}:${v.line}: ${v.text}`)
-          .join('\n');
+        const msg = violations.map((v) => `  ${v.file}:${v.line}: ${v.text}`).join('\n');
         throw new Error(`${message}\n\nFound ${violations.length} violation(s):\n${msg}`);
       }
     });

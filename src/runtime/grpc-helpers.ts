@@ -21,7 +21,7 @@ export function fromEnvelope(envelope: any): RuntimeEnvelope {
     sessionId: envelope.sessionId,
     sender: envelope.sender,
     timestampUnixMs: Number(envelope.timestampUnixMs ?? Date.now()),
-    payload: Buffer.isBuffer(envelope.payload) ? envelope.payload : Buffer.from(envelope.payload ?? ''),
+    payload: Buffer.isBuffer(envelope.payload) ? envelope.payload : Buffer.from(envelope.payload ?? '')
   };
 }
 
@@ -33,7 +33,9 @@ export function fromAck(ack: any, trailingMetadata?: grpc.Metadata): RuntimeAck 
     try {
       const parsed = JSON.parse(Buffer.from(ack.error.details).toString('utf-8'));
       if (Array.isArray(parsed.reasons)) reasons = parsed.reasons;
-    } catch { /* ignore parse errors */ }
+    } catch {
+      /* ignore parse errors */
+    }
   }
 
   if (!reasons && trailingMetadata) {
@@ -42,7 +44,9 @@ export function fromAck(ack: any, trailingMetadata?: grpc.Metadata): RuntimeAck 
       try {
         const parsed = JSON.parse(Buffer.from(detailsBin[0] as Buffer).toString('utf-8'));
         if (Array.isArray(parsed.reasons)) reasons = parsed.reasons;
-      } catch { /* ignore parse errors */ }
+      } catch {
+        /* ignore parse errors */
+      }
     }
   }
 
@@ -61,9 +65,9 @@ export function fromAck(ack: any, trailingMetadata?: grpc.Metadata): RuntimeAck 
           messageId: ack.error.messageId,
           detailsBase64: ack.error.details ? Buffer.from(ack.error.details).toString('base64') : undefined,
           details: ack.error.details ? Buffer.from(ack.error.details) : undefined,
-          reasons,
+          reasons
         }
-      : undefined,
+      : undefined
   };
 }
 
@@ -78,7 +82,7 @@ export function fromSessionMetadata(metadata: any): RuntimeSessionSnapshot {
     modeVersion: metadata?.modeVersion,
     configurationVersion: metadata?.configurationVersion,
     policyVersion: metadata?.policyVersion,
-    initiator: metadata?.initiator ?? undefined,
+    initiator: metadata?.initiator ?? undefined
   };
 }
 

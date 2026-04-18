@@ -97,9 +97,7 @@ describe('RunInsightsController', () => {
 
   describe('batchCancel', () => {
     it('cancels multiple runs and returns results', async () => {
-      mockRunExecutor.cancel
-        .mockResolvedValueOnce(undefined)
-        .mockRejectedValueOnce(new Error('not found'));
+      mockRunExecutor.cancel.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('not found'));
 
       const result = await controller.batchCancel({ runIds: ['run-1', 'run-2'] });
 
@@ -116,23 +114,25 @@ describe('RunInsightsController', () => {
     it('exports multiple runs and returns bundles', async () => {
       const bundle1 = { run: { id: 'run-1' }, exportedAt: '2026-01-01T00:00:00Z' };
       const bundle2 = { run: { id: 'run-2' }, exportedAt: '2026-01-01T00:00:00Z' };
-      mockInsightsService.exportRun
-        .mockResolvedValueOnce(bundle1)
-        .mockResolvedValueOnce(bundle2);
+      mockInsightsService.exportRun.mockResolvedValueOnce(bundle1).mockResolvedValueOnce(bundle2);
 
       const result = await controller.batchExport({ runIds: ['run-1', 'run-2'] });
 
       expect(result).toEqual([bundle1, bundle2]);
-      expect(mockInsightsService.exportRun).toHaveBeenCalledWith('run-1', { includeCanonical: true, includeRaw: false });
-      expect(mockInsightsService.exportRun).toHaveBeenCalledWith('run-2', { includeCanonical: true, includeRaw: false });
+      expect(mockInsightsService.exportRun).toHaveBeenCalledWith('run-1', {
+        includeCanonical: true,
+        includeRaw: false
+      });
+      expect(mockInsightsService.exportRun).toHaveBeenCalledWith('run-2', {
+        includeCanonical: true,
+        includeRaw: false
+      });
     });
   });
 
   describe('batchArchive', () => {
     it('archives multiple runs and returns results', async () => {
-      mockRunManager.archiveRun
-        .mockResolvedValueOnce(undefined)
-        .mockRejectedValueOnce(new Error('not found'));
+      mockRunManager.archiveRun.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('not found'));
 
       const result = await controller.batchArchive({ runIds: ['run-1', 'run-2'] });
 
@@ -147,9 +147,7 @@ describe('RunInsightsController', () => {
 
   describe('batchDelete', () => {
     it('deletes multiple runs and returns results', async () => {
-      mockRunManager.deleteRun
-        .mockResolvedValueOnce(undefined)
-        .mockRejectedValueOnce(new Error('run is not terminal'));
+      mockRunManager.deleteRun.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('run is not terminal'));
 
       const result = await controller.batchDelete({ runIds: ['run-1', 'run-2'] });
 

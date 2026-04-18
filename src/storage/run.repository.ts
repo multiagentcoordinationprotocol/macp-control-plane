@@ -69,11 +69,12 @@ export class RunRepository {
   }
 
   async findByIdempotencyKey(idempotencyKey: string) {
-    const rows = await this.database.db
-      .select()
-      .from(runs)
-      .where(eq(runs.idempotencyKey, idempotencyKey))
-      .limit(1);
+    const rows = await this.database.db.select().from(runs).where(eq(runs.idempotencyKey, idempotencyKey)).limit(1);
+    return rows[0] ?? null;
+  }
+
+  async findByRuntimeSessionId(runtimeSessionId: string) {
+    const rows = await this.database.db.select().from(runs).where(eq(runs.runtimeSessionId, runtimeSessionId)).limit(1);
     return rows[0] ?? null;
   }
 
@@ -98,11 +99,7 @@ export class RunRepository {
     return Number(row.last_event_seq) - count + 1;
   }
 
-  private async transitionTo(
-    id: string,
-    targetStatus: RunStatus,
-    patch: Partial<typeof runs.$inferInsert>
-  ) {
+  private async transitionTo(id: string, targetStatus: RunStatus, patch: Partial<typeof runs.$inferInsert>) {
     const validFrom = Object.entries(VALID_TRANSITIONS)
       .filter(([, targets]) => targets.includes(targetStatus))
       .map(([from]) => from);
@@ -121,9 +118,7 @@ export class RunRepository {
       const current = await this.findById(id);
       if (!current) throw new Error(`run ${id} not found`);
       if (current.status === targetStatus) return current;
-      throw new ConflictException(
-        `cannot transition run ${id} from '${current.status}' to '${targetStatus}'`
-      );
+      throw new ConflictException(`cannot transition run ${id} from '${current.status}' to '${targetStatus}'`);
     }
     return result[0];
   }

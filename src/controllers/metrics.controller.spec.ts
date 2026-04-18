@@ -11,12 +11,10 @@ describe('MetricsController', () => {
   beforeEach(() => {
     mockInstrumentation = {
       getMetrics: jest.fn().mockResolvedValue('# HELP http_requests_total\nhttp_requests_total 42'),
-      getContentType: jest.fn().mockReturnValue('text/plain; version=0.0.4; charset=utf-8'),
+      getContentType: jest.fn().mockReturnValue('text/plain; version=0.0.4; charset=utf-8')
     };
 
-    controller = new MetricsController(
-      mockInstrumentation as unknown as InstrumentationService,
-    );
+    controller = new MetricsController(mockInstrumentation as unknown as InstrumentationService);
   });
 
   describe('getMetrics', () => {
@@ -29,13 +27,8 @@ describe('MetricsController', () => {
 
       expect(mockInstrumentation.getMetrics).toHaveBeenCalledTimes(1);
       expect(mockInstrumentation.getContentType).toHaveBeenCalledTimes(1);
-      expect(mockSet).toHaveBeenCalledWith(
-        'Content-Type',
-        'text/plain; version=0.0.4; charset=utf-8',
-      );
-      expect(mockEnd).toHaveBeenCalledWith(
-        '# HELP http_requests_total\nhttp_requests_total 42',
-      );
+      expect(mockSet).toHaveBeenCalledWith('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+      expect(mockEnd).toHaveBeenCalledWith('# HELP http_requests_total\nhttp_requests_total 42');
     });
 
     it('should call getMetrics before writing response', async () => {
@@ -46,7 +39,7 @@ describe('MetricsController', () => {
       });
       const res = {
         set: jest.fn(() => callOrder.push('set')),
-        end: jest.fn(() => callOrder.push('end')),
+        end: jest.fn(() => callOrder.push('end'))
       } as any;
 
       await controller.getMetrics(res);

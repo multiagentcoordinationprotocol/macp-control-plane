@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import * as protobuf from 'protobufjs';
 
 const MESSAGE_TYPE_MAP: Record<string, Record<string, string>> = {
-  '__core__': {
+  __core__: {
     SessionStart: 'macp.v1.SessionStartPayload',
     Commitment: 'macp.v1.CommitmentPayload',
     Signal: 'macp.v1.SignalPayload',
@@ -94,8 +94,7 @@ export class ProtoRegistryService implements OnModuleInit {
   }
 
   decodeKnown(modeName: string, messageType: string, payload: Buffer): Record<string, unknown> | undefined {
-    const typeName =
-      MESSAGE_TYPE_MAP[modeName]?.[messageType] ?? MESSAGE_TYPE_MAP.__core__[messageType];
+    const typeName = MESSAGE_TYPE_MAP[modeName]?.[messageType] ?? MESSAGE_TYPE_MAP.__core__[messageType];
     if (!typeName) {
       return this.tryDecodeUtf8(payload);
     }

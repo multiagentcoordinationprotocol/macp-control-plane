@@ -24,24 +24,24 @@ describe('ObservabilityController', () => {
         status: 'completed',
         sourceKind: 'scenario',
         sourceRef: 'fraud-detection@1.2.0'
-      }),
+      })
     };
     mockArtifactService = {
       list: jest.fn(),
-      register: jest.fn(),
+      register: jest.fn()
     };
     mockMetricsService = {
-      get: jest.fn(),
+      get: jest.fn()
     };
     mockProjectionService = {
       get: jest.fn(),
-      rebuild: jest.fn(),
+      rebuild: jest.fn()
     };
     mockEventService = {
-      emitControlPlaneEvents: jest.fn().mockResolvedValue([]),
+      emitControlPlaneEvents: jest.fn().mockResolvedValue([])
     };
     mockEventRepository = {
-      listCanonicalUpTo: jest.fn(),
+      listCanonicalUpTo: jest.fn()
     };
 
     controller = new ObservabilityController(
@@ -50,7 +50,7 @@ describe('ObservabilityController', () => {
       mockMetricsService as unknown as MetricsService,
       mockProjectionService as unknown as ProjectionService,
       mockEventService as unknown as RunEventService,
-      mockEventRepository as unknown as EventRepository,
+      mockEventRepository as unknown as EventRepository
     );
   });
 
@@ -69,7 +69,7 @@ describe('ObservabilityController', () => {
       expect(result).toEqual({
         ...traceSummary,
         runStatus: 'completed',
-        scenarioRef: 'fraud-detection@1.2.0',
+        scenarioRef: 'fraud-detection@1.2.0'
       });
     });
 
@@ -82,7 +82,7 @@ describe('ObservabilityController', () => {
         spanCount: 0,
         linkedArtifacts: [],
         runStatus: 'completed',
-        scenarioRef: 'fraud-detection@1.2.0',
+        scenarioRef: 'fraud-detection@1.2.0'
       });
     });
 
@@ -95,7 +95,7 @@ describe('ObservabilityController', () => {
         spanCount: 0,
         linkedArtifacts: [],
         runStatus: 'completed',
-        scenarioRef: 'fraud-detection@1.2.0',
+        scenarioRef: 'fraud-detection@1.2.0'
       });
     });
 
@@ -114,9 +114,7 @@ describe('ObservabilityController', () => {
   // ===========================================================================
   describe('getArtifacts', () => {
     it('delegates to artifactService.list', async () => {
-      const artifacts = [
-        { id: 'art-1', runId, kind: 'json', label: 'result' },
-      ];
+      const artifacts = [{ id: 'art-1', runId, kind: 'json', label: 'result' }];
       mockArtifactService.list.mockResolvedValue(artifacts);
 
       const result = await controller.getArtifacts(runId);
@@ -138,14 +136,14 @@ describe('ObservabilityController', () => {
         kind: 'json',
         label: 'output',
         uri: 'https://example.com/output.json',
-        createdAt: '2026-03-19T00:00:00.000Z',
+        createdAt: '2026-03-19T00:00:00.000Z'
       };
       mockArtifactService.register.mockResolvedValue(artifact);
 
       const body = {
         kind: 'json' as const,
         label: 'output',
-        uri: 'https://example.com/output.json',
+        uri: 'https://example.com/output.json'
       };
       const result = await controller.createArtifact(runId, body as any);
 
@@ -155,24 +153,21 @@ describe('ObservabilityController', () => {
         kind: 'json',
         label: 'output',
         uri: 'https://example.com/output.json',
-        inline: undefined,
+        inline: undefined
       });
-      expect(mockEventService.emitControlPlaneEvents).toHaveBeenCalledWith(
-        runId,
-        [
-          expect.objectContaining({
-            type: 'artifact.created',
-            source: { kind: 'control-plane', name: 'observability-controller' },
-            subject: { kind: 'artifact', id: 'art-new' },
-            data: expect.objectContaining({
-              kind: 'json',
-              label: 'output',
-              artifactId: 'art-new',
-              uri: 'https://example.com/output.json',
-            }),
-          }),
-        ],
-      );
+      expect(mockEventService.emitControlPlaneEvents).toHaveBeenCalledWith(runId, [
+        expect.objectContaining({
+          type: 'artifact.created',
+          source: { kind: 'control-plane', name: 'observability-controller' },
+          subject: { kind: 'artifact', id: 'art-new' },
+          data: expect.objectContaining({
+            kind: 'json',
+            label: 'output',
+            artifactId: 'art-new',
+            uri: 'https://example.com/output.json'
+          })
+        })
+      ]);
       expect(result).toEqual(artifact);
     });
 
@@ -183,21 +178,21 @@ describe('ObservabilityController', () => {
         kind: 'json',
         label: 'inline result',
         inline: { foo: 'bar' },
-        createdAt: '2026-03-19T00:00:00.000Z',
+        createdAt: '2026-03-19T00:00:00.000Z'
       };
       mockArtifactService.register.mockResolvedValue(artifact);
 
       const body = {
         kind: 'json' as const,
         label: 'inline result',
-        inline: { foo: 'bar' },
+        inline: { foo: 'bar' }
       };
       await controller.createArtifact(runId, body as any);
 
       expect(mockArtifactService.register).toHaveBeenCalledWith(
         expect.objectContaining({
-          inline: { foo: 'bar' },
-        }),
+          inline: { foo: 'bar' }
+        })
       );
     });
   });
@@ -215,7 +210,7 @@ describe('ObservabilityController', () => {
         proposalCount: 2,
         toolCallCount: 5,
         decisionCount: 1,
-        streamReconnectCount: 0,
+        streamReconnectCount: 0
       };
       mockMetricsService.get.mockResolvedValue(metrics);
 
@@ -239,7 +234,7 @@ describe('ObservabilityController', () => {
         proposalCount: 0,
         toolCallCount: 0,
         decisionCount: 0,
-        streamReconnectCount: 0,
+        streamReconnectCount: 0
       });
     });
   });
@@ -251,13 +246,13 @@ describe('ObservabilityController', () => {
     it('calls rebuild with canonical events and returns result', async () => {
       const events = [
         { id: 'e1', seq: 1, type: 'run.created' },
-        { id: 'e2', seq: 2, type: 'session.started' },
+        { id: 'e2', seq: 2, type: 'session.started' }
       ];
       mockEventRepository.listCanonicalUpTo.mockResolvedValue(events);
 
       const rebuiltProjection = {
         run: { runId, status: 'completed' },
-        timeline: { latestSeq: 2 },
+        timeline: { latestSeq: 2 }
       };
       mockProjectionService.rebuild.mockResolvedValue(rebuiltProjection);
 

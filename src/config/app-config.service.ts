@@ -16,7 +16,10 @@ function readNumber(name: string, defaultValue: number): number {
 function readStringList(name: string): string[] {
   const raw = process.env[name];
   if (!raw) return [];
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 @Injectable()
@@ -39,8 +42,7 @@ export class AppConfigService implements OnModuleInit {
   readonly port = readNumber('PORT', 3001);
   readonly host = process.env.HOST ?? '0.0.0.0';
   readonly corsOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
-  readonly databaseUrl =
-    process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/macp_control_plane';
+  readonly databaseUrl = process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/macp_control_plane';
 
   // Auth
   readonly authApiKeys = readStringList('AUTH_API_KEYS');
@@ -85,6 +87,7 @@ export class AppConfigService implements OnModuleInit {
   readonly replayMaxDelayMs = readNumber('REPLAY_MAX_DELAY_MS', 2000);
   readonly replayBatchSize = readNumber('REPLAY_BATCH_SIZE', 500);
   readonly runRecoveryEnabled = readBoolean('RUN_RECOVERY_ENABLED', true);
+  readonly sessionDiscoveryEnabled = readBoolean('SESSION_DISCOVERY_ENABLED', true);
 
   readonly dbPoolMax = readNumber('DB_POOL_MAX', 20);
   readonly dbPoolIdleTimeout = readNumber('DB_POOL_IDLE_TIMEOUT', 30000);
@@ -116,9 +119,7 @@ export class AppConfigService implements OnModuleInit {
 
     // 1.2: Fail-fast if bearer token missing in production with dev header enabled
     if (!this.runtimeBearerToken && this.runtimeUseDevHeader) {
-      throw new Error(
-        'RUNTIME_BEARER_TOKEN must be set in production when RUNTIME_USE_DEV_HEADER is enabled'
-      );
+      throw new Error('RUNTIME_BEARER_TOKEN must be set in production when RUNTIME_USE_DEV_HEADER is enabled');
     }
 
     // Warn (don't fail) when the control-plane has no runtime identity configured —
@@ -131,16 +132,12 @@ export class AppConfigService implements OnModuleInit {
 
     // 1.2: Fail-fast if TLS is off and insecure is not explicitly allowed
     if (!this.runtimeTls && !this.runtimeAllowInsecure) {
-      throw new Error(
-        'RUNTIME_TLS must be true in production, or set RUNTIME_ALLOW_INSECURE=true to override'
-      );
+      throw new Error('RUNTIME_TLS must be true in production, or set RUNTIME_ALLOW_INSECURE=true to override');
     }
 
     // 1.2: Warn if OTEL enabled without exporter endpoint
     if (this.otelEnabled && !this.otelExporterOtlpEndpoint) {
-      this.logger.warn(
-        'OTEL_ENABLED is true but OTEL_EXPORTER_OTLP_ENDPOINT is not set — traces will be discarded'
-      );
+      this.logger.warn('OTEL_ENABLED is true but OTEL_EXPORTER_OTLP_ENDPOINT is not set — traces will be discarded');
     }
 
     // Warn if using memory StreamHub in production (SSE events won't sync across instances)
@@ -152,23 +149,17 @@ export class AppConfigService implements OnModuleInit {
 
     // Fail-fast if no API keys configured in production (auth silently disabled)
     if (this.authApiKeys.length === 0) {
-      throw new Error(
-        'AUTH_API_KEYS must be set in production. Empty value disables authentication.'
-      );
+      throw new Error('AUTH_API_KEYS must be set in production. Empty value disables authentication.');
     }
 
     // Guard against misconfigured retention TTL
     if (this.dataRetentionEnabled && this.dataRetentionTtlDays < 1) {
-      throw new Error(
-        'DATA_RETENTION_TTL_DAYS must be >= 1 when retention is enabled'
-      );
+      throw new Error('DATA_RETENTION_TTL_DAYS must be >= 1 when retention is enabled');
     }
 
     // Guard against connection pool starvation
     if (this.dbPoolMax < 2) {
-      throw new Error(
-        'DB_POOL_MAX must be >= 2 to avoid connection pool starvation'
-      );
+      throw new Error('DB_POOL_MAX must be >= 2 to avoid connection pool starvation');
     }
 
     // Warn about aggressive gRPC timeout

@@ -50,13 +50,13 @@ function extractTokenUsage(event: CanonicalEvent): {
 
 /** Default per-model cost rates (USD per 1M tokens). Configurable via env in future. */
 const MODEL_COSTS: Record<string, { prompt: number; completion: number }> = {
-  'gpt-4o': { prompt: 2.50, completion: 10.00 },
-  'gpt-4o-mini': { prompt: 0.15, completion: 0.60 },
-  'gpt-4-turbo': { prompt: 10.00, completion: 30.00 },
-  'claude-3-opus': { prompt: 15.00, completion: 75.00 },
-  'claude-3-sonnet': { prompt: 3.00, completion: 15.00 },
+  'gpt-4o': { prompt: 2.5, completion: 10.0 },
+  'gpt-4o-mini': { prompt: 0.15, completion: 0.6 },
+  'gpt-4-turbo': { prompt: 10.0, completion: 30.0 },
+  'claude-3-opus': { prompt: 15.0, completion: 75.0 },
+  'claude-3-sonnet': { prompt: 3.0, completion: 15.0 },
   'claude-3-haiku': { prompt: 0.25, completion: 1.25 },
-  default: { prompt: 1.00, completion: 3.00 }
+  default: { prompt: 1.0, completion: 3.0 }
 };
 
 function estimateCost(promptTokens: number, completionTokens: number, model?: string): number {
@@ -126,18 +126,14 @@ export class MetricsService {
         const data = event.data as Record<string, unknown>;
         const model =
           (data.tokenUsage as Record<string, unknown> | undefined)?.model ??
-          ((data.metadata as Record<string, unknown> | undefined)?.tokenUsage as Record<string, unknown> | undefined)?.model;
-        estimatedCostUsd += estimateCost(
-          usage.promptTokens,
-          usage.completionTokens,
-          model ? String(model) : undefined
-        );
+          ((data.metadata as Record<string, unknown> | undefined)?.tokenUsage as Record<string, unknown> | undefined)
+            ?.model;
+        estimatedCostUsd += estimateCost(usage.promptTokens, usage.completionTokens, model ? String(model) : undefined);
       }
     }
 
-    const durationMs = firstEventAt && lastEventAt
-      ? new Date(lastEventAt).getTime() - new Date(firstEventAt).getTime()
-      : undefined;
+    const durationMs =
+      firstEventAt && lastEventAt ? new Date(lastEventAt).getTime() - new Date(firstEventAt).getTime() : undefined;
 
     const persisted = await this.repository.upsert(runId, {
       runId,
@@ -159,13 +155,26 @@ export class MetricsService {
       counters: {}
     });
 
-    return this.toSummary(runId, persisted ?? {
-      eventCount, messageCount, signalCount, proposalCount,
-      toolCallCount, decisionCount, streamReconnectCount,
-      promptTokens, completionTokens, totalTokens,
-      estimatedCostUsd: String(estimatedCostUsd),
-      firstEventAt, lastEventAt, durationMs, sessionState
-    });
+    return this.toSummary(
+      runId,
+      persisted ?? {
+        eventCount,
+        messageCount,
+        signalCount,
+        proposalCount,
+        toolCallCount,
+        decisionCount,
+        streamReconnectCount,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        estimatedCostUsd: String(estimatedCostUsd),
+        firstEventAt,
+        lastEventAt,
+        durationMs,
+        sessionState
+      }
+    );
   }
 
   async get(runId: string): Promise<MetricsSummary | null> {

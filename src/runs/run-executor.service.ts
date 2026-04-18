@@ -98,10 +98,7 @@ export class RunExecutorService {
         capabilities: initResult.capabilities
       };
 
-      if (
-        initResult.supportedModes.length > 0 &&
-        !initResult.supportedModes.includes(request.session.modeName)
-      ) {
+      if (initResult.supportedModes.length > 0 && !initResult.supportedModes.includes(request.session.modeName)) {
         errors.push(
           `Runtime does not support mode '${request.session.modeName}'. Supported: ${initResult.supportedModes.join(', ')}`
         );
@@ -125,16 +122,16 @@ export class RunExecutorService {
   private resolveSessionId(request: RunDescriptor): string {
     if (request.session.sessionId) {
       if (!isValidSessionId(request.session.sessionId)) {
-        throw new BadRequestException(
-          'session.sessionId must be a UUID v4/v7 or base64url 22+ chars',
-        );
+        throw new BadRequestException('session.sessionId must be a UUID v4/v7 or base64url 22+ chars');
       }
       return request.session.sessionId;
     }
     return randomUUID();
   }
 
-  async launch(request: RunDescriptor): Promise<{ run: Awaited<ReturnType<RunManagerService['createRun']>>; sessionId: string }> {
+  async launch(
+    request: RunDescriptor
+  ): Promise<{ run: Awaited<ReturnType<RunManagerService['createRun']>>; sessionId: string }> {
     const sessionId = this.resolveSessionId(request);
     const requestWithSessionId: RunDescriptor = {
       ...request,
@@ -171,11 +168,11 @@ export class RunExecutorService {
         await provider.cancelSession({
           runId,
           runtimeSessionId: run.runtimeSessionId,
-          reason,
+          reason
         });
       } catch (cancelError) {
         this.logger.warn(
-          `cancelSession failed for run ${runId} (proceeding with local cancel): ${cancelError instanceof Error ? cancelError.message : String(cancelError)}`,
+          `cancelSession failed for run ${runId} (proceeding with local cancel): ${cancelError instanceof Error ? cancelError.message : String(cancelError)}`
         );
       }
     } else if (cancelCallback?.url) {
@@ -184,7 +181,7 @@ export class RunExecutorService {
     } else {
       // No callback registered and no policy delegation — fail closed.
       throw new BadRequestException(
-        'run has no cancelCallback in metadata and no policy delegation — cannot cancel from control-plane',
+        'run has no cancelCallback in metadata and no policy delegation — cannot cancel from control-plane'
       );
     }
 
@@ -197,7 +194,7 @@ export class RunExecutorService {
   private async invokeCancelCallback(
     runId: string,
     callback: { url?: string; bearer?: string },
-    reason?: string,
+    reason?: string
   ): Promise<void> {
     if (!callback.url) return;
     const controller = new AbortController();
@@ -210,28 +207,27 @@ export class RunExecutorService {
         method: 'POST',
         headers,
         body,
-        signal: controller.signal,
+        signal: controller.signal
       });
       if (!res.ok) {
-        throw new AppException(
-          ErrorCode.INTERNAL_ERROR,
-          `cancel callback ${callback.url} returned ${res.status}`,
-          502,
-        );
+        throw new AppException(ErrorCode.INTERNAL_ERROR, `cancel callback ${callback.url} returned ${res.status}`, 502);
       }
     } catch (error) {
       if (error instanceof AppException) throw error;
       throw new AppException(
         ErrorCode.INTERNAL_ERROR,
         `cancel callback ${callback.url} failed: ${error instanceof Error ? error.message : String(error)}`,
-        502,
+        502
       );
     } finally {
       clearTimeout(timer);
     }
   }
 
-  async clone(runId: string, overrides?: { tags?: string[] }): Promise<{ run: Awaited<ReturnType<RunManagerService['createRun']>>; sessionId: string }> {
+  async clone(
+    runId: string,
+    overrides?: { tags?: string[] }
+  ): Promise<{ run: Awaited<ReturnType<RunManagerService['createRun']>>; sessionId: string }> {
     const run = await this.runManager.getRun(runId);
     const executionRequest = run.metadata?.executionRequest as RunDescriptor | undefined;
     if (!executionRequest) {
@@ -280,10 +276,7 @@ export class RunExecutorService {
         this.logger.log(`runtime instructions: ${initResult.instructions}`);
       }
 
-      if (
-        initResult.supportedModes.length > 0 &&
-        !initResult.supportedModes.includes(request.session.modeName)
-      ) {
+      if (initResult.supportedModes.length > 0 && !initResult.supportedModes.includes(request.session.modeName)) {
         throw new AppException(
           ErrorCode.MODE_NOT_SUPPORTED,
           `Runtime does not support mode '${request.session.modeName}'. Supported: ${initResult.supportedModes.join(', ')}`,
@@ -304,9 +297,9 @@ export class RunExecutorService {
         {
           runtimeSessionId: sessionId,
           initiator: snapshot.initiator ?? '',
-          ack: { sessionState: snapshot.state },
+          ack: { sessionState: snapshot.state }
         },
-        initResult.capabilities as unknown as Record<string, unknown>,
+        initResult.capabilities as unknown as Record<string, unknown>
       );
 
       // Subscribe read-only — never writes.
@@ -321,7 +314,7 @@ export class RunExecutorService {
         runtimeKind: request.runtime.kind,
         runtimeSessionId: sessionId,
         subscriberId,
-        sessionHandle: handle,
+        sessionHandle: handle
       });
 
       if (run.traceId) {
@@ -356,7 +349,7 @@ export class RunExecutorService {
   private async pollForOpenSession(
     provider: ReturnType<RuntimeProviderRegistry['get']>,
     runId: string,
-    sessionId: string,
+    sessionId: string
   ) {
     const startedAt = Date.now();
     const base = this.config.sessionPollBaseMs;
@@ -372,14 +365,14 @@ export class RunExecutorService {
           throw new AppException(
             ErrorCode.SESSION_EXPIRED,
             `session ${sessionId} expired before any agent opened it`,
-            400,
+            400
           );
         }
       } catch (pollError) {
         if (pollError instanceof AppException) throw pollError;
         // getSession failing with NotFound is normal while the agent hasn't called SessionStart yet.
         this.logger.debug(
-          `getSession(${sessionId}) attempt ${attempt + 1}: ${pollError instanceof Error ? pollError.message : String(pollError)}`,
+          `getSession(${sessionId}) attempt ${attempt + 1}: ${pollError instanceof Error ? pollError.message : String(pollError)}`
         );
       }
       attempt += 1;
@@ -390,7 +383,7 @@ export class RunExecutorService {
     throw new AppException(
       ErrorCode.RUNTIME_TIMEOUT,
       `timed out after ${totalTimeout}ms waiting for initiator agent to open session ${sessionId}`,
-      504,
+      504
     );
   }
 
@@ -401,28 +394,28 @@ export class RunExecutorService {
         if (msg.includes('UNKNOWN_POLICY_VERSION')) {
           await this.runManager.markFailed(
             runId,
-            new AppException(ErrorCode.UNKNOWN_POLICY_VERSION, `Unknown policy version: ${msg}`, 400),
+            new AppException(ErrorCode.UNKNOWN_POLICY_VERSION, `Unknown policy version: ${msg}`, 400)
           );
           return;
         }
         if (msg.includes('POLICY_DENIED')) {
           await this.runManager.markFailed(
             runId,
-            new AppException(ErrorCode.POLICY_DENIED, `Policy denied: ${msg}`, 403),
+            new AppException(ErrorCode.POLICY_DENIED, `Policy denied: ${msg}`, 403)
           );
           return;
         }
         if (msg.includes('INVALID_POLICY_DEFINITION')) {
           await this.runManager.markFailed(
             runId,
-            new AppException(ErrorCode.INVALID_POLICY_DEFINITION, `Invalid policy definition: ${msg}`, 400),
+            new AppException(ErrorCode.INVALID_POLICY_DEFINITION, `Invalid policy definition: ${msg}`, 400)
           );
           return;
         }
         if (msg.includes('SESSION_ALREADY_EXISTS') || msg.includes('SessionAlreadyExists')) {
           await this.runManager.markFailed(
             runId,
-            new AppException(ErrorCode.SESSION_ALREADY_EXISTS, `Session already exists: ${msg}`, 409),
+            new AppException(ErrorCode.SESSION_ALREADY_EXISTS, `Session already exists: ${msg}`, 409)
           );
           return;
         }
@@ -430,7 +423,7 @@ export class RunExecutorService {
       await this.runManager.markFailed(runId, error);
     } catch (markFailedError) {
       this.logger.error(
-        `failed to mark run ${runId} as failed (run may have been deleted): ${markFailedError instanceof Error ? markFailedError.message : String(markFailedError)}`,
+        `failed to mark run ${runId} as failed (run may have been deleted): ${markFailedError instanceof Error ? markFailedError.message : String(markFailedError)}`
       );
     }
   }

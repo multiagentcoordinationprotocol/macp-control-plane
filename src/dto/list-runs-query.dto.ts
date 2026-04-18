@@ -4,14 +4,16 @@ import { IsArray, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-vali
 import { RunStatus } from '../contracts/control-plane';
 
 export class ListRunsQueryDto {
-  @ApiPropertyOptional({ enum: ['queued', 'starting', 'binding_session', 'running', 'completed', 'failed', 'cancelled'] })
+  @ApiPropertyOptional({
+    enum: ['queued', 'starting', 'binding_session', 'running', 'completed', 'failed', 'cancelled']
+  })
   @IsOptional()
   @IsIn(['queued', 'starting', 'binding_session', 'running', 'completed', 'failed', 'cancelled'])
   status?: RunStatus;
 
   @ApiPropertyOptional({ type: [String], description: 'Filter by tags (comma-separated)' })
   @IsOptional()
-  @Transform(({ value }) => typeof value === 'string' ? value.split(',').map((s: string) => s.trim()) : value)
+  @Transform(({ value }) => (typeof value === 'string' ? value.split(',').map((s: string) => s.trim()) : value))
   @IsArray()
   @IsString({ each: true })
   tags?: string[];
@@ -28,7 +30,7 @@ export class ListRunsQueryDto {
 
   @ApiPropertyOptional({ default: 50, minimum: 1, maximum: 200 })
   @IsOptional()
-  @Transform(({ value }) => (value === undefined || value === null) ? undefined : Number(value))
+  @Transform(({ value }) => (value === undefined || value === null ? undefined : Number(value)))
   @IsInt()
   @Min(1)
   @Max(200)
@@ -36,7 +38,7 @@ export class ListRunsQueryDto {
 
   @ApiPropertyOptional({ default: 0, minimum: 0 })
   @IsOptional()
-  @Transform(({ value }) => (value === undefined || value === null) ? undefined : Number(value))
+  @Transform(({ value }) => (value === undefined || value === null ? undefined : Number(value)))
   @IsInt()
   @Min(0)
   offset?: number;

@@ -17,6 +17,7 @@ export interface CircuitBreakerConfig {
   resetTimeoutMs: number;
   onStateChange?: (state: CircuitBreakerState, event: 'success' | 'failure') => void;
   instrumentation?: InstrumentationService;
+  isExpectedError?: (error: unknown) => boolean;
 }
 
 export class CircuitBreaker {
@@ -73,6 +74,9 @@ export class CircuitBreaker {
       this.onSuccess();
       return result;
     } catch (error) {
+      if (this.config.isExpectedError?.(error)) {
+        throw error;
+      }
       this.onFailure();
       throw error;
     }

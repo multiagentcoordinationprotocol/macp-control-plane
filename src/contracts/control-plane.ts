@@ -78,15 +78,7 @@ export interface RunDescriptor {
   };
 }
 
-
-export type RunStatus =
-  | 'queued'
-  | 'starting'
-  | 'binding_session'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled';
+export type RunStatus = 'queued' | 'starting' | 'binding_session' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export type SessionState =
   | 'SESSION_STATE_UNSPECIFIED'
@@ -147,7 +139,7 @@ export const CANONICAL_EVENT_TYPES = [
   'llm.call.completed'
 ] as const;
 
-export type CanonicalEventType = typeof CANONICAL_EVENT_TYPES[number];
+export type CanonicalEventType = (typeof CANONICAL_EVENT_TYPES)[number];
 
 export interface CanonicalEvent {
   id: string;
@@ -202,6 +194,8 @@ export interface RunSummaryProjection {
   endedAt?: string;
   traceId?: string;
   modeName?: string;
+  contextId?: string;
+  extensionKeys?: string[];
 }
 
 export interface ParticipantProjection {

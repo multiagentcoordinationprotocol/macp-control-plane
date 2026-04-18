@@ -20,8 +20,15 @@ export class RedisStreamHubStrategy implements StreamHubStrategy {
   private readonly logger = new Logger(RedisStreamHubStrategy.name);
   private readonly localSubject = new Subject<RedisHubMessage>();
   private readonly completedRuns = new Set<string>();
-  private publisher: { publish: (channel: string, message: string) => Promise<number>; quit: () => Promise<string> } | null = null;
-  private subscriber: { subscribe: (channel: string, cb?: (err: Error | null) => void) => void; on: (event: string, cb: (...args: unknown[]) => void) => void; quit: () => Promise<string> } | null = null;
+  private publisher: {
+    publish: (channel: string, message: string) => Promise<number>;
+    quit: () => Promise<string>;
+  } | null = null;
+  private subscriber: {
+    subscribe: (channel: string, cb?: (err: Error | null) => void) => void;
+    on: (event: string, cb: (...args: unknown[]) => void) => void;
+    quit: () => Promise<string>;
+  } | null = null;
   private readonly channel = 'macp:stream-hub';
 
   constructor(redisUrl: string) {
@@ -90,9 +97,7 @@ export class RedisStreamHubStrategy implements StreamHubStrategy {
   }
 
   stream(runId: string): Observable<StreamHubMessage> {
-    return this.localSubject.asObservable().pipe(
-      filter((msg) => msg._runId === runId)
-    );
+    return this.localSubject.asObservable().pipe(filter((msg) => msg._runId === runId));
   }
 
   destroy(): void {

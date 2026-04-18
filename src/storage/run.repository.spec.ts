@@ -104,9 +104,7 @@ describe('RunRepository', () => {
       mockDb._select.limit.mockResolvedValue([]);
 
       await expect(repo.findByIdOrThrow('missing-id')).rejects.toThrow(NotFoundException);
-      await expect(repo.findByIdOrThrow('missing-id')).rejects.toThrow(
-        'run missing-id not found'
-      );
+      await expect(repo.findByIdOrThrow('missing-id')).rejects.toThrow('run missing-id not found');
     });
 
     it('returns the run when found', async () => {
@@ -137,9 +135,7 @@ describe('RunRepository', () => {
       const result = await repo.markStarted('run-1');
 
       expect(mockDb.update).toHaveBeenCalled();
-      expect(mockDb._update.set).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'starting' })
-      );
+      expect(mockDb._update.set).toHaveBeenCalledWith(expect.objectContaining({ status: 'starting' }));
       expect(result).toEqual(fakeRun);
     });
   });
@@ -152,9 +148,7 @@ describe('RunRepository', () => {
 
       const result = await repo.markCompleted('run-1');
 
-      expect(mockDb._update.set).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'completed' })
-      );
+      expect(mockDb._update.set).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
       expect(result).toEqual(fakeRun);
     });
   });
@@ -186,9 +180,7 @@ describe('RunRepository', () => {
 
       const result = await repo.markCancelled('run-1');
 
-      expect(mockDb._update.set).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'cancelled' })
-      );
+      expect(mockDb._update.set).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled' }));
       expect(result).toEqual(fakeRun);
     });
   });
@@ -221,9 +213,7 @@ describe('RunRepository', () => {
       // Simulate: update returns 0 rows (no valid source state matched)
       mockDb._update.returning.mockResolvedValue([]);
       // findById then returns a run that is already "completed"
-      mockDb._select.limit.mockResolvedValue([
-        { id: 'run-1', status: 'completed' }
-      ]);
+      mockDb._select.limit.mockResolvedValue([{ id: 'run-1', status: 'completed' }]);
 
       await expect(repo.markRunning('run-1')).rejects.toThrow(ConflictException);
       await expect(repo.markRunning('run-1')).rejects.toThrow(
@@ -235,9 +225,7 @@ describe('RunRepository', () => {
       mockDb._update.returning.mockResolvedValue([]);
       mockDb._select.limit.mockResolvedValue([]);
 
-      await expect(repo.markStarted('missing-id')).rejects.toThrow(
-        'run missing-id not found'
-      );
+      await expect(repo.markStarted('missing-id')).rejects.toThrow('run missing-id not found');
     });
 
     it('returns existing run when already in target status', async () => {

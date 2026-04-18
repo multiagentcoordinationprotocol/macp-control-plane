@@ -28,15 +28,17 @@ function resolveWindow(opts: DashboardOverviewOptions): {
   }
   const window = opts.window ?? '24h';
   const interval =
-    window === '1h' ? '1 hour'
-      : window === '6h' ? '6 hours'
-      : window === '24h' ? '24 hours'
-      : window === '7d' ? '7 days'
-      : '30 days';
+    window === '1h'
+      ? '1 hour'
+      : window === '6h'
+        ? '6 hours'
+        : window === '24h'
+          ? '24 hours'
+          : window === '7d'
+            ? '7 days'
+            : '30 days';
   const bucket: 'minute' | 'hour' | 'day' =
-    window === '1h' || window === '6h' ? 'minute'
-      : window === '24h' ? 'hour'
-      : 'day';
+    window === '1h' || window === '6h' ? 'minute' : window === '24h' ? 'hour' : 'day';
   return {
     cutoffSql: sql`now() - interval '${sql.raw(interval)}'`,
     bucket
@@ -272,8 +274,7 @@ export class DashboardService {
         ORDER BY 1
       `)
     ]);
-    const avgDurationMs =
-      (avgResult.rows[0] as Record<string, number> | undefined)?.avgDurationMs ?? null;
+    const avgDurationMs = (avgResult.rows[0] as Record<string, number> | undefined)?.avgDurationMs ?? null;
 
     return {
       avgDurationMs,
@@ -403,9 +404,7 @@ export class DashboardService {
     // Net outcome per bucket (positive − negative) — UI can also read raw rows if needed
     return {
       labels: result.rows.map((r: Record<string, unknown>) => String(r.bucket)),
-      data: result.rows.map((r: Record<string, unknown>) =>
-        Number(r.positive ?? 0) - Number(r.negative ?? 0)
-      )
+      data: result.rows.map((r: Record<string, unknown>) => Number(r.positive ?? 0) - Number(r.negative ?? 0))
     };
   }
 

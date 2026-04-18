@@ -1,0 +1,157 @@
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { RunDescriptor } from '../contracts/control-plane';
+import { SessionLifecycleEvent, RuntimeSessionSnapshot } from '../contracts/runtime';
+import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
+import { RunManagerService } from './run-manager.service';
+import { StreamConsumerService } from './stream-consumer.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
+import { AppConfigService } from '../config/app-config.service';
+
+/**
+ * Subscribes to the runtime's WatchSessions stream and auto-creates run
+ * records for discovered sessions. This enables the CP to observe sessions
+ * that were started by external launchers (not via POST /runs).
+ */
+@Injectable()
+export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(SessionDiscoveryService.name);
+  private aborted = false;
+  private readonly knownSessions = new Set<string>();
+
+  constructor(
+    private readonly providerRegistry: RuntimeProviderRegistry,
+    private readonly runManager: RunManagerService,
+    private readonly streamConsumer: StreamConsumerService,
+    private readonly instrumentation: InstrumentationService,
+    private readonly config: AppConfigService
+  ) {}
+
+  async onModuleInit(): Promise<void> {
+    if (!this.config.sessionDiscoveryEnabled) {
+      this.logger.log('Session discovery disabled (SESSION_DISCOVERY_ENABLED=false)');
+      return;
+    }
+    void this.startDiscoveryLoop();
+  }
+
+  onModuleDestroy(): void {
+    this.aborted = true;
+  }
+
+  private async startDiscoveryLoop(): Promise<void> {
+    this.logger.log('Starting session discovery via WatchSessions');
+
+    while (!this.aborted) {
+      try {
+        await this.consumeWatchStream();
+      } catch (error) {
+        if (this.aborted) return;
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`WatchSessions stream ended: ${message}. Reconnecting in 5s...`);
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+    }
+  }
+
+  private async consumeWatchStream(): Promise<void> {
+    const provider = this.providerRegistry.get('rust');
+    const stream = provider.watchSessions();
+
+    for await (const event of stream) {
+      if (this.aborted) return;
+
+      const sessionId = event.session?.sessionId;
+      if (!sessionId) continue;
+
+      if (event.eventType === 'created') {
+        await this.handleSessionCreated(event, provider);
+      } else if (event.eventType === 'resolved') {
+        await this.handleSessionTerminal(sessionId, 'completed');
+      } else if (event.eventType === 'expired') {
+        await this.handleSessionTerminal(sessionId, 'failed');
+      }
+    }
+  }
+
+  private async handleSessionCreated(
+    event: SessionLifecycleEvent,
+    provider: ReturnType<RuntimeProviderRegistry['get']>
+  ): Promise<void> {
+    const session = event.session;
+    if (this.knownSessions.has(session.sessionId)) return;
+    this.knownSessions.add(session.sessionId);
+
+    const existing = await this.runManager.findBySessionId(session.sessionId);
+    if (existing) {
+      this.logger.debug(`Session ${session.sessionId} already has run ${existing.id}`);
+      return;
+    }
+
+    const descriptor = this.buildRunDescriptor(session);
+    const run = await this.runManager.createRun(descriptor, session.sessionId, session.sessionId);
+
+    this.logger.log(
+      `Auto-discovered session ${session.sessionId} → run ${run.id} (mode=${session.mode}, initiator=${session.initiator})`
+    );
+
+    void this.runManager.markStarted(run.id, descriptor);
+    void this.runManager.bindSession(run.id, descriptor, {
+      runtimeSessionId: session.sessionId,
+      initiator: session.initiator ?? '',
+      ack: { sessionState: session.state }
+    });
+    void this.runManager.markRunning(run.id, session.sessionId);
+
+    const handle = provider.subscribeSession({
+      runId: run.id,
+      runtimeSessionId: session.sessionId
+    });
+
+    void this.streamConsumer.start({
+      runId: run.id,
+      execution: descriptor,
+      runtimeKind: 'rust',
+      runtimeSessionId: session.sessionId,
+      subscriberId: `discovery-${run.id}`,
+      sessionHandle: handle
+    });
+  }
+
+  private async handleSessionTerminal(sessionId: string, status: 'completed' | 'failed'): Promise<void> {
+    const run = await this.runManager.findBySessionId(sessionId);
+    if (!run) return;
+
+    if (['completed', 'failed', 'cancelled'].includes(run.status)) return;
+
+    if (status === 'completed') {
+      await this.runManager.markCompleted(run.id);
+    } else {
+      await this.runManager.markFailed(run.id, new Error('session expired'));
+    }
+    this.logger.log(`Session ${sessionId} → run ${run.id} marked ${status}`);
+  }
+
+  private buildRunDescriptor(session: RuntimeSessionSnapshot): RunDescriptor {
+    return {
+      mode: 'live',
+      runtime: { kind: 'rust' },
+      session: {
+        sessionId: session.sessionId,
+        modeName: session.mode,
+        modeVersion: session.modeVersion ?? '1.0.0',
+        configurationVersion: session.configurationVersion ?? 'config.default',
+        policyVersion: session.policyVersion,
+        ttlMs:
+          session.expiresAtUnixMs && session.startedAtUnixMs
+            ? session.expiresAtUnixMs - session.startedAtUnixMs
+            : 300000,
+        participants: [],
+        metadata: {
+          source: 'session-discovery',
+          discoveredAt: new Date().toISOString(),
+          initiator: session.initiator
+        }
+      }
+    };
+  }
+}

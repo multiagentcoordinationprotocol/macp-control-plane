@@ -29,9 +29,9 @@ function makeRunDescriptor(overrides: Partial<RunDescriptor> = {}): RunDescripto
       modeVersion: '1.0',
       configurationVersion: '1.0',
       ttlMs: 60000,
-      participants: [{ id: 'agent-1' }, { id: 'agent-2' }],
+      participants: [{ id: 'agent-1' }, { id: 'agent-2' }]
     },
-    ...overrides,
+    ...overrides
   };
 }
 
@@ -43,14 +43,14 @@ function makeRun(overrides: Partial<Run> = {}): Run {
     runtimeSessionId: 'sess-1',
     createdAt: new Date().toISOString(),
     metadata: { executionRequest: makeRunDescriptor() },
-    ...overrides,
+    ...overrides
   };
 }
 
 function makeReadOnlyHandle(): RuntimeSessionHandle {
   return {
     events: (async function* () {})(),
-    abort: jest.fn(),
+    abort: jest.fn()
   };
 }
 
@@ -125,17 +125,17 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
         runtimeInfo: { name: 'rust-runtime', version: '0.3.0' },
         supportedModes: ['decision', 'proposal', 'task'],
         capabilities: {},
-        instructions: undefined,
+        instructions: undefined
       }),
       subscribeSession: jest.fn().mockReturnValue(makeReadOnlyHandle()),
       getSession: jest.fn().mockResolvedValue({
         sessionId: 'sess-1',
         mode: 'decision',
         state: 'SESSION_STATE_OPEN',
-        initiator: 'agent-1',
+        initiator: 'agent-1'
       }),
       cancelSession: jest.fn().mockResolvedValue({
-        ack: { ok: true, sessionState: 'SESSION_STATE_RESOLVED' },
+        ack: { ok: true, sessionState: 'SESSION_STATE_RESOLVED' }
       }),
       getManifest: jest.fn(),
       listModes: jest.fn(),
@@ -144,7 +144,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       registerPolicy: jest.fn(),
       unregisterPolicy: jest.fn(),
       getPolicy: jest.fn(),
-      listPolicies: jest.fn(),
+      listPolicies: jest.fn()
     };
 
     mockRunManager = {
@@ -154,42 +154,42 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       markCancelled: jest.fn().mockResolvedValue(makeRun({ status: 'cancelled' })),
       markRunning: jest.fn().mockResolvedValue(makeRun({ status: 'running' })),
       getRun: jest.fn().mockResolvedValue(makeRun()),
-      bindSession: jest.fn().mockResolvedValue(makeRun({ status: 'binding_session' })),
+      bindSession: jest.fn().mockResolvedValue(makeRun({ status: 'binding_session' }))
     };
 
     mockRuntimeSessionRepository = {
       findByRunId: jest.fn().mockResolvedValue({
         modeName: 'decision',
-        initiatorParticipantId: 'agent-1',
-      }),
+        initiatorParticipantId: 'agent-1'
+      })
     };
 
     mockRuntimeRegistry = {
-      get: jest.fn().mockReturnValue(mockProvider),
+      get: jest.fn().mockReturnValue(mockProvider)
     };
 
     mockTraceService = {
       withSpan: jest.fn().mockImplementation((_name, _attrs, fn) => fn()),
       withRunSpan: jest.fn().mockImplementation((_runId, _name, _attrs, fn) => fn()),
       addRunSpanEvent: jest.fn(),
-      getRunTraceContext: jest.fn().mockReturnValue(undefined),
+      getRunTraceContext: jest.fn().mockReturnValue(undefined)
     };
 
     mockEventService = {
-      emitControlPlaneEvents: jest.fn().mockResolvedValue(undefined),
+      emitControlPlaneEvents: jest.fn().mockResolvedValue(undefined)
     };
 
     mockArtifactService = {
-      register: jest.fn().mockResolvedValue({ id: 'art-1', kind: 'trace', label: 'Root run trace' }),
+      register: jest.fn().mockResolvedValue({ id: 'art-1', kind: 'trace', label: 'Root run trace' })
     };
 
     mockStreamConsumer = {
       start: jest.fn().mockResolvedValue(undefined),
-      stop: jest.fn().mockResolvedValue(undefined),
+      stop: jest.fn().mockResolvedValue(undefined)
     };
 
     mockStreamHub = {
-      complete: jest.fn(),
+      complete: jest.fn()
     };
 
     mockConfig = {
@@ -198,7 +198,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       sessionPollBaseMs: 10,
       sessionPollMaxMs: 50,
       sessionPollTimeoutMs: 1000,
-      cancelCallbackTimeoutMs: 5000,
+      cancelCallbackTimeoutMs: 5000
     };
 
     service = new RunExecutorService(
@@ -212,7 +212,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       mockStreamConsumer as unknown as StreamConsumerService,
       mockStreamHub as unknown as StreamHubService,
       mockConfig as unknown as AppConfigService,
-      { outboundMessagesTotal: { inc: jest.fn() } } as unknown as InstrumentationService,
+      { outboundMessagesTotal: { inc: jest.fn() } } as unknown as InstrumentationService
     );
   });
 
@@ -227,16 +227,14 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
           modeVersion: '1.0',
           configurationVersion: '1.0',
           ttlMs: 60000,
-          participants: [],
-        },
+          participants: []
+        }
       });
 
       const result = await service.validate(request);
 
       expect(result.valid).toBe(false);
-      expect(result.errors).toContain(
-        'session.participants must contain at least one participant',
-      );
+      expect(result.errors).toContain('session.participants must contain at least one participant');
     });
 
     it('returns error when modeName is missing', async () => {
@@ -246,8 +244,8 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
           modeVersion: '1.0',
           configurationVersion: '1.0',
           ttlMs: 60000,
-          participants: [{ id: 'agent-1' }],
-        },
+          participants: [{ id: 'agent-1' }]
+        }
       });
 
       const result = await service.validate(request);
@@ -261,16 +259,14 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
         selectedProtocolVersion: '1.0',
         runtimeInfo: { name: 'rust-runtime' },
         supportedModes: ['task', 'proposal'],
-        capabilities: {},
+        capabilities: {}
       });
 
       const result = await service.validate(makeRunDescriptor());
 
       expect(result.valid).toBe(false);
       expect(result.errors).toEqual(
-        expect.arrayContaining([
-          expect.stringContaining("does not support mode 'decision'"),
-        ]),
+        expect.arrayContaining([expect.stringContaining("does not support mode 'decision'")])
       );
     });
 
@@ -289,14 +285,12 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
             configurationVersion: '1.0',
             ttlMs: 60000,
             participants: [{ id: 'agent-1' }],
-            sessionId: 'bad-id',
-          },
-        }),
+            sessionId: 'bad-id'
+          }
+        })
       );
       expect(result.valid).toBe(false);
-      expect(result.errors).toContain(
-        'session.sessionId must be a UUID v4/v7 or base64url 22+ chars',
-      );
+      expect(result.errors).toContain('session.sessionId must be a UUID v4/v7 or base64url 22+ chars');
     });
 
     it('returns warning (not error) when runtime is unreachable', async () => {
@@ -305,9 +299,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       const result = await service.validate(makeRunDescriptor());
 
       expect(result.valid).toBe(true);
-      expect(result.warnings).toEqual(
-        expect.arrayContaining([expect.stringContaining('Runtime not reachable')]),
-      );
+      expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('Runtime not reachable')]));
       expect(result.runtime.reachable).toBe(false);
     });
   });
@@ -326,9 +318,9 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       expect(result.sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-/);
       expect(mockRunManager.createRun).toHaveBeenCalledWith(
         expect.objectContaining({
-          session: expect.objectContaining({ sessionId: result.sessionId }),
+          session: expect.objectContaining({ sessionId: result.sessionId })
         }),
-        result.sessionId,
+        result.sessionId
       );
     });
 
@@ -345,9 +337,9 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
             configurationVersion: '1.0',
             ttlMs: 60000,
             participants: [{ id: 'agent-1' }],
-            sessionId,
-          },
-        }),
+            sessionId
+          }
+        })
       );
 
       expect(result.sessionId).toBe(sessionId);
@@ -363,10 +355,10 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
               configurationVersion: '1.0',
               ttlMs: 60000,
               participants: [{ id: 'agent-1' }],
-              sessionId: 'too-short',
-            },
-          }),
-        ),
+              sessionId: 'too-short'
+            }
+          })
+        )
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -395,8 +387,8 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
         runtimeSessionId: 'sess-1',
         metadata: {
           executionRequest: makeRunDescriptor(),
-          cancelCallback: { url: 'http://agent/cancel', bearer: 'tok' },
-        },
+          cancelCallback: { url: 'http://agent/cancel', bearer: 'tok' }
+        }
       });
       mockRunManager.getRun.mockResolvedValue(run);
 
@@ -408,10 +400,10 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
           method: 'POST',
           headers: expect.objectContaining({
             'content-type': 'application/json',
-            authorization: 'Bearer tok',
+            authorization: 'Bearer tok'
           }),
-          body: expect.stringContaining('"runId":"run-1"'),
-        }),
+          body: expect.stringContaining('"runId":"run-1"')
+        })
       );
       expect(mockProvider.cancelSession).not.toHaveBeenCalled();
       expect(mockRunManager.markCancelled).toHaveBeenCalledWith('run-1');
@@ -424,8 +416,8 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
         runtimeSessionId: 'sess-1',
         metadata: {
           executionRequest: makeRunDescriptor(),
-          cancellationDelegated: true,
-        },
+          cancellationDelegated: true
+        }
       });
       mockRunManager.getRun.mockResolvedValue(run);
 
@@ -434,7 +426,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       expect(mockProvider.cancelSession).toHaveBeenCalledWith({
         runId: 'run-1',
         runtimeSessionId: 'sess-1',
-        reason: 'policy-delegated',
+        reason: 'policy-delegated'
       });
       expect(mockRunManager.markCancelled).toHaveBeenCalledWith('run-1');
     });
@@ -443,7 +435,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       const run = makeRun({
         status: 'running',
         runtimeSessionId: 'sess-1',
-        metadata: { executionRequest: makeRunDescriptor() },
+        metadata: { executionRequest: makeRunDescriptor() }
       });
       mockRunManager.getRun.mockResolvedValue(run);
 
@@ -466,8 +458,8 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
         runtimeSessionId: 'sess-1',
         metadata: {
           executionRequest: makeRunDescriptor(),
-          cancelCallback: { url: 'http://agent/cancel' },
-        },
+          cancelCallback: { url: 'http://agent/cancel' }
+        }
       });
       mockRunManager.getRun.mockResolvedValue(run);
 
@@ -487,9 +479,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
 
     it('clones with tag overrides and allocates a fresh sessionId', async () => {
       const originalRequest = makeRunDescriptor();
-      mockRunManager.getRun.mockResolvedValue(
-        makeRun({ metadata: { executionRequest: originalRequest } }),
-      );
+      mockRunManager.getRun.mockResolvedValue(makeRun({ metadata: { executionRequest: originalRequest } }));
       mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-2', status: 'queued' }));
 
       const result = await service.clone('run-1', { tags: ['cloned'] });
@@ -498,9 +488,9 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       expect(mockRunManager.createRun).toHaveBeenCalledWith(
         expect.objectContaining({
           execution: expect.objectContaining({ tags: ['cloned'] }),
-          session: expect.objectContaining({ sessionId: result.sessionId }),
+          session: expect.objectContaining({ sessionId: result.sessionId })
         }),
-        result.sessionId,
+        result.sessionId
       );
     });
 
@@ -513,12 +503,10 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
           configurationVersion: '1.0',
           ttlMs: 60000,
           participants: [{ id: 'agent-1' }],
-          sessionId: 'original-session-id-that-would-be-valid-base64url',
-        },
+          sessionId: 'original-session-id-that-would-be-valid-base64url'
+        }
       });
-      mockRunManager.getRun.mockResolvedValue(
-        makeRun({ metadata: { executionRequest: originalRequest } }),
-      );
+      mockRunManager.getRun.mockResolvedValue(makeRun({ metadata: { executionRequest: originalRequest } }));
       mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-2' }));
 
       const result = await service.clone('run-1');
@@ -539,7 +527,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
         selectedProtocolVersion: '1.0',
         runtimeInfo: { name: 'rust-runtime' },
         supportedModes: ['task'],
-        capabilities: {},
+        capabilities: {}
       });
       mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-x' }));
 
@@ -548,7 +536,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
 
       expect(mockRunManager.markFailed).toHaveBeenCalledWith(
         'run-x',
-        expect.objectContaining({ errorCode: ErrorCode.MODE_NOT_SUPPORTED }),
+        expect.objectContaining({ errorCode: ErrorCode.MODE_NOT_SUPPORTED })
       );
     });
 
@@ -564,7 +552,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
           sessionId: 'sess-ok',
           state: 'SESSION_STATE_OPEN',
           mode: 'decision',
-          initiator: 'agent-1',
+          initiator: 'agent-1'
         });
 
       mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-ok' }));
@@ -574,15 +562,13 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
 
       expect(mockProvider.getSession).toHaveBeenCalled();
       expect(mockRunManager.bindSession).toHaveBeenCalled();
-      expect(mockProvider.subscribeSession).toHaveBeenCalledWith(
-        expect.objectContaining({ runId: 'run-ok' }),
-      );
+      expect(mockProvider.subscribeSession).toHaveBeenCalledWith(expect.objectContaining({ runId: 'run-ok' }));
       expect(mockStreamConsumer.start).toHaveBeenCalledWith(
         expect.objectContaining({
           runId: 'run-ok',
           sessionHandle: handle,
-          subscriberId: 'agent-1',
-        }),
+          subscriberId: 'agent-1'
+        })
       );
     });
 
@@ -590,7 +576,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       mockProvider.getSession.mockResolvedValue({
         sessionId: 'sess-expired',
         state: 'SESSION_STATE_EXPIRED',
-        mode: 'decision',
+        mode: 'decision'
       });
       mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-exp' }));
 
@@ -599,7 +585,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
 
       expect(mockRunManager.markFailed).toHaveBeenCalledWith(
         'run-exp',
-        expect.objectContaining({ errorCode: ErrorCode.SESSION_EXPIRED }),
+        expect.objectContaining({ errorCode: ErrorCode.SESSION_EXPIRED })
       );
     });
 
@@ -607,7 +593,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       mockProvider.getSession.mockResolvedValue({
         sessionId: 'sess-stuck',
         state: 'SESSION_STATE_UNSPECIFIED',
-        mode: 'decision',
+        mode: 'decision'
       });
       mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-timeout' }));
 
@@ -616,7 +602,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
 
       expect(mockRunManager.markFailed).toHaveBeenCalledWith(
         'run-timeout',
-        expect.objectContaining({ errorCode: ErrorCode.RUNTIME_TIMEOUT }),
+        expect.objectContaining({ errorCode: ErrorCode.RUNTIME_TIMEOUT })
       );
     });
   });

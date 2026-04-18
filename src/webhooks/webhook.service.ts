@@ -30,10 +30,7 @@ export class WebhookService {
     return this.webhookRepository.list();
   }
 
-  async update(
-    id: string,
-    fields: { url?: string; events?: string[]; secret?: string; active?: boolean }
-  ) {
+  async update(id: string, fields: { url?: string; events?: string[]; secret?: string; active?: boolean }) {
     return this.webhookRepository.update(id, fields);
   }
 
@@ -43,9 +40,7 @@ export class WebhookService {
 
   async fireEvent(payload: WebhookPayload): Promise<void> {
     const activeWebhooks = await this.webhookRepository.listActive();
-    const matching = activeWebhooks.filter(
-      (wh) => wh.events.length === 0 || wh.events.includes(payload.event)
-    );
+    const matching = activeWebhooks.filter((wh) => wh.events.length === 0 || wh.events.includes(payload.event));
 
     for (const webhook of matching) {
       // Outbox pattern: insert delivery record first, then attempt delivery
@@ -110,9 +105,7 @@ export class WebhookService {
         return;
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        this.logger.warn(
-          `webhook delivery to ${url} failed (attempt ${attempt}/${maxAttempts}): ${errorMessage}`
-        );
+        this.logger.warn(`webhook delivery to ${url} failed (attempt ${attempt}/${maxAttempts}): ${errorMessage}`);
         await this.deliveryRepository.markFailed(deliveryId, attempt, errorMessage);
         if (attempt >= maxAttempts) {
           this.instrumentation.webhookDeliveriesTotal.inc({ status: 'failed' });

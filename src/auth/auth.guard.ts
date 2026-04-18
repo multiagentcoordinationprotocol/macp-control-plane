@@ -27,9 +27,7 @@ export class AuthGuard implements CanActivate {
     }
 
     // Support both "Bearer <token>" and raw API key
-    const token = authHeader.startsWith('Bearer ')
-      ? authHeader.slice(7)
-      : authHeader;
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
 
     if (!token) {
       throw new UnauthorizedException('Empty authorization token');

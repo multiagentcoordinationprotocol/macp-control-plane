@@ -49,6 +49,7 @@ import { RunExecutorService } from './runs/run-executor.service';
 import { RunManagerService } from './runs/run-manager.service';
 import { RunRecoveryService } from './runs/run-recovery.service';
 import { StreamConsumerService } from './runs/stream-consumer.service';
+import { SessionDiscoveryService } from './runs/session-discovery.service';
 import { WebhookController } from './controllers/webhook.controller';
 import { WebhookDeliveryRepository } from './webhooks/webhook-delivery.repository';
 import { WebhookRepository } from './webhooks/webhook.repository';
@@ -63,13 +64,27 @@ import { WebhookService } from './webhooks/webhook.service';
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [AppConfigService],
-      useFactory: (config: AppConfigService) => [{
-        ttl: config.throttleTtlMs,
-        limit: config.throttleLimit,
-      }],
+      useFactory: (config: AppConfigService) => [
+        {
+          ttl: config.throttleTtlMs,
+          limit: config.throttleLimit
+        }
+      ]
     })
   ],
-  controllers: [RunsController, RunInsightsController, RuntimeController, ObservabilityController, HealthController, MetricsController, AdminController, AuditController, WebhookController, DashboardController, EventsController],
+  controllers: [
+    RunsController,
+    RunInsightsController,
+    RuntimeController,
+    ObservabilityController,
+    HealthController,
+    MetricsController,
+    AdminController,
+    AuditController,
+    WebhookController,
+    DashboardController,
+    EventsController
+  ],
   providers: [
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: ThrottleByUserGuard },
@@ -95,7 +110,7 @@ import { WebhookService } from './webhooks/webhook.service';
         }
         return new MemoryStreamHubStrategy();
       },
-      inject: [AppConfigService],
+      inject: [AppConfigService]
     },
     StreamHubService,
     EventNormalizerService,
@@ -107,6 +122,7 @@ import { WebhookService } from './webhooks/webhook.service';
     ReplayService,
     RunManagerService,
     StreamConsumerService,
+    SessionDiscoveryService,
     RunExecutorService,
     RunRecoveryService,
     RunInsightsService,
@@ -119,8 +135,6 @@ import { WebhookService } from './webhooks/webhook.service';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer
-      .apply(CorrelationIdMiddleware, RequestLoggerMiddleware)
-      .forRoutes('*');
+    consumer.apply(CorrelationIdMiddleware, RequestLoggerMiddleware).forRoutes('*');
   }
 }

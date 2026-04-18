@@ -80,16 +80,18 @@ export class ObservabilityController {
   @ApiOkResponse({ type: MetricsSummaryDto })
   async getMetrics(@Param('id', new ParseUUIDPipe()) id: string) {
     await this.runManager.getRun(id);
-    return (await this.metricsService.get(id)) ?? {
-      runId: id,
-      eventCount: 0,
-      messageCount: 0,
-      signalCount: 0,
-      proposalCount: 0,
-      toolCallCount: 0,
-      decisionCount: 0,
-      streamReconnectCount: 0
-    };
+    return (
+      (await this.metricsService.get(id)) ?? {
+        runId: id,
+        eventCount: 0,
+        messageCount: 0,
+        signalCount: 0,
+        proposalCount: 0,
+        toolCallCount: 0,
+        decisionCount: 0,
+        streamReconnectCount: 0
+      }
+    );
   }
 
   @Post('runs/:id/projection/rebuild')

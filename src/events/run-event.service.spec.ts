@@ -29,7 +29,10 @@ describe('RunEventService', () => {
     trace: { spanCount: 0, linkedArtifacts: [] },
     outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
     policy: { policyVersion: '', commitmentEvaluations: [] },
-    llm: { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } },
+    llm: {
+      calls: [],
+      totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 }
+    }
   };
 
   beforeEach(() => {
@@ -37,30 +40,30 @@ describe('RunEventService', () => {
 
     database = {
       db: {
-        transaction: jest.fn(async (cb: (tx: any) => Promise<any>) => cb(mockTx)),
-      },
+        transaction: jest.fn(async (cb: (tx: any) => Promise<any>) => cb(mockTx))
+      }
     } as unknown as jest.Mocked<DatabaseService>;
 
     runRepository = {
-      allocateSequence: jest.fn().mockResolvedValue(1),
+      allocateSequence: jest.fn().mockResolvedValue(1)
     } as unknown as jest.Mocked<RunRepository>;
 
     eventRepository = {
       appendRaw: jest.fn().mockResolvedValue(undefined),
-      appendCanonical: jest.fn().mockResolvedValue(undefined),
+      appendCanonical: jest.fn().mockResolvedValue(undefined)
     } as unknown as jest.Mocked<EventRepository>;
 
     projectionService = {
-      applyAndPersist: jest.fn().mockResolvedValue(fakeProjection),
+      applyAndPersist: jest.fn().mockResolvedValue(fakeProjection)
     } as unknown as jest.Mocked<ProjectionService>;
 
     metricsService = {
-      recordEvents: jest.fn().mockResolvedValue({}),
+      recordEvents: jest.fn().mockResolvedValue({})
     } as unknown as jest.Mocked<MetricsService>;
 
     streamHub = {
       publishEvent: jest.fn(),
-      publishSnapshot: jest.fn(),
+      publishSnapshot: jest.fn()
     } as unknown as jest.Mocked<StreamHubService>;
 
     service = new RunEventService(
@@ -74,8 +77,8 @@ describe('RunEventService', () => {
         withRunSpan: jest.fn(<T>(_runId: string, _name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
         withSpan: jest.fn(<T>(_name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
         addRunSpanEvent: jest.fn(),
-        getRunTraceContext: jest.fn().mockReturnValue(undefined),
-      } as any,
+        getRunTraceContext: jest.fn().mockReturnValue(undefined)
+      } as any
     );
   });
 
@@ -98,15 +101,15 @@ describe('RunEventService', () => {
           type: 'run.created' as const,
           source: { kind: 'control-plane' as const, name: 'run-manager' },
           subject: { kind: 'run' as const, id: 'run-1' },
-          data: { status: 'queued' },
+          data: { status: 'queued' }
         },
         {
           ts: '2026-01-01T00:00:01.000Z',
           type: 'run.started' as const,
           source: { kind: 'control-plane' as const, name: 'run-manager' },
           subject: { kind: 'run' as const, id: 'run-1' },
-          data: { status: 'starting' },
-        },
+          data: { status: 'starting' }
+        }
       ];
 
       const result = await service.emitControlPlaneEvents('run-1', partialEvents);
@@ -144,8 +147,8 @@ describe('RunEventService', () => {
           type: 'session.stream.opened' as const,
           source: { kind: 'control-plane' as const, name: 'stream-consumer' },
           subject: { kind: 'session' as const, id: 'session-1' },
-          data: { status: 'reconnecting', detail: 'stream retry' },
-        },
+          data: { status: 'reconnecting', detail: 'stream retry' }
+        }
       ];
 
       const result = await service.emitControlPlaneEvents('run-1', partialEvents);
@@ -173,8 +176,8 @@ describe('RunEventService', () => {
           type: 'run.created' as const,
           source: { kind: 'control-plane' as const, name: 'run-manager' },
           subject: { kind: 'run' as const, id: 'run-1' },
-          data: { status: 'queued' },
-        },
+          data: { status: 'queued' }
+        }
       ];
 
       await service.emitControlPlaneEvents('run-1', partialEvents);
@@ -189,7 +192,7 @@ describe('RunEventService', () => {
   describe('persistRawAndCanonical', () => {
     const rawEvent: RawRuntimeEvent = {
       kind: 'stream-envelope',
-      receivedAt: '2026-01-01T00:00:00.000Z',
+      receivedAt: '2026-01-01T00:00:00.000Z'
     };
 
     const canonicalEvents: CanonicalEvent[] = [
@@ -200,7 +203,7 @@ describe('RunEventService', () => {
         ts: '2026-01-01T00:00:00.000Z',
         type: 'message.received',
         source: { kind: 'runtime', name: 'rust-runtime' },
-        data: { messageType: 'Signal' },
+        data: { messageType: 'Signal' }
       },
       {
         id: 'evt-2',
@@ -209,8 +212,8 @@ describe('RunEventService', () => {
         ts: '2026-01-01T00:00:01.000Z',
         type: 'signal.emitted',
         source: { kind: 'runtime', name: 'rust-runtime' },
-        data: { messageType: 'Signal' },
-      },
+        data: { messageType: 'Signal' }
+      }
     ];
 
     it('should persist both raw and canonical events with correct sequences', async () => {
@@ -279,7 +282,7 @@ describe('RunEventService', () => {
           ts: '2026-01-01T00:00:00.000Z',
           type: 'message.received',
           source: { kind: 'runtime', name: 'rust-runtime' },
-          data: {},
+          data: {}
         },
         {
           id: '',
@@ -288,8 +291,8 @@ describe('RunEventService', () => {
           ts: '2026-01-01T00:00:00.000Z',
           type: 'signal.emitted',
           source: { kind: 'runtime', name: 'rust-runtime' },
-          data: {},
-        },
+          data: {}
+        }
       ];
 
       const result = await service.persistRawAndCanonical('run-1', rawEvent, eventsWithMixedIds);

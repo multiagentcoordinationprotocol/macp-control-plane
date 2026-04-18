@@ -26,7 +26,9 @@ export class ProjectionService {
     // Schema version migration: if stored schema is older, mark as needing rebuild
     const storedSchemaVersion = (row as unknown as Record<string, unknown>).schemaVersion as number | undefined;
     if (storedSchemaVersion != null && storedSchemaVersion < PROJECTION_SCHEMA_VERSION) {
-      this.logger.warn(`projection for run ${runId} has schema v${storedSchemaVersion}, current is v${PROJECTION_SCHEMA_VERSION} — returning stale data (rebuild recommended)`);
+      this.logger.warn(
+        `projection for run ${runId} has schema v${storedSchemaVersion}, current is v${PROJECTION_SCHEMA_VERSION} — returning stale data (rebuild recommended)`
+      );
     }
 
     return {
@@ -35,12 +37,23 @@ export class ProjectionService {
       graph: row.graph as unknown as GraphProjection,
       decision: row.decision as unknown as RunStateProjection['decision'],
       signals: row.signals as unknown as RunStateProjection['signals'],
-      progress: row.progress as unknown as ProgressProjection ?? { entries: [] },
+      progress: (row.progress as unknown as ProgressProjection) ?? { entries: [] },
       timeline: row.timeline as unknown as RunStateProjection['timeline'],
       trace: row.traceSummary as unknown as RunStateProjection['trace'],
-      outboundMessages: (row as unknown as Record<string, unknown>).outboundMessages as OutboundMessageSummary ?? { total: 0, queued: 0, accepted: 0, rejected: 0 },
-      policy: (row as unknown as Record<string, unknown>).policy as RunStateProjection['policy'] ?? { policyVersion: '', commitmentEvaluations: [] },
-      llm: (row as unknown as Record<string, unknown>).llm as RunStateProjection['llm'] ?? { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } }
+      outboundMessages: ((row as unknown as Record<string, unknown>).outboundMessages as OutboundMessageSummary) ?? {
+        total: 0,
+        queued: 0,
+        accepted: 0,
+        rejected: 0
+      },
+      policy: ((row as unknown as Record<string, unknown>).policy as RunStateProjection['policy']) ?? {
+        policyVersion: '',
+        commitmentEvaluations: []
+      },
+      llm: ((row as unknown as Record<string, unknown>).llm as RunStateProjection['llm']) ?? {
+        calls: [],
+        totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 }
+      }
     };
   }
 
@@ -48,7 +61,13 @@ export class ProjectionService {
     const current = (await this.get(runId)) ?? this.empty(runId);
     const next = this.applyEvents(current, events);
     const version = (events.at(-1)?.seq ?? current.timeline.latestSeq) || 0;
-    await this.projectionRepository.upsert(runId, next, version, PROJECTION_SCHEMA_VERSION, tx as Parameters<typeof this.projectionRepository.upsert>[4]);
+    await this.projectionRepository.upsert(
+      runId,
+      next,
+      version,
+      PROJECTION_SCHEMA_VERSION,
+      tx as Parameters<typeof this.projectionRepository.upsert>[4]
+    );
     return next;
   }
 
@@ -64,13 +83,16 @@ export class ProjectionService {
     for (const event of events) {
       next.timeline.latestSeq = event.seq;
       next.timeline.totalEvents += 1;
-      next.timeline.recent = [...next.timeline.recent, {
-        id: event.id,
-        seq: event.seq,
-        ts: event.ts,
-        type: event.type,
-        subject: event.subject
-      }].slice(-50);
+      next.timeline.recent = [
+        ...next.timeline.recent,
+        {
+          id: event.id,
+          seq: event.seq,
+          ts: event.ts,
+          type: event.type,
+          subject: event.subject
+        }
+      ].slice(-50);
 
       if (event.trace?.traceId) {
         next.trace.traceId = event.trace.traceId;
@@ -118,8 +140,15 @@ export class ProjectionService {
         case 'session.bound':
         case 'session.state.changed': {
           next.run.runtimeSessionId = (event.data.sessionId as string | undefined) ?? next.run.runtimeSessionId;
+          if (typeof event.data.contextId === 'string') {
+            next.run.contextId = event.data.contextId;
+          }
+          if (Array.isArray(event.data.extensionKeys)) {
+            next.run.extensionKeys = event.data.extensionKeys as string[];
+          }
           if (event.type === 'session.bound' && Array.isArray(event.data.expectedCommitments)) {
-            next.policy.expectedCommitments = event.data.expectedCommitments as RunStateProjection['policy']['expectedCommitments'];
+            next.policy.expectedCommitments = event.data
+              .expectedCommitments as RunStateProjection['policy']['expectedCommitments'];
             if (next.policy.expectedCommitments && next.policy.expectedCommitments.length > 0) {
               next.policy.quorumStatus = next.policy.quorumStatus ?? 'pending';
             }
@@ -202,12 +231,7 @@ export class ProjectionService {
         }
         case 'signal.acknowledged': {
           const ackPayload = event.data.decodedPayload as Record<string, unknown> | undefined;
-          const targetSignalId = String(
-            ackPayload?.signalId ??
-            ackPayload?.signal_id ??
-            event.subject?.id ??
-            ''
-          );
+          const targetSignalId = String(ackPayload?.signalId ?? ackPayload?.signal_id ?? event.subject?.id ?? '');
           const acknowledger = (event.data.sender as string | undefined) ?? undefined;
           if (targetSignalId) {
             const signal = next.signals.signals.find((s) => s.id === targetSignalId);
@@ -233,12 +257,16 @@ export class ProjectionService {
             messageType: messageType || undefined
           };
           const existingProposals = next.decision.current?.proposals ?? [];
-          const proposalId = String(proposalPayload?.proposalId ?? proposalPayload?.requestId ?? event.subject?.id ?? '');
+          const proposalId = String(
+            proposalPayload?.proposalId ?? proposalPayload?.requestId ?? event.subject?.id ?? ''
+          );
           next.decision.current = {
             ...(next.decision.current ?? { finalized: false }),
             action: proposalId || String(event.subject?.id ?? 'proposal'),
             confidence: safeOptionalNumber(proposalPayload?.confidence) ?? next.decision.current?.confidence,
-            reasons: [String(proposalPayload?.reason ?? proposalPayload?.summary ?? proposalPayload?.rationale ?? event.type)].filter(Boolean),
+            reasons: [
+              String(proposalPayload?.reason ?? proposalPayload?.summary ?? proposalPayload?.rationale ?? event.type)
+            ].filter(Boolean),
             finalized: false,
             proposalId,
             proposals: [...existingProposals, contribution].slice(-50)
@@ -255,9 +283,7 @@ export class ProjectionService {
           const action = String(payload?.action ?? 'resolved');
           const explicitOutcome = payload?.outcomePositive ?? payload?.outcome_positive;
           const outcomePositive: boolean | null =
-            explicitOutcome != null
-              ? Boolean(explicitOutcome)
-              : inferOutcomePositiveFromAction(action);
+            explicitOutcome != null ? Boolean(explicitOutcome) : inferOutcomePositiveFromAction(action);
           const sender = (event.data.sender as string | undefined) ?? undefined;
           next.decision.current = {
             ...(next.decision.current ?? { finalized: false }),
@@ -307,7 +333,10 @@ export class ProjectionService {
           const completion = safeOptionalNumber(payload.completionTokens) ?? 0;
           const total = safeOptionalNumber(payload.totalTokens) ?? prompt + completion;
           if (!next.llm) {
-            next.llm = { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } };
+            next.llm = {
+              calls: [],
+              totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 }
+            };
           }
           next.llm.calls = [
             ...next.llm.calls,
@@ -321,7 +350,7 @@ export class ProjectionService {
               ts: event.ts,
               messageId: event.data.messageId as string | undefined,
               artifactId: payload.artifactId as string | undefined,
-              estimatedCostUsd: safeOptionalNumber(payload.estimatedCostUsd),
+              estimatedCostUsd: safeOptionalNumber(payload.estimatedCostUsd)
             }
           ].slice(-100);
           next.llm.totals.callCount += 1;
@@ -382,7 +411,10 @@ export class ProjectionService {
       trace: { spanCount: 0, linkedArtifacts: [] },
       outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
       policy: { policyVersion: '', commitmentEvaluations: [] },
-      llm: { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } }
+      llm: {
+        calls: [],
+        totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 }
+      }
     };
   }
 
@@ -426,9 +458,7 @@ export class ProjectionService {
     if (outcome === 'failed') {
       const withActivity = toSweep.filter((p) => p.latestActivityAt);
       if (withActivity.length > 0) {
-        lastActive = withActivity.reduce((a, b) =>
-          (a.latestActivityAt ?? '') > (b.latestActivityAt ?? '') ? a : b
-        );
+        lastActive = withActivity.reduce((a, b) => ((a.latestActivityAt ?? '') > (b.latestActivityAt ?? '') ? a : b));
       }
     }
 
@@ -486,7 +516,13 @@ function inferContributionVote(messageType: string, payload?: Record<string, unk
   const raw = (payload?.vote ?? payload?.recommendation ?? '').toString().toUpperCase();
   if (['APPROVE', 'ACCEPT', 'ALLOW', 'YES'].includes(raw)) return 'allow';
   if (['REJECT', 'DENY', 'BLOCK', 'NO'].includes(raw)) return 'deny';
-  if (messageType === 'Accept' || messageType === 'Approve' || messageType === 'TaskAccept' || messageType === 'HandoffAccept') return 'allow';
+  if (
+    messageType === 'Accept' ||
+    messageType === 'Approve' ||
+    messageType === 'TaskAccept' ||
+    messageType === 'HandoffAccept'
+  )
+    return 'allow';
   if (messageType === 'Reject' || messageType === 'TaskReject' || messageType === 'HandoffDecline') return 'deny';
   return undefined;
 }

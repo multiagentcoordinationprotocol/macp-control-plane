@@ -65,7 +65,9 @@ export class RedactionService {
       try {
         out.push(new RegExp(trimmed, 'g'));
       } catch (err) {
-        this.logger.warn(`Ignoring invalid redaction pattern ${JSON.stringify(trimmed)}: ${err instanceof Error ? err.message : String(err)}`);
+        this.logger.warn(
+          `Ignoring invalid redaction pattern ${JSON.stringify(trimmed)}: ${err instanceof Error ? err.message : String(err)}`
+        );
       }
     }
     return out;

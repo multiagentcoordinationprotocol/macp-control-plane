@@ -25,17 +25,12 @@ import {
   RuntimeUnregisterPolicyResult,
   RuntimeGetPolicyRequest,
   RuntimeListPoliciesRequest,
-  RuntimePolicyDescriptor
+  RuntimePolicyDescriptor,
+  SessionLifecycleEvent
 } from '../contracts/runtime';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { CircuitBreaker } from './circuit-breaker';
-import {
-  buildMetadata,
-  fromAck,
-  fromEnvelope,
-  fromSessionMetadata,
-  getClientMethod,
-} from './grpc-helpers';
+import { buildMetadata, fromAck, fromEnvelope, fromSessionMetadata, getClientMethod } from './grpc-helpers';
 import { RuntimeCredentialResolverService } from './runtime-credential-resolver.service';
 
 export interface GrpcCallOptions {
@@ -87,7 +82,11 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     this.circuitBreaker = new CircuitBreaker({
       failureThreshold: this.config.runtimeCircuitBreakerThreshold,
       resetTimeoutMs: this.config.runtimeCircuitBreakerResetMs,
-      instrumentation: this.instrumentation
+      instrumentation: this.instrumentation,
+      isExpectedError: (error: unknown) => {
+        const code = (error as grpc.ServiceError)?.code;
+        return code === grpc.status.NOT_FOUND || code === grpc.status.PERMISSION_DENIED;
+      }
     });
 
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -110,9 +109,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     const descriptor = grpc.loadPackageDefinition(packageDefinition) as any;
     this.serviceConstructor = descriptor.macp.v1.MACPRuntimeService;
     this.runtimeAddress = this.config.runtimeAddress;
-    this.channelCreds = this.config.runtimeTls
-      ? grpc.credentials.createSsl()
-      : grpc.credentials.createInsecure();
+    this.channelCreds = this.config.runtimeTls ? grpc.credentials.createSsl() : grpc.credentials.createInsecure();
     this.client = this.createClient();
   }
 
@@ -122,26 +119,32 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   }
 
   async initialize(req: RuntimeInitializeRequest, opts?: GrpcCallOptions): Promise<RuntimeInitializeResult> {
-    const response = await this.unary('Initialize', {
-      supportedProtocolVersions: ['1.0'],
-      clientInfo: {
-        name: req.clientName,
-        title: req.clientName,
-        version: req.clientVersion,
-        description: 'MACP Control Plane (observer)',
-        websiteUrl: ''
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+    const response = await this.unary(
+      'Initialize',
+      {
+        supportedProtocolVersions: ['1.0'],
+        clientInfo: {
+          name: req.clientName,
+          title: req.clientName,
+          version: req.clientVersion,
+          description: 'MACP Control Plane (observer)',
+          websiteUrl: ''
+        },
+        capabilities: {
+          sessions: { stream: true },
+          cancellation: { cancelSession: true },
+          progress: { progress: true },
+          manifest: { getManifest: true },
+          modeRegistry: { listModes: true, listChanged: false },
+          roots: { listRoots: true, listChanged: false },
+          policyRegistry: { registerPolicy: true, listPolicies: true, listChanged: false },
+          experimental: { features: {} }
+        }
       },
-      capabilities: {
-        sessions: { stream: true },
-        cancellation: { cancelSession: true },
-        progress: { progress: true },
-        manifest: { getManifest: true },
-        modeRegistry: { listModes: true, listChanged: false },
-        roots: { listRoots: true, listChanged: false },
-        policyRegistry: { registerPolicy: true, listPolicies: true, listChanged: false },
-        experimental: { features: {} }
-      }
-    }, undefined, opts);
+      buildMetadata(creds.metadata),
+      opts
+    );
 
     return {
       selectedProtocolVersion: response.selectedProtocolVersion,
@@ -154,15 +157,17 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       },
       supportedModes: response.supportedModes ?? [],
       instructions: response.instructions || undefined,
-      capabilities: response.capabilities ? {
-        sessions: response.capabilities.sessions,
-        cancellation: response.capabilities.cancellation,
-        progress: response.capabilities.progress,
-        manifest: response.capabilities.manifest,
-        modeRegistry: response.capabilities.modeRegistry,
-        roots: response.capabilities.roots,
-        policyRegistry: response.capabilities.policyRegistry
-      } : undefined
+      capabilities: response.capabilities
+        ? {
+            sessions: response.capabilities.sessions,
+            cancellation: response.capabilities.cancellation,
+            progress: response.capabilities.progress,
+            manifest: response.capabilities.manifest,
+            modeRegistry: response.capabilities.modeRegistry,
+            roots: response.capabilities.roots,
+            policyRegistry: response.capabilities.policyRegistry
+          }
+        : undefined
     };
   }
 
@@ -243,8 +248,11 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
 
         // Observer stream: end the write side immediately — we only read.
         // This tells the runtime the client is a passive subscriber.
-        try { grpcCall.end(); } catch { /* some gRPC impls no-op on empty streams */ }
-
+        try {
+          grpcCall.end();
+        } catch {
+          /* some gRPC impls no-op on empty streams */
+        }
       } catch (error) {
         streamFailure = error instanceof Error ? error : new Error(String(error));
         ended = true;
@@ -284,7 +292,11 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
           },
           async return(): Promise<IteratorResult<RawRuntimeEvent>> {
             if (grpcCall) {
-              try { grpcCall.cancel(); } catch { /* ignore */ }
+              try {
+                grpcCall.cancel();
+              } catch {
+                /* ignore */
+              }
             }
             return { done: true, value: undefined };
           }
@@ -297,7 +309,11 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       abort: () => {
         ended = true;
         if (grpcCall) {
-          try { grpcCall.cancel(); } catch { /* ignore */ }
+          try {
+            grpcCall.cancel();
+          } catch {
+            /* ignore */
+          }
         }
         notify();
       }
@@ -306,11 +322,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
 
   async getSession(req: RuntimeGetSessionRequest): Promise<RuntimeSessionSnapshot> {
     const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
-    const response = await this.unary(
-      'GetSession',
-      { sessionId: req.runtimeSessionId },
-      buildMetadata(creds.metadata)
-    );
+    const response = await this.unary('GetSession', { sessionId: req.runtimeSessionId }, buildMetadata(creds.metadata));
     return fromSessionMetadata(response.metadata);
   }
 
@@ -325,7 +337,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   }
 
   async getManifest(): Promise<RuntimeManifestResult> {
-    const response = await this.unary('GetManifest', { agentId: '' });
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+    const response = await this.unary('GetManifest', { agentId: '' }, buildMetadata(creds.metadata));
     return {
       agentId: response.manifest?.agentId ?? 'macp-runtime',
       title: response.manifest?.title,
@@ -336,7 +349,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   }
 
   async listModes(): Promise<RuntimeModeDescriptor[]> {
-    const response = await this.unary('ListModes', {});
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+    const response = await this.unary('ListModes', {}, buildMetadata(creds.metadata));
     return (response.modes ?? []).map((mode: any) => ({
       mode: mode.mode,
       modeVersion: mode.modeVersion,
@@ -351,7 +365,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   }
 
   async listRoots(): Promise<RuntimeRootDescriptor[]> {
-    const response = await this.unary('ListRoots', {});
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+    const response = await this.unary('ListRoots', {}, buildMetadata(creds.metadata));
     return (response.roots ?? []).map((root: any) => ({ uri: root.uri, name: root.name }));
   }
 
@@ -373,29 +388,137 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     }
   }
 
+  // ── Session lifecycle observation ─────────────────────────────────
+
+  async listSessions(): Promise<RuntimeSessionSnapshot[]> {
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+    const response = await this.unary('ListSessions', {}, buildMetadata(creds.metadata));
+    return (response.sessions ?? []).map((s: any) => fromSessionMetadata(s));
+  }
+
+  watchSessions(): AsyncIterable<SessionLifecycleEvent> {
+    // Capture instance deps before the closure so the `this` alias lint rule is satisfied.
+    const credentialResolver = this.credentialResolver;
+    const client = this.client;
+    const kind = this.kind;
+
+    return {
+      [Symbol.asyncIterator]() {
+        let grpcCall: any = null;
+        const buffer: SessionLifecycleEvent[] = [];
+        let resolveWait: (() => void) | null = null;
+        let ended = false;
+        let streamError: Error | null = null;
+
+        const notify = () => {
+          if (resolveWait) {
+            const r = resolveWait;
+            resolveWait = null;
+            r();
+          }
+        };
+
+        const launch = async () => {
+          try {
+            const creds = await credentialResolver.resolve({ runtimeKind: kind });
+            const metadata = buildMetadata(creds.metadata);
+            const method = getClientMethod(client, 'WatchSessions');
+            grpcCall = method.call(client, {}, metadata);
+
+            grpcCall.on('data', (chunk: any) => {
+              const event = chunk.event;
+              if (!event) return;
+              const eventTypeRaw = event.eventType ?? event.event_type ?? '';
+              let eventType: 'created' | 'resolved' | 'expired' = 'created';
+              if (eventTypeRaw === 'EVENT_TYPE_RESOLVED' || eventTypeRaw === 1) eventType = 'resolved';
+              else if (eventTypeRaw === 'EVENT_TYPE_EXPIRED' || eventTypeRaw === 2) eventType = 'expired';
+              else if (eventTypeRaw === 'EVENT_TYPE_CREATED' || eventTypeRaw === 0) eventType = 'created';
+
+              buffer.push({
+                eventType,
+                session: fromSessionMetadata(event.session),
+                observedAtUnixMs: event.observedAtUnixMs ? Number(event.observedAtUnixMs) : Date.now()
+              });
+              notify();
+            });
+
+            grpcCall.on('error', (err: Error) => {
+              streamError = err;
+              ended = true;
+              notify();
+            });
+            grpcCall.on('end', () => {
+              ended = true;
+              notify();
+            });
+          } catch (err) {
+            streamError = err instanceof Error ? err : new Error(String(err));
+            ended = true;
+            notify();
+          }
+        };
+
+        void launch();
+
+        return {
+          async next(): Promise<IteratorResult<SessionLifecycleEvent>> {
+            while (true) {
+              if (buffer.length > 0) return { done: false, value: buffer.shift()! };
+              if (ended) {
+                if (streamError) throw streamError;
+                return { done: true, value: undefined };
+              }
+              await new Promise<void>((r) => {
+                if (buffer.length > 0 || ended) r();
+                else resolveWait = r;
+              });
+            }
+          },
+          async return(): Promise<IteratorResult<SessionLifecycleEvent>> {
+            if (grpcCall) {
+              try {
+                grpcCall.cancel();
+              } catch {
+                /* ignore */
+              }
+            }
+            return { done: true, value: undefined };
+          }
+        };
+      }
+    };
+  }
+
   // ── Governance policy lifecycle (RFC-MACP-0012) ──────────────────
 
   async registerPolicy(req: RuntimeRegisterPolicyRequest): Promise<RuntimeRegisterPolicyResult> {
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
     const descriptor = req.descriptor;
-    const response = await this.unary('RegisterPolicy', {
-      policyDescriptor: {
-        policyId: descriptor.policyId,
-        mode: descriptor.mode,
-        description: descriptor.description,
-        rules: typeof descriptor.rules === 'string' ? Buffer.from(descriptor.rules) : descriptor.rules,
-        schemaVersion: descriptor.schemaVersion
-      }
-    });
+    const response = await this.unary(
+      'RegisterPolicy',
+      {
+        policyDescriptor: {
+          policyId: descriptor.policyId,
+          mode: descriptor.mode,
+          description: descriptor.description,
+          rules: typeof descriptor.rules === 'string' ? Buffer.from(descriptor.rules) : descriptor.rules,
+          schemaVersion: descriptor.schemaVersion
+        }
+      },
+      buildMetadata(creds.metadata)
+    );
     return { ok: response.ok ?? false, error: response.error || undefined };
   }
 
   async unregisterPolicy(req: RuntimeUnregisterPolicyRequest): Promise<RuntimeUnregisterPolicyResult> {
-    const response = await this.unary('UnregisterPolicy', { policyId: req.policyId });
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+    const response = await this.unary('UnregisterPolicy', { policyId: req.policyId }, buildMetadata(creds.metadata));
     return { ok: response.ok ?? false, error: response.error || undefined };
   }
 
   async getPolicy(req: RuntimeGetPolicyRequest): Promise<RuntimePolicyDescriptor> {
-    const response = await this.unary('GetPolicy', { policyId: req.policyId });
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+    const response = await this.unary('GetPolicy', { policyId: req.policyId }, buildMetadata(creds.metadata));
     const d = response.policyDescriptor ?? response.descriptor;
     return {
       policyId: d.policyId,
@@ -408,7 +531,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   }
 
   async listPolicies(req?: RuntimeListPoliciesRequest): Promise<RuntimePolicyDescriptor[]> {
-    const response = await this.unary('ListPolicies', { mode: req?.mode ?? '' });
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+    const response = await this.unary('ListPolicies', { mode: req?.mode ?? '' }, buildMetadata(creds.metadata));
     return (response.descriptors ?? []).map((d: any) => ({
       policyId: d.policyId,
       mode: d.mode,
@@ -442,18 +566,13 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
           }
         });
       });
-      this.instrumentation.grpcCallDuration.observe(
-        { method, status: 'ok' },
-        (Date.now() - start) / 1000
-      );
+      this.instrumentation.grpcCallDuration.observe({ method, status: 'ok' }, (Date.now() - start) / 1000);
       return result;
     } catch (error) {
-      this.instrumentation.grpcCallDuration.observe(
-        { method, status: 'error' },
-        (Date.now() - start) / 1000
-      );
+      const grpcErr = error as grpc.ServiceError;
+      this.logger.error(`gRPC ${method} failed: code=${grpcErr.code} details="${grpcErr.details ?? grpcErr.message}"`);
+      this.instrumentation.grpcCallDuration.observe({ method, status: 'error' }, (Date.now() - start) / 1000);
       throw error;
     }
   }
-
 }

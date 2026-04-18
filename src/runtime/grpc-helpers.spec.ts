@@ -1,11 +1,5 @@
 import * as grpc from '@grpc/grpc-js';
-import {
-  buildMetadata,
-  fromAck,
-  fromEnvelope,
-  fromSessionMetadata,
-  getClientMethod,
-} from './grpc-helpers';
+import { buildMetadata, fromAck, fromEnvelope, fromSessionMetadata, getClientMethod } from './grpc-helpers';
 
 describe('gRPC helpers (Q3-1)', () => {
   describe('fromEnvelope', () => {
@@ -18,7 +12,7 @@ describe('gRPC helpers (Q3-1)', () => {
         sessionId: 'sess-1',
         sender: 'agent-a',
         timestampUnixMs: '1700000000000', // Long serialized as string (longs: String)
-        payload: Buffer.from('hello'),
+        payload: Buffer.from('hello')
       };
       const result = fromEnvelope(raw);
       expect(result.timestampUnixMs).toBe(1700000000000);
@@ -28,8 +22,13 @@ describe('gRPC helpers (Q3-1)', () => {
 
     it('coerces non-buffer payload to Buffer', () => {
       const result = fromEnvelope({
-        macpVersion: '1.0', mode: '', messageType: '', messageId: '',
-        sessionId: '', sender: '', payload: 'hello',
+        macpVersion: '1.0',
+        mode: '',
+        messageType: '',
+        messageId: '',
+        sessionId: '',
+        sender: '',
+        payload: 'hello'
       });
       expect(Buffer.isBuffer(result.payload)).toBe(true);
     });
@@ -37,8 +36,12 @@ describe('gRPC helpers (Q3-1)', () => {
     it('defaults timestampUnixMs to now when missing', () => {
       const before = Date.now();
       const result = fromEnvelope({
-        macpVersion: '1.0', mode: '', messageType: '', messageId: '',
-        sessionId: '', sender: '',
+        macpVersion: '1.0',
+        mode: '',
+        messageType: '',
+        messageId: '',
+        sessionId: '',
+        sender: ''
       });
       expect(result.timestampUnixMs).toBeGreaterThanOrEqual(before);
     });
@@ -56,7 +59,7 @@ describe('gRPC helpers (Q3-1)', () => {
       const detailsBytes = Buffer.from(JSON.stringify({ reasons: ['rule-x', 'rule-y'] }));
       const ack = fromAck({
         ok: false,
-        error: { code: 'POLICY_DENIED', message: 'no', details: detailsBytes },
+        error: { code: 'POLICY_DENIED', message: 'no', details: detailsBytes }
       });
       expect(ack.error?.reasons).toEqual(['rule-x', 'rule-y']);
       expect(ack.error?.code).toBe('POLICY_DENIED');
@@ -73,7 +76,7 @@ describe('gRPC helpers (Q3-1)', () => {
     it('tolerates malformed details JSON by leaving reasons undefined', () => {
       const ack = fromAck({
         ok: false,
-        error: { code: 'POLICY_DENIED', message: '', details: Buffer.from('{not json') },
+        error: { code: 'POLICY_DENIED', message: '', details: Buffer.from('{not json') }
       });
       expect(ack.error?.reasons).toBeUndefined();
     });
@@ -86,7 +89,7 @@ describe('gRPC helpers (Q3-1)', () => {
         mode: 'decision',
         state: 'SESSION_STATE_OPEN',
         initiator: 'agent-1',
-        startedAtUnixMs: '123',
+        startedAtUnixMs: '123'
       });
       expect(snap.sessionId).toBe('s');
       expect(snap.state).toBe('SESSION_STATE_OPEN');

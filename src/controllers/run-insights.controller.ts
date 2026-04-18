@@ -1,15 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Header,
-  Param,
-  ParseUUIDPipe,
-  Post,
-  Query,
-  Res,
-  ValidationPipe
-} from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, ParseUUIDPipe, Post, Query, Res, ValidationPipe } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CompareRunsDto } from '../dto/compare-runs.dto';
@@ -80,24 +69,23 @@ export class RunInsightsController {
 
   @Post('batch/cancel')
   @ApiOperation({ summary: 'Cancel multiple runs in batch.' })
-  async batchCancel(
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }
-  ) {
-    const results = await Promise.allSettled(
-      body.runIds.map((id) => this.runExecutor.cancel(id, 'batch cancel'))
-    );
+  async batchCancel(@Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }) {
+    const results = await Promise.allSettled(body.runIds.map((id) => this.runExecutor.cancel(id, 'batch cancel')));
     return results.map((result, index) => ({
       runId: body.runIds[index],
       status: result.status === 'fulfilled' ? 'cancelled' : 'failed',
-      error: result.status === 'rejected' ? (result.reason instanceof Error ? result.reason.message : String(result.reason)) : undefined
+      error:
+        result.status === 'rejected'
+          ? result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason)
+          : undefined
     }));
   }
 
   @Post('batch/export')
   @ApiOperation({ summary: 'Export multiple runs in batch.' })
-  async batchExport(
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }
-  ) {
+  async batchExport(@Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }) {
     return Promise.all(
       body.runIds.map((id) => this.insightsService.exportRun(id, { includeCanonical: true, includeRaw: false }))
     );
@@ -105,31 +93,33 @@ export class RunInsightsController {
 
   @Post('batch/archive')
   @ApiOperation({ summary: 'Archive multiple runs in batch.' })
-  async batchArchive(
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }
-  ) {
-    const results = await Promise.allSettled(
-      body.runIds.map((id) => this.runManager.archiveRun(id))
-    );
+  async batchArchive(@Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }) {
+    const results = await Promise.allSettled(body.runIds.map((id) => this.runManager.archiveRun(id)));
     return results.map((result, index) => ({
       runId: body.runIds[index],
       status: result.status === 'fulfilled' ? 'archived' : 'failed',
-      error: result.status === 'rejected' ? (result.reason instanceof Error ? result.reason.message : String(result.reason)) : undefined
+      error:
+        result.status === 'rejected'
+          ? result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason)
+          : undefined
     }));
   }
 
   @Post('batch/delete')
   @ApiOperation({ summary: 'Delete multiple terminal runs in batch.' })
-  async batchDelete(
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }
-  ) {
-    const results = await Promise.allSettled(
-      body.runIds.map((id) => this.runManager.deleteRun(id))
-    );
+  async batchDelete(@Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }) {
+    const results = await Promise.allSettled(body.runIds.map((id) => this.runManager.deleteRun(id)));
     return results.map((result, index) => ({
       runId: body.runIds[index],
       status: result.status === 'fulfilled' ? 'deleted' : 'failed',
-      error: result.status === 'rejected' ? (result.reason instanceof Error ? result.reason.message : String(result.reason)) : undefined
+      error:
+        result.status === 'rejected'
+          ? result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason)
+          : undefined
     }));
   }
 }

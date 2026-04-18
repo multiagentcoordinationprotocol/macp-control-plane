@@ -10,17 +10,21 @@ describe('DashboardController', () => {
       getOverview: jest.fn(),
       getAgentMetrics: jest.fn()
     };
-    controller = new DashboardController(
-      mockService as unknown as DashboardService
-    );
+    controller = new DashboardController(mockService as unknown as DashboardService);
   });
 
   describe('getOverview', () => {
     it('returns overview with default 24h range', async () => {
       const overview = {
         kpis: {
-          totalRuns: 10, activeRuns: 2, completedRuns: 7, failedRuns: 1,
-          cancelledRuns: 0, totalSignals: 5, totalTokens: 1500, totalCostUsd: 0.05,
+          totalRuns: 10,
+          activeRuns: 2,
+          completedRuns: 7,
+          failedRuns: 1,
+          cancelledRuns: 0,
+          totalSignals: 5,
+          totalTokens: 1500,
+          totalCostUsd: 0.05,
           avgDurationMs: 5000
         },
         recentRuns: [{ id: 'run-1', status: 'completed', runtimeKind: 'rust', createdAt: '2026-04-04T00:00:00Z' }],
@@ -36,9 +40,7 @@ describe('DashboardController', () => {
 
       const result = await controller.getOverview({ range: undefined });
 
-      expect(mockService.getOverview).toHaveBeenCalledWith(
-        expect.objectContaining({ window: '24h' })
-      );
+      expect(mockService.getOverview).toHaveBeenCalledWith(expect.objectContaining({ window: '24h' }));
       expect(result).toEqual(overview);
       expect(result.kpis.totalTokens).toBe(1500);
       expect(result.kpis.totalCostUsd).toBe(0.05);
@@ -49,25 +51,19 @@ describe('DashboardController', () => {
     it('passes 7d range to service (via legacy range alias)', async () => {
       mockService.getOverview.mockResolvedValue({ kpis: {}, charts: {} });
       await controller.getOverview({ range: '7d' });
-      expect(mockService.getOverview).toHaveBeenCalledWith(
-        expect.objectContaining({ window: '7d' })
-      );
+      expect(mockService.getOverview).toHaveBeenCalledWith(expect.objectContaining({ window: '7d' }));
     });
 
     it('passes 30d range to service (via legacy range alias)', async () => {
       mockService.getOverview.mockResolvedValue({ kpis: {}, charts: {} });
       await controller.getOverview({ range: '30d' });
-      expect(mockService.getOverview).toHaveBeenCalledWith(
-        expect.objectContaining({ window: '30d' })
-      );
+      expect(mockService.getOverview).toHaveBeenCalledWith(expect.objectContaining({ window: '30d' }));
     });
 
     it('prefers the new `window` field over `range` alias (§5.1)', async () => {
       mockService.getOverview.mockResolvedValue({ kpis: {}, charts: {} });
       await controller.getOverview({ window: '1h', range: '24h' } as any);
-      expect(mockService.getOverview).toHaveBeenCalledWith(
-        expect.objectContaining({ window: '1h' })
-      );
+      expect(mockService.getOverview).toHaveBeenCalledWith(expect.objectContaining({ window: '1h' }));
     });
 
     it('passes scenarioRef + environment filters through (§5.1)', async () => {

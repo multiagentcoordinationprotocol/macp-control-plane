@@ -26,39 +26,45 @@ export class EventRepository {
 
   async appendRaw(runId: string, seq: number, raw: RawRuntimeEvent, tx?: Tx) {
     const db = tx ?? this.database.db;
-    await db.insert(runEventsRaw).values({
-      id: randomUUID(),
-      runId,
-      seq,
-      ts: raw.receivedAt,
-      kind: raw.kind,
-      sourceName: 'rust-runtime',
-      payload: this.serializeRaw(raw)
-    }).onConflictDoNothing();
+    await db
+      .insert(runEventsRaw)
+      .values({
+        id: randomUUID(),
+        runId,
+        seq,
+        ts: raw.receivedAt,
+        kind: raw.kind,
+        sourceName: 'rust-runtime',
+        payload: this.serializeRaw(raw)
+      })
+      .onConflictDoNothing();
   }
 
   async appendCanonical(events: CanonicalEvent[], tx?: Tx) {
     if (events.length === 0) return;
     const db = tx ?? this.database.db;
-    await db.insert(runEventsCanonical).values(
-      events.map((event) => ({
-        id: event.id,
-        runId: event.runId,
-        seq: event.seq,
-        ts: event.ts,
-        type: event.type,
-        subjectKind: event.subject?.kind,
-        subjectId: event.subject?.id,
-        sourceKind: event.source.kind,
-        sourceName: event.source.name,
-        rawType: event.source.rawType,
-        traceId: event.trace?.traceId,
-        spanId: event.trace?.spanId,
-        parentSpanId: event.trace?.parentSpanId,
-        data: event.data,
-        schemaVersion: event.schemaVersion ?? 3
-      }))
-    ).onConflictDoNothing();
+    await db
+      .insert(runEventsCanonical)
+      .values(
+        events.map((event) => ({
+          id: event.id,
+          runId: event.runId,
+          seq: event.seq,
+          ts: event.ts,
+          type: event.type,
+          subjectKind: event.subject?.kind,
+          subjectId: event.subject?.id,
+          sourceKind: event.source.kind,
+          sourceName: event.source.name,
+          rawType: event.source.rawType,
+          traceId: event.trace?.traceId,
+          spanId: event.trace?.spanId,
+          parentSpanId: event.trace?.parentSpanId,
+          data: event.data,
+          schemaVersion: event.schemaVersion ?? 3
+        }))
+      )
+      .onConflictDoNothing();
   }
 
   async listCanonicalByRun(runId: string, afterSeq = 0, limit = 200) {
@@ -74,7 +80,9 @@ export class EventRepository {
    * Filtered query over canonical events — used by the per-run endpoint with time bounds (§4.2)
    * and the cross-run GET /events endpoint (§4.1).
    */
-  async listCanonicalFiltered(filter: CanonicalEventFilter): Promise<{ data: typeof runEventsCanonical.$inferSelect[]; total: number }> {
+  async listCanonicalFiltered(
+    filter: CanonicalEventFilter
+  ): Promise<{ data: (typeof runEventsCanonical.$inferSelect)[]; total: number }> {
     const conditions = this.buildCanonicalWhere(filter);
     const limit = filter.limit ?? 200;
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
@@ -105,7 +113,7 @@ export class EventRepository {
             spanId: runEventsCanonical.spanId,
             parentSpanId: runEventsCanonical.parentSpanId,
             data: runEventsCanonical.data,
-            schemaVersion: runEventsCanonical.schemaVersion,
+            schemaVersion: runEventsCanonical.schemaVersion
           })
           .from(runEventsCanonical)
           .innerJoin(runs, eq(runs.id, runEventsCanonical.runId))
@@ -116,9 +124,9 @@ export class EventRepository {
           .select({ value: count() })
           .from(runEventsCanonical)
           .innerJoin(runs, eq(runs.id, runEventsCanonical.runId))
-          .where(composed),
+          .where(composed)
       ]);
-      return { data: data as typeof runEventsCanonical.$inferSelect[], total: Number(totalResult[0]?.value ?? 0) };
+      return { data: data as (typeof runEventsCanonical.$inferSelect)[], total: Number(totalResult[0]?.value ?? 0) };
     }
 
     const [data, totalResult] = await Promise.all([
@@ -128,10 +136,7 @@ export class EventRepository {
         .where(whereClause)
         .orderBy(asc(runEventsCanonical.ts), asc(runEventsCanonical.seq))
         .limit(limit),
-      this.database.db
-        .select({ value: count() })
-        .from(runEventsCanonical)
-        .where(whereClause),
+      this.database.db.select({ value: count() }).from(runEventsCanonical).where(whereClause)
     ]);
     return { data, total: Number(totalResult[0]?.value ?? 0) };
   }
@@ -174,7 +179,11 @@ export class EventRepository {
       .limit(limit);
   }
 
-  async *streamCanonicalByRun(runId: string, afterSeq = 0, batchSize = 500): AsyncGenerator<typeof runEventsCanonical.$inferSelect> {
+  async *streamCanonicalByRun(
+    runId: string,
+    afterSeq = 0,
+    batchSize = 500
+  ): AsyncGenerator<typeof runEventsCanonical.$inferSelect> {
     let cursor = afterSeq;
     while (true) {
       const batch = await this.database.db
@@ -193,9 +202,10 @@ export class EventRepository {
   }
 
   async listCanonicalUpTo(runId: string, seq?: number) {
-    const where = seq === undefined
-      ? eq(runEventsCanonical.runId, runId)
-      : and(eq(runEventsCanonical.runId, runId), lte(runEventsCanonical.seq, seq));
+    const where =
+      seq === undefined
+        ? eq(runEventsCanonical.runId, runId)
+        : and(eq(runEventsCanonical.runId, runId), lte(runEventsCanonical.seq, seq));
     return this.database.db.select().from(runEventsCanonical).where(where).orderBy(asc(runEventsCanonical.seq));
   }
 

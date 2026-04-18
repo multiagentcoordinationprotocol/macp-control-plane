@@ -55,9 +55,7 @@ describe('ProtoRegistryService', () => {
   describe('onModuleInit', () => {
     it('loads proto files via protobufjs.loadSync', () => {
       expect(mockLoadSync).toHaveBeenCalledWith(
-        expect.arrayContaining([
-          expect.stringContaining('proto/macp/v1/core.proto')
-        ])
+        expect.arrayContaining([expect.stringContaining('proto/macp/v1/core.proto')])
       );
     });
 
@@ -73,22 +71,18 @@ describe('ProtoRegistryService', () => {
   // =========================================================================
   describe('getKnownTypeName', () => {
     it('returns core type for __core__ messages', () => {
-      expect(service.getKnownTypeName('__core__', 'SessionStart')).toBe(
-        'macp.v1.SessionStartPayload'
-      );
+      expect(service.getKnownTypeName('__core__', 'SessionStart')).toBe('macp.v1.SessionStartPayload');
     });
 
     it('returns core type when modeName does not match but messageType is core', () => {
       // Falls back to __core__ lookup
-      expect(service.getKnownTypeName('unknown.mode', 'Signal')).toBe(
-        'macp.v1.SignalPayload'
-      );
+      expect(service.getKnownTypeName('unknown.mode', 'Signal')).toBe('macp.v1.SignalPayload');
     });
 
     it('returns mode-specific type for decision mode', () => {
-      expect(
-        service.getKnownTypeName('macp.mode.decision.v1', 'Proposal')
-      ).toBe('macp.modes.decision.v1.ProposalPayload');
+      expect(service.getKnownTypeName('macp.mode.decision.v1', 'Proposal')).toBe(
+        'macp.modes.decision.v1.ProposalPayload'
+      );
     });
 
     it('returns mode-specific type for task mode', () => {
@@ -98,21 +92,19 @@ describe('ProtoRegistryService', () => {
     });
 
     it('returns mode-specific type for handoff mode', () => {
-      expect(
-        service.getKnownTypeName('macp.mode.handoff.v1', 'HandoffOffer')
-      ).toBe('macp.modes.handoff.v1.HandoffOfferPayload');
+      expect(service.getKnownTypeName('macp.mode.handoff.v1', 'HandoffOffer')).toBe(
+        'macp.modes.handoff.v1.HandoffOfferPayload'
+      );
     });
 
     it('returns mode-specific type for quorum mode', () => {
-      expect(
-        service.getKnownTypeName('macp.mode.quorum.v1', 'ApprovalRequest')
-      ).toBe('macp.modes.quorum.v1.ApprovalRequestPayload');
+      expect(service.getKnownTypeName('macp.mode.quorum.v1', 'ApprovalRequest')).toBe(
+        'macp.modes.quorum.v1.ApprovalRequestPayload'
+      );
     });
 
     it('returns undefined for unknown type in unknown mode', () => {
-      expect(
-        service.getKnownTypeName('unknown.mode', 'UnknownMessage')
-      ).toBeUndefined();
+      expect(service.getKnownTypeName('unknown.mode', 'UnknownMessage')).toBeUndefined();
     });
   });
 
@@ -135,19 +127,13 @@ describe('ProtoRegistryService', () => {
 
       service.decodeKnown('macp.mode.decision.v1', 'Proposal', payload);
 
-      expect(mockLookupType).toHaveBeenCalledWith(
-        'macp.modes.decision.v1.ProposalPayload'
-      );
+      expect(mockLookupType).toHaveBeenCalledWith('macp.modes.decision.v1.ProposalPayload');
     });
 
     it('falls back to tryDecodeUtf8 for unknown types with JSON payload', () => {
       const jsonPayload = Buffer.from(JSON.stringify({ key: 'val' }), 'utf8');
 
-      const result = service.decodeKnown(
-        'unknown.mode',
-        'CustomMessage',
-        jsonPayload
-      );
+      const result = service.decodeKnown('unknown.mode', 'CustomMessage', jsonPayload);
 
       expect(result).toEqual({
         json: { key: 'val' },
@@ -158,11 +144,7 @@ describe('ProtoRegistryService', () => {
     it('falls back to tryDecodeUtf8 for unknown types with non-JSON payload', () => {
       const textPayload = Buffer.from('just plain text', 'utf8');
 
-      const result = service.decodeKnown(
-        'unknown.mode',
-        'CustomMessage',
-        textPayload
-      );
+      const result = service.decodeKnown('unknown.mode', 'CustomMessage', textPayload);
 
       expect(result).toEqual({
         text: 'just plain text',
@@ -172,14 +154,9 @@ describe('ProtoRegistryService', () => {
     });
 
     it('returns undefined for unknown types with empty payload', () => {
-      const result = service.decodeKnown(
-        'unknown.mode',
-        'CustomMessage',
-        Buffer.alloc(0)
-      );
+      const result = service.decodeKnown('unknown.mode', 'CustomMessage', Buffer.alloc(0));
 
       expect(result).toBeUndefined();
     });
   });
-
 });

@@ -13,14 +13,12 @@ describe('AdminController', () => {
     mockRustRuntime = {
       resetCircuitBreaker: jest.fn(),
       getCircuitBreakerState: jest.fn().mockReturnValue('CLOSED'),
-      getCircuitBreakerHistory: jest.fn().mockReturnValue([
-        { state: 'CLOSED', enteredAt: '2026-04-13T00:00:00Z', reason: 'initial' },
-      ]),
+      getCircuitBreakerHistory: jest
+        .fn()
+        .mockReturnValue([{ state: 'CLOSED', enteredAt: '2026-04-13T00:00:00Z', reason: 'initial' }])
     };
 
-    controller = new AdminController(
-      mockRustRuntime as unknown as RustRuntimeProvider,
-    );
+    controller = new AdminController(mockRustRuntime as unknown as RustRuntimeProvider);
   });
 
   describe('resetCircuitBreaker', () => {
@@ -44,7 +42,7 @@ describe('AdminController', () => {
       expect(mockRustRuntime.getCircuitBreakerHistory).toHaveBeenCalledWith(undefined);
       expect(result).toEqual({
         state: 'CLOSED',
-        history: [{ state: 'CLOSED', enteredAt: '2026-04-13T00:00:00Z', reason: 'initial' }],
+        history: [{ state: 'CLOSED', enteredAt: '2026-04-13T00:00:00Z', reason: 'initial' }]
       });
     });
 

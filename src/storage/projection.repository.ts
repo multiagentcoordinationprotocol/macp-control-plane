@@ -13,11 +13,7 @@ export class ProjectionRepository {
   constructor(private readonly database: DatabaseService) {}
 
   async get(runId: string) {
-    const rows = await this.database.db
-      .select()
-      .from(runProjections)
-      .where(eq(runProjections.runId, runId))
-      .limit(1);
+    const rows = await this.database.db.select().from(runProjections).where(eq(runProjections.runId, runId)).limit(1);
     return rows[0] ?? null;
   }
 

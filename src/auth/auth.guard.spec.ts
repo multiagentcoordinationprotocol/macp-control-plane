@@ -17,31 +17,28 @@ describe('AuthGuard', () => {
       switchToHttp: () => ({
         getRequest: () => request,
         getResponse: jest.fn(),
-        getNext: jest.fn(),
+        getNext: jest.fn()
       }),
       getArgs: jest.fn(),
       getArgByIndex: jest.fn(),
       switchToRpc: jest.fn(),
       switchToWs: jest.fn(),
-      getType: jest.fn(),
+      getType: jest.fn()
     } as unknown as ExecutionContext;
   }
 
   beforeEach(() => {
     mockReflector = {
-      getAllAndOverride: jest.fn().mockReturnValue(false),
+      getAllAndOverride: jest.fn().mockReturnValue(false)
     };
     mockConfig = {
-      authApiKeys: ['test-api-key-12345678'],
+      authApiKeys: ['test-api-key-12345678']
     };
     mockRequest = {
-      headers: {},
+      headers: {}
     };
 
-    guard = new AuthGuard(
-      mockReflector as unknown as Reflector,
-      mockConfig as AppConfigService,
-    );
+    guard = new AuthGuard(mockReflector as unknown as Reflector, mockConfig as AppConfigService);
   });
 
   // =========================================================================
@@ -56,7 +53,7 @@ describe('AuthGuard', () => {
     expect(result).toBe(true);
     expect(mockReflector.getAllAndOverride).toHaveBeenCalledWith(IS_PUBLIC_KEY, [
       context.getHandler(),
-      context.getClass(),
+      context.getClass()
     ]);
   });
 

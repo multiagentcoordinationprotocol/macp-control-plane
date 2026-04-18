@@ -12,9 +12,7 @@ export interface StreamHubMessage {
 
 @Injectable()
 export class StreamHubService implements OnModuleDestroy {
-  constructor(
-    @Inject(STREAM_HUB_STRATEGY) private readonly strategy: StreamHubStrategy
-  ) {}
+  constructor(@Inject(STREAM_HUB_STRATEGY) private readonly strategy: StreamHubStrategy) {}
 
   onModuleDestroy(): void {
     if ('destroy' in this.strategy && typeof this.strategy.destroy === 'function') {
