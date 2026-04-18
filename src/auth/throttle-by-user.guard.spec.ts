@@ -73,8 +73,8 @@ describe('ThrottleByUserGuard', () => {
       const context = {
         switchToHttp: () => ({
           getRequest: () => mockReq,
-          getResponse: () => mockRes,
-        }),
+          getResponse: () => mockRes
+        })
       } as unknown as ExecutionContext;
 
       const result = (guard as any).getRequestResponse(context);

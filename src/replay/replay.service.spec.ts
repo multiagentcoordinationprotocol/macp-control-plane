@@ -41,7 +41,7 @@ function makeRow(overrides: Partial<CanonicalRow> & { seq: number }): CanonicalR
     traceId: overrides.traceId ?? null,
     spanId: overrides.spanId ?? null,
     parentSpanId: overrides.parentSpanId ?? null,
-    data: overrides.data ?? { sender: 'a', to: ['b'] },
+    data: overrides.data ?? { sender: 'a', to: ['b'] }
   };
 }
 
@@ -51,16 +51,16 @@ function makeRow(overrides: Partial<CanonicalRow> & { seq: number }): CanonicalR
 
 const mockEventRepository: jest.Mocked<Pick<EventRepository, 'listCanonicalByRun' | 'listCanonicalUpTo'>> = {
   listCanonicalByRun: jest.fn(),
-  listCanonicalUpTo: jest.fn(),
+  listCanonicalUpTo: jest.fn()
 };
 
 const mockProjectionService: jest.Mocked<Pick<ProjectionService, 'replayStateAt'>> = {
-  replayStateAt: jest.fn(),
+  replayStateAt: jest.fn()
 };
 
 const mockConfig: Pick<AppConfigService, 'replayBatchSize' | 'replayMaxDelayMs'> = {
   replayBatchSize: 500,
-  replayMaxDelayMs: 2000,
+  replayMaxDelayMs: 2000
 };
 
 // ---------------------------------------------------------------------------
@@ -75,7 +75,7 @@ describe('ReplayService', () => {
     service = new ReplayService(
       mockEventRepository as unknown as EventRepository,
       mockProjectionService as unknown as ProjectionService,
-      mockConfig as AppConfigService,
+      mockConfig as AppConfigService
     );
   });
 
@@ -89,7 +89,7 @@ describe('ReplayService', () => {
         mode: 'timed',
         speed: 2,
         fromSeq: 5,
-        toSeq: 100,
+        toSeq: 100
       });
 
       expect(descriptor).toEqual({
@@ -99,7 +99,7 @@ describe('ReplayService', () => {
         fromSeq: 5,
         toSeq: 100,
         streamUrl: '/runs/run-1/replay/stream?mode=timed&speed=2',
-        stateUrl: '/runs/run-1/replay/state',
+        stateUrl: '/runs/run-1/replay/state'
       });
     });
 
@@ -159,7 +159,7 @@ describe('ReplayService', () => {
     it('emits with delays between events', async () => {
       const rows = [
         makeRow({ seq: 1, ts: '2026-01-01T00:00:00.000Z' }),
-        makeRow({ seq: 2, ts: '2026-01-01T00:00:00.100Z' }), // 100ms later
+        makeRow({ seq: 2, ts: '2026-01-01T00:00:00.100Z' }) // 100ms later
       ];
       mockEventRepository.listCanonicalByRun.mockResolvedValue(rows as any);
 
@@ -186,7 +186,7 @@ describe('ReplayService', () => {
       const observable = service.stream('run-1', {
         mode: 'instant',
         fromSeq: 5,
-        toSeq: 6,
+        toSeq: 6
       });
       const emissions = await firstValueFrom(observable.pipe(toArray()));
 
@@ -235,7 +235,10 @@ describe('ReplayService', () => {
         trace: { spanCount: 0, linkedArtifacts: [] },
         outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
         policy: { policyVersion: '', commitmentEvaluations: [] },
-        llm: { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } },
+        llm: {
+          calls: [],
+          totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 }
+        }
       };
       mockProjectionService.replayStateAt.mockResolvedValue(fakeProjection);
 
@@ -244,10 +247,7 @@ describe('ReplayService', () => {
       expect(mockEventRepository.listCanonicalUpTo).toHaveBeenCalledWith('run-1', 2);
       expect(mockProjectionService.replayStateAt).toHaveBeenCalledWith(
         'run-1',
-        expect.arrayContaining([
-          expect.objectContaining({ seq: 1 }),
-          expect.objectContaining({ seq: 2 }),
-        ]),
+        expect.arrayContaining([expect.objectContaining({ seq: 1 }), expect.objectContaining({ seq: 2 })])
       );
       expect(result).toEqual(fakeProjection);
     });
@@ -264,7 +264,7 @@ describe('ReplayService', () => {
       const paginatedService = new ReplayService(
         mockEventRepository as unknown as EventRepository,
         mockProjectionService as unknown as ProjectionService,
-        smallBatchConfig as AppConfigService,
+        smallBatchConfig as AppConfigService
       );
 
       // First call returns full batch (2 rows), second call returns partial (1 row)

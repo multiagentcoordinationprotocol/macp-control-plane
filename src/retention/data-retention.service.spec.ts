@@ -14,13 +14,13 @@ describe('DataRetentionService', () => {
   const makeSelectChain = (rows: unknown[]) => ({
     from: jest.fn().mockReturnValue({
       where: jest.fn().mockReturnValue({
-        limit: jest.fn().mockResolvedValue(rows),
-      }),
-    }),
+        limit: jest.fn().mockResolvedValue(rows)
+      })
+    })
   });
 
   const makeDeleteChain = (rowCount: number) => ({
-    where: jest.fn().mockResolvedValue({ rowCount }),
+    where: jest.fn().mockResolvedValue({ rowCount })
   });
 
   beforeEach(() => {
@@ -28,23 +28,23 @@ describe('DataRetentionService', () => {
       dataRetentionEnabled: false,
       dataRetentionTtlDays: 30,
       dataRetentionIntervalHours: 24,
-      dataRetentionBatchSize: 500,
+      dataRetentionBatchSize: 500
     };
 
     mockDb = {
       select: jest.fn(),
-      delete: jest.fn(),
+      delete: jest.fn()
     };
 
     mockDatabase = {
       db: mockDb as unknown as DatabaseService['db'],
       tryAdvisoryLock: jest.fn().mockResolvedValue(true),
-      advisoryUnlock: jest.fn().mockResolvedValue(undefined),
+      advisoryUnlock: jest.fn().mockResolvedValue(undefined)
     };
 
     service = new DataRetentionService(
       mockConfig as unknown as AppConfigService,
-      mockDatabase as unknown as DatabaseService,
+      mockDatabase as unknown as DatabaseService
     );
   });
 
@@ -96,9 +96,7 @@ describe('DataRetentionService', () => {
       // No runs to purge
       mockDb.select.mockReturnValue(makeSelectChain([]));
       // Audit log delete returns 5, webhook deliveries returns 3
-      mockDb.delete
-        .mockReturnValueOnce(makeDeleteChain(5))
-        .mockReturnValueOnce(makeDeleteChain(3));
+      mockDb.delete.mockReturnValueOnce(makeDeleteChain(5)).mockReturnValueOnce(makeDeleteChain(3));
 
       const result = await service.runRetention();
 
@@ -127,10 +125,10 @@ describe('DataRetentionService', () => {
         .mockReturnValueOnce(makeSelectChain(batch2))
         .mockReturnValueOnce(makeSelectChain([]));
       mockDb.delete
-        .mockReturnValueOnce(makeDeleteChain(500))  // first batch of runs
-        .mockReturnValueOnce(makeDeleteChain(1))     // second batch of runs
-        .mockReturnValueOnce(makeDeleteChain(0))     // audit logs
-        .mockReturnValueOnce(makeDeleteChain(0));    // webhook deliveries
+        .mockReturnValueOnce(makeDeleteChain(500)) // first batch of runs
+        .mockReturnValueOnce(makeDeleteChain(1)) // second batch of runs
+        .mockReturnValueOnce(makeDeleteChain(0)) // audit logs
+        .mockReturnValueOnce(makeDeleteChain(0)); // webhook deliveries
 
       const result = await service.runRetention();
 

@@ -6,17 +6,17 @@ jest.mock('prom-client', () => {
   const mockHistogram = jest.fn().mockImplementation(() => ({
     observe: jest.fn(),
     labels: jest.fn().mockReturnThis(),
-    startTimer: jest.fn(),
+    startTimer: jest.fn()
   }));
   const mockCounter = jest.fn().mockImplementation(() => ({
     inc: jest.fn(),
-    labels: jest.fn().mockReturnThis(),
+    labels: jest.fn().mockReturnThis()
   }));
   const mockGauge = jest.fn().mockImplementation(() => ({
     set: jest.fn(),
     inc: jest.fn(),
     dec: jest.fn(),
-    labels: jest.fn().mockReturnThis(),
+    labels: jest.fn().mockReturnThis()
   }));
 
   return {
@@ -26,8 +26,8 @@ jest.mock('prom-client', () => {
     collectDefaultMetrics: jest.fn(),
     register: {
       metrics: jest.fn().mockResolvedValue('# HELP fake_metric\nfake_metric 1'),
-      contentType: 'text/plain; version=0.0.4; charset=utf-8',
-    },
+      contentType: 'text/plain; version=0.0.4; charset=utf-8'
+    }
   };
 });
 
@@ -96,9 +96,7 @@ describe('InstrumentationService', () => {
 
     it('httpRequestDuration is a histogram and observes', () => {
       assertMetricShape(service.httpRequestDuration, 'histogram');
-      expect(() =>
-        service.httpRequestDuration.observe({ method: 'GET', status_code: '200' }, 0.1),
-      ).not.toThrow();
+      expect(() => service.httpRequestDuration.observe({ method: 'GET', status_code: '200' }, 0.1)).not.toThrow();
     });
 
     it('httpRequestsTotal is a counter and increments', () => {
@@ -123,9 +121,7 @@ describe('InstrumentationService', () => {
 
     it('grpcCallDuration is a histogram with method + status labels', () => {
       assertMetricShape(service.grpcCallDuration, 'histogram');
-      expect(() =>
-        service.grpcCallDuration.observe({ method: 'Initialize', status: 'ok' }, 0.05),
-      ).not.toThrow();
+      expect(() => service.grpcCallDuration.observe({ method: 'Initialize', status: 'ok' }, 0.05)).not.toThrow();
     });
 
     it('circuitBreakerState is a gauge', () => {
@@ -142,9 +138,7 @@ describe('InstrumentationService', () => {
 
     it('outboundMessagesTotal is a counter with category + status labels', () => {
       assertMetricShape(service.outboundMessagesTotal, 'counter');
-      expect(() =>
-        service.outboundMessagesTotal.inc({ category: 'observer', status: 'subscribed' }),
-      ).not.toThrow();
+      expect(() => service.outboundMessagesTotal.inc({ category: 'observer', status: 'subscribed' })).not.toThrow();
     });
 
     it('inboundMessagesTotal is a counter', () => {
@@ -175,39 +169,27 @@ describe('InstrumentationService', () => {
   // ===========================================================================
   describe('metric registration names', () => {
     it('should register httpRequestDuration with correct name', () => {
-      expect(client.Histogram).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'http_request_duration_seconds' }),
-      );
+      expect(client.Histogram).toHaveBeenCalledWith(expect.objectContaining({ name: 'http_request_duration_seconds' }));
     });
 
     it('should register httpRequestsTotal with correct name', () => {
-      expect(client.Counter).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'http_requests_total' }),
-      );
+      expect(client.Counter).toHaveBeenCalledWith(expect.objectContaining({ name: 'http_requests_total' }));
     });
 
     it('should register grpcCallDuration with correct name', () => {
-      expect(client.Histogram).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'grpc_call_duration_seconds' }),
-      );
+      expect(client.Histogram).toHaveBeenCalledWith(expect.objectContaining({ name: 'grpc_call_duration_seconds' }));
     });
 
     it('should register activeSseConnections with correct name', () => {
-      expect(client.Gauge).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'active_sse_connections' }),
-      );
+      expect(client.Gauge).toHaveBeenCalledWith(expect.objectContaining({ name: 'active_sse_connections' }));
     });
 
     it('should register activeStreams with correct name', () => {
-      expect(client.Gauge).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'active_runtime_streams' }),
-      );
+      expect(client.Gauge).toHaveBeenCalledWith(expect.objectContaining({ name: 'active_runtime_streams' }));
     });
 
     it('should register circuitBreakerState with correct name', () => {
-      expect(client.Gauge).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'circuit_breaker_state' }),
-      );
+      expect(client.Gauge).toHaveBeenCalledWith(expect.objectContaining({ name: 'circuit_breaker_state' }));
     });
   });
 });

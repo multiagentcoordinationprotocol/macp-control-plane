@@ -36,7 +36,15 @@ describe('DashboardService', () => {
   beforeEach(() => {
     mockDb = makeMockDb();
     mockRunRepo = makeMockRunRepo([
-      { id: 'run-1', status: 'completed', runtimeKind: 'rust', sourceRef: null, startedAt: null, endedAt: null, createdAt: '2026-04-04T00:00:00Z' }
+      {
+        id: 'run-1',
+        status: 'completed',
+        runtimeKind: 'rust',
+        sourceRef: null,
+        startedAt: null,
+        endedAt: null,
+        createdAt: '2026-04-04T00:00:00Z'
+      }
     ]);
     mockRuntimeRegistry = makeMockRuntimeRegistry();
     service = new DashboardService(mockDb, mockRunRepo, mockRuntimeRegistry);
@@ -48,7 +56,9 @@ describe('DashboardService', () => {
       const dbExecute = mockDb.db.execute as jest.Mock;
       dbExecute
         // getKpis: runs
-        .mockResolvedValueOnce({ rows: [{ totalRuns: 10, activeRuns: 2, completedRuns: 7, failedRuns: 1, cancelledRuns: 0 }] })
+        .mockResolvedValueOnce({
+          rows: [{ totalRuns: 10, activeRuns: 2, completedRuns: 7, failedRuns: 1, cancelledRuns: 0 }]
+        })
         // getKpis: signals
         .mockResolvedValueOnce({ rows: [{ totalSignals: 5 }] })
         // getKpis: tokens
@@ -157,7 +167,9 @@ describe('DashboardService', () => {
     beforeEach(() => {
       const dbExecute = mockDb.db.execute as jest.Mock;
       dbExecute
-        .mockResolvedValueOnce({ rows: [{ totalRuns: 0, activeRuns: 0, completedRuns: 0, failedRuns: 0, cancelledRuns: 0 }] })
+        .mockResolvedValueOnce({
+          rows: [{ totalRuns: 0, activeRuns: 0, completedRuns: 0, failedRuns: 0, cancelledRuns: 0 }]
+        })
         .mockResolvedValueOnce({ rows: [{ totalSignals: 0 }] })
         .mockResolvedValueOnce({ rows: [{ totalTokens: 0, totalCostUsd: 0 }] })
         .mockResolvedValueOnce({ rows: [] })
@@ -246,9 +258,7 @@ describe('DashboardService', () => {
 
     it('defaults averageConfidence to 0 when null', async () => {
       mockDb.db.execute.mockResolvedValue({
-        rows: [
-          { participantId: 'agent-a', runs: 1, messages: 1, signals: 0, averageConfidence: null }
-        ]
+        rows: [{ participantId: 'agent-a', runs: 1, messages: 1, signals: 0, averageConfidence: null }]
       });
 
       const result = await service.getAgentMetrics();
@@ -258,9 +268,7 @@ describe('DashboardService', () => {
 
     it('coerces string values to numbers', async () => {
       mockDb.db.execute.mockResolvedValue({
-        rows: [
-          { participantId: 'agent-a', runs: '5', messages: '10', signals: '2', averageConfidence: '0.75' }
-        ]
+        rows: [{ participantId: 'agent-a', runs: '5', messages: '10', signals: '2', averageConfidence: '0.75' }]
       });
 
       const result = await service.getAgentMetrics();
@@ -277,7 +285,9 @@ describe('DashboardService', () => {
       const dbExecute = mockDb.db.execute as jest.Mock;
       // Setup minimal overview mocks (getRuntimeHealth is called within getOverview)
       dbExecute
-        .mockResolvedValueOnce({ rows: [{ totalRuns: 0, activeRuns: 0, completedRuns: 0, failedRuns: 0, cancelledRuns: 0 }] })
+        .mockResolvedValueOnce({
+          rows: [{ totalRuns: 0, activeRuns: 0, completedRuns: 0, failedRuns: 0, cancelledRuns: 0 }]
+        })
         .mockResolvedValueOnce({ rows: [{ totalSignals: 0 }] })
         .mockResolvedValueOnce({ rows: [{ totalTokens: 0, totalCostUsd: 0 }] })
         .mockResolvedValueOnce({ rows: [] })
@@ -301,7 +311,9 @@ describe('DashboardService', () => {
 
       const dbExecute = mockDb.db.execute as jest.Mock;
       dbExecute
-        .mockResolvedValueOnce({ rows: [{ totalRuns: 0, activeRuns: 0, completedRuns: 0, failedRuns: 0, cancelledRuns: 0 }] })
+        .mockResolvedValueOnce({
+          rows: [{ totalRuns: 0, activeRuns: 0, completedRuns: 0, failedRuns: 0, cancelledRuns: 0 }]
+        })
         .mockResolvedValueOnce({ rows: [{ totalSignals: 0 }] })
         .mockResolvedValueOnce({ rows: [{ totalTokens: 0, totalCostUsd: 0 }] })
         .mockResolvedValueOnce({ rows: [] })
@@ -326,7 +338,9 @@ describe('DashboardService', () => {
 
       const dbExecute = mockDb.db.execute as jest.Mock;
       dbExecute
-        .mockResolvedValueOnce({ rows: [{ totalRuns: 0, activeRuns: 0, completedRuns: 0, failedRuns: 0, cancelledRuns: 0 }] })
+        .mockResolvedValueOnce({
+          rows: [{ totalRuns: 0, activeRuns: 0, completedRuns: 0, failedRuns: 0, cancelledRuns: 0 }]
+        })
         .mockResolvedValueOnce({ rows: [{ totalSignals: 0 }] })
         .mockResolvedValueOnce({ rows: [{ totalTokens: 0, totalCostUsd: 0 }] })
         .mockResolvedValueOnce({ rows: [] })

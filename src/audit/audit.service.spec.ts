@@ -20,7 +20,7 @@ describe('AuditService', () => {
     resource: 'run',
     resourceId: 'run-123',
     details: { mode: 'decision' },
-    requestId: 'req-abc',
+    requestId: 'req-abc'
   };
 
   beforeEach(() => {
@@ -37,8 +37,8 @@ describe('AuditService', () => {
     mockDatabase = {
       db: {
         insert: mockInsert,
-        select: mockSelect,
-      },
+        select: mockSelect
+      }
     };
     service = new AuditService(mockDatabase as unknown as DatabaseService);
   });
@@ -67,7 +67,7 @@ describe('AuditService', () => {
         actor: 'system',
         actorType: 'system',
         action: 'circuit_breaker.reset',
-        resource: 'circuit_breaker',
+        resource: 'circuit_breaker'
       };
 
       await service.record(entry);
@@ -92,9 +92,7 @@ describe('AuditService', () => {
 
   describe('list', () => {
     it('returns data and total from the database', async () => {
-      const fakeRows = [
-        { id: 'a1', actor: 'user-1', action: 'run.create', createdAt: '2026-01-01T00:00:00Z' },
-      ];
+      const fakeRows = [{ id: 'a1', actor: 'user-1', action: 'run.create', createdAt: '2026-01-01T00:00:00Z' }];
       // First select call returns data rows
       mockOffset.mockResolvedValueOnce(fakeRows);
       // Second select call (count) — needs its own chain
@@ -102,9 +100,7 @@ describe('AuditService', () => {
       const countFrom = jest.fn().mockReturnValue({ where: countWhere });
 
       // Promise.all calls select twice: once for data, once for count
-      mockSelect
-        .mockReturnValueOnce({ from: mockFrom })
-        .mockReturnValueOnce({ from: countFrom });
+      mockSelect.mockReturnValueOnce({ from: mockFrom }).mockReturnValueOnce({ from: countFrom });
 
       const result = await service.list({});
 
@@ -117,9 +113,7 @@ describe('AuditService', () => {
       const countWhere = jest.fn().mockResolvedValue([]);
       const countFrom = jest.fn().mockReturnValue({ where: countWhere });
 
-      mockSelect
-        .mockReturnValueOnce({ from: mockFrom })
-        .mockReturnValueOnce({ from: countFrom });
+      mockSelect.mockReturnValueOnce({ from: mockFrom }).mockReturnValueOnce({ from: countFrom });
 
       const result = await service.list({});
 
@@ -132,9 +126,7 @@ describe('AuditService', () => {
       const countWhere = jest.fn().mockResolvedValue([{ count: 0 }]);
       const countFrom = jest.fn().mockReturnValue({ where: countWhere });
 
-      mockSelect
-        .mockReturnValueOnce({ from: mockFrom })
-        .mockReturnValueOnce({ from: countFrom });
+      mockSelect.mockReturnValueOnce({ from: mockFrom }).mockReturnValueOnce({ from: countFrom });
 
       await service.list({});
 
@@ -147,9 +139,7 @@ describe('AuditService', () => {
       const countWhere = jest.fn().mockResolvedValue([{ count: 0 }]);
       const countFrom = jest.fn().mockReturnValue({ where: countWhere });
 
-      mockSelect
-        .mockReturnValueOnce({ from: mockFrom })
-        .mockReturnValueOnce({ from: countFrom });
+      mockSelect.mockReturnValueOnce({ from: mockFrom }).mockReturnValueOnce({ from: countFrom });
 
       await service.list({ limit: 10, offset: 20 });
 
@@ -162,9 +152,7 @@ describe('AuditService', () => {
       const countWhere = jest.fn().mockResolvedValue([{ count: 0 }]);
       const countFrom = jest.fn().mockReturnValue({ where: countWhere });
 
-      mockSelect
-        .mockReturnValueOnce({ from: mockFrom })
-        .mockReturnValueOnce({ from: countFrom });
+      mockSelect.mockReturnValueOnce({ from: mockFrom }).mockReturnValueOnce({ from: countFrom });
 
       await service.list({ actor: 'user-1', action: 'run.create' });
 

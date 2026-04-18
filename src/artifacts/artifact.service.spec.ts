@@ -8,7 +8,7 @@ describe('ArtifactService', () => {
   beforeEach(() => {
     mockRepo = {
       create: jest.fn(),
-      listByRunId: jest.fn(),
+      listByRunId: jest.fn()
     };
     service = new ArtifactService(mockRepo as unknown as ArtifactRepository);
   });
@@ -19,12 +19,12 @@ describe('ArtifactService', () => {
         runId: 'run-1',
         kind: 'json' as const,
         label: 'test-artifact',
-        uri: 'https://example.com/artifact.json',
+        uri: 'https://example.com/artifact.json'
       };
       const expected = {
         ...input,
         id: 'a1a1a1a1-b2b2-c3c3-d4d4-e5e5e5e5e5e5',
-        createdAt: '2026-04-07T00:00:00.000Z',
+        createdAt: '2026-04-07T00:00:00.000Z'
       };
       mockRepo.create.mockResolvedValue(expected);
 
@@ -40,12 +40,12 @@ describe('ArtifactService', () => {
         runId: 'run-2',
         kind: 'report' as const,
         label: 'inline-report',
-        inline: { summary: 'all good', score: 42 },
+        inline: { summary: 'all good', score: 42 }
       };
       const expected = {
         ...input,
         id: 'b1b1b1b1-c2c2-d3d3-e4e4-f5f5f5f5f5f5',
-        createdAt: '2026-04-07T00:00:01.000Z',
+        createdAt: '2026-04-07T00:00:01.000Z'
       };
       mockRepo.create.mockResolvedValue(expected);
 
@@ -58,17 +58,33 @@ describe('ArtifactService', () => {
     it('propagates repository errors', async () => {
       mockRepo.create.mockRejectedValue(new Error('db write failed'));
 
-      await expect(
-        service.register({ runId: 'run-1', kind: 'log' as const, label: 'x' }),
-      ).rejects.toThrow('db write failed');
+      await expect(service.register({ runId: 'run-1', kind: 'log' as const, label: 'x' })).rejects.toThrow(
+        'db write failed'
+      );
     });
   });
 
   describe('list', () => {
     it('delegates to repository.listByRunId and returns the result', async () => {
       const artifacts = [
-        { id: 'a1', runId: 'run-1', kind: 'json', label: 'first', uri: null, inline: null, createdAt: '2026-01-01T00:00:00Z' },
-        { id: 'a2', runId: 'run-1', kind: 'trace', label: 'second', uri: null, inline: null, createdAt: '2026-01-01T00:01:00Z' },
+        {
+          id: 'a1',
+          runId: 'run-1',
+          kind: 'json',
+          label: 'first',
+          uri: null,
+          inline: null,
+          createdAt: '2026-01-01T00:00:00Z'
+        },
+        {
+          id: 'a2',
+          runId: 'run-1',
+          kind: 'trace',
+          label: 'second',
+          uri: null,
+          inline: null,
+          createdAt: '2026-01-01T00:01:00Z'
+        }
       ];
       mockRepo.listByRunId.mockResolvedValue(artifacts);
 

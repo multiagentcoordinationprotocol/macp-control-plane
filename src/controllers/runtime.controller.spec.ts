@@ -20,20 +20,20 @@ describe('RuntimeController', () => {
       listModes: jest.fn(),
       listRoots: jest.fn(),
       health: jest.fn(),
-      registerPolicy: jest.fn(),
+      registerPolicy: jest.fn()
     };
 
     mockConfig = {
-      runtimeKind: 'rust',
+      runtimeKind: 'rust'
     };
 
     mockRuntimeRegistry = {
-      get: jest.fn().mockReturnValue(mockProvider),
+      get: jest.fn().mockReturnValue(mockProvider)
     };
 
     controller = new RuntimeController(
       mockConfig as AppConfigService,
-      mockRuntimeRegistry as unknown as RuntimeProviderRegistry,
+      mockRuntimeRegistry as unknown as RuntimeProviderRegistry
     );
   });
 
@@ -45,7 +45,7 @@ describe('RuntimeController', () => {
       const manifest = {
         agentId: 'rust-runtime',
         title: 'Rust Runtime',
-        supportedModes: ['macp.mode.decision.v1'],
+        supportedModes: ['macp.mode.decision.v1']
       };
       mockProvider.getManifest.mockResolvedValue(manifest);
 
@@ -63,7 +63,7 @@ describe('RuntimeController', () => {
   describe('listModes', () => {
     it('delegates to provider.listModes via registry', async () => {
       const modes = [
-        { mode: 'macp.mode.decision.v1', modeVersion: '1.0.0', messageTypes: [], terminalMessageTypes: [] },
+        { mode: 'macp.mode.decision.v1', modeVersion: '1.0.0', messageTypes: [], terminalMessageTypes: [] }
       ];
       mockProvider.listModes.mockResolvedValue(modes);
 

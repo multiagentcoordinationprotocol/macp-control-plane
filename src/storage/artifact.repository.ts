@@ -25,11 +25,7 @@ export class ArtifactRepository {
   }
 
   async findById(id: string) {
-    const rows = await this.database.db
-      .select()
-      .from(runArtifacts)
-      .where(eq(runArtifacts.id, id))
-      .limit(1);
+    const rows = await this.database.db.select().from(runArtifacts).where(eq(runArtifacts.id, id)).limit(1);
     return rows[0] ?? null;
   }
 

@@ -10,12 +10,10 @@ describe('AuditController', () => {
 
   beforeEach(() => {
     mockAuditService = {
-      list: jest.fn().mockResolvedValue([]),
+      list: jest.fn().mockResolvedValue([])
     };
 
-    controller = new AuditController(
-      mockAuditService as unknown as AuditService,
-    );
+    controller = new AuditController(mockAuditService as unknown as AuditService);
   });
 
   describe('listAuditLogs', () => {
@@ -28,7 +26,7 @@ describe('AuditController', () => {
         createdAfter: '2025-01-01',
         createdBefore: '2025-12-31',
         limit: 25,
-        offset: 10,
+        offset: 10
       };
 
       await controller.listAuditLogs(query);
@@ -41,7 +39,7 @@ describe('AuditController', () => {
         createdAfter: '2025-01-01',
         createdBefore: '2025-12-31',
         limit: 25,
-        offset: 10,
+        offset: 10
       });
     });
 
@@ -53,8 +51,8 @@ describe('AuditController', () => {
       expect(mockAuditService.list).toHaveBeenCalledWith(
         expect.objectContaining({
           limit: 50,
-          offset: 0,
-        }),
+          offset: 0
+        })
       );
     });
 
@@ -62,7 +60,7 @@ describe('AuditController', () => {
       const query: ListAuditQueryDto = {
         actor: 'admin',
         action: 'run.delete',
-        resource: 'run',
+        resource: 'run'
       };
 
       await controller.listAuditLogs(query);
@@ -71,8 +69,8 @@ describe('AuditController', () => {
         expect.objectContaining({
           actor: 'admin',
           action: 'run.delete',
-          resource: 'run',
-        }),
+          resource: 'run'
+        })
       );
     });
   });

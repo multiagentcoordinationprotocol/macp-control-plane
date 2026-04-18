@@ -7,7 +7,7 @@ describe('RuntimeCredentialResolverService (single-bearer, CP-9)', () => {
       runtimeDevAgentId: 'control-plane',
       runtimeBearerToken: '',
       runtimeUseDevHeader: false,
-      ...config,
+      ...config
     } as AppConfigService;
     return new RuntimeCredentialResolverService(merged);
   }
@@ -36,7 +36,7 @@ describe('RuntimeCredentialResolverService (single-bearer, CP-9)', () => {
     it('does not attach an x-macp-agent-id header when a bearer token is present', async () => {
       const service = makeService({
         runtimeBearerToken: 'obs-token',
-        runtimeUseDevHeader: true,
+        runtimeUseDevHeader: true
       });
       const result = await service.resolve({ runtimeKind: 'rust' });
       expect(result.metadata['x-macp-agent-id']).toBeUndefined();
@@ -48,7 +48,7 @@ describe('RuntimeCredentialResolverService (single-bearer, CP-9)', () => {
       const service = makeService({
         runtimeBearerToken: '',
         runtimeUseDevHeader: true,
-        runtimeDevAgentId: 'control-plane',
+        runtimeDevAgentId: 'control-plane'
       });
       const result = await service.resolve({ runtimeKind: 'rust' });
       expect(result.metadata['x-macp-agent-id']).toBe('control-plane');
@@ -71,7 +71,10 @@ describe('RuntimeCredentialResolverService (single-bearer, CP-9)', () => {
         runtimeKind: 'rust',
         // Cast — these fields are no longer accepted, but the resolver must tolerate them
         // during the deprecation window without routing on them.
-        ...( { participant: { id: 'risk-agent' }, requester: { actorId: 'user-1' } } as unknown as Record<string, unknown>),
+        ...({ participant: { id: 'risk-agent' }, requester: { actorId: 'user-1' } } as unknown as Record<
+          string,
+          unknown
+        >)
       } as { runtimeKind: string });
       expect(result.metadata.authorization).toBe('Bearer obs-token');
       expect(result.sender).toBe('control-plane');

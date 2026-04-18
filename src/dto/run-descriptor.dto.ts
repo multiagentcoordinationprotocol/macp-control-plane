@@ -145,4 +145,3 @@ export class RunDescriptorDto implements RunDescriptor {
   @Type(() => ExecutionConfigDto)
   execution?: ExecutionConfigDto;
 }
-

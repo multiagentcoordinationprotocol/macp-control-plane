@@ -9,7 +9,9 @@ export class DashboardController {
   constructor(private readonly dashboardService: DashboardService) {}
 
   @Get('overview')
-  @ApiOperation({ summary: 'Aggregated dashboard KPIs and chart data (§5.1 — window + scenarioRef + environment filters).' })
+  @ApiOperation({
+    summary: 'Aggregated dashboard KPIs and chart data (§5.1 — window + scenarioRef + environment filters).'
+  })
   @ApiOkResponse({ type: DashboardOverviewDto })
   async getOverview(
     @Query(new ValidationPipe({ transform: true, whitelist: true }))

@@ -5,14 +5,14 @@ import { IsInt, IsISO8601, IsOptional, IsString, Min } from 'class-validator';
 export class ListEventsQueryDto {
   @ApiPropertyOptional({ minimum: 0, default: 0 })
   @IsOptional()
-  @Transform(({ value }) => (value === undefined || value === null) ? undefined : Number(value))
+  @Transform(({ value }) => (value === undefined || value === null ? undefined : Number(value)))
   @IsInt()
   @Min(0)
   afterSeq?: number;
 
   @ApiPropertyOptional({ minimum: 1, default: 200 })
   @IsOptional()
-  @Transform(({ value }) => (value === undefined || value === null) ? undefined : Number(value))
+  @Transform(({ value }) => (value === undefined || value === null ? undefined : Number(value)))
   @IsInt()
   @Min(1)
   limit?: number;
@@ -27,7 +27,9 @@ export class ListEventsQueryDto {
   @IsISO8601()
   beforeTs?: string;
 
-  @ApiPropertyOptional({ description: 'Comma-separated canonical event types to filter (e.g. signal.emitted,signal.acknowledged)' })
+  @ApiPropertyOptional({
+    description: 'Comma-separated canonical event types to filter (e.g. signal.emitted,signal.acknowledged)'
+  })
   @IsOptional()
   @IsString()
   type?: string;

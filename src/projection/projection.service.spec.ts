@@ -16,7 +16,7 @@ function makeEvent(overrides: Partial<CanonicalEvent> & { type: string }): Canon
     subject: overrides.subject,
     source: overrides.source ?? { kind: 'runtime', name: 'rust-runtime' },
     trace: overrides.trace,
-    data: overrides.data ?? {},
+    data: overrides.data ?? {}
   };
 }
 
@@ -26,7 +26,7 @@ function makeEvent(overrides: Partial<CanonicalEvent> & { type: string }): Canon
 
 const mockProjectionRepository: jest.Mocked<ProjectionRepository> = {
   get: jest.fn(),
-  upsert: jest.fn(),
+  upsert: jest.fn()
 } as unknown as jest.Mocked<ProjectionRepository>;
 
 // ---------------------------------------------------------------------------
@@ -60,7 +60,10 @@ describe('ProjectionService', () => {
         trace: { spanCount: 0, linkedArtifacts: [] },
         outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
         policy: { policyVersion: '', commitmentEvaluations: [] },
-        llm: { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } },
+        llm: {
+          calls: [],
+          totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 }
+        }
       });
     });
   });
@@ -77,8 +80,8 @@ describe('ProjectionService', () => {
         data: {
           status: 'starting',
           modeName: 'decision',
-          traceId: 'trace-abc',
-        },
+          traceId: 'trace-abc'
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -93,7 +96,7 @@ describe('ProjectionService', () => {
       const base = service.empty('run-1');
       const event = makeEvent({
         type: 'run.completed',
-        data: { status: 'completed', endedAt: '2026-01-01T01:00:00Z' },
+        data: { status: 'completed', endedAt: '2026-01-01T01:00:00Z' }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -112,7 +115,7 @@ describe('ProjectionService', () => {
       const base = service.empty('run-1');
       const event = makeEvent({
         type: 'participant.seen',
-        data: { participantId: 'agent-A' },
+        data: { participantId: 'agent-A' }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -128,13 +131,13 @@ describe('ProjectionService', () => {
       const event1 = makeEvent({
         type: 'participant.seen',
         seq: 1,
-        data: { participantId: 'agent-A' },
+        data: { participantId: 'agent-A' }
       });
       const event2 = makeEvent({
         type: 'participant.seen',
         id: 'evt-2',
         seq: 2,
-        data: { participantId: 'agent-A' },
+        data: { participantId: 'agent-A' }
       });
 
       const result = service.applyEvents(base, [event1, event2]);
@@ -156,8 +159,8 @@ describe('ProjectionService', () => {
         data: {
           sender: 'agent-A',
           to: ['agent-B', 'agent-C'],
-          messageType: 'proposal',
-        },
+          messageType: 'proposal'
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -183,13 +186,13 @@ describe('ProjectionService', () => {
         from: 'agent-A',
         to: 'agent-B',
         kind: 'message.sent',
-        ts: '2026-01-01T00:00:00Z',
+        ts: '2026-01-01T00:00:00Z'
       });
       expect(result.graph.edges[1]).toEqual({
         from: 'agent-A',
         to: 'agent-C',
         kind: 'message.sent',
-        ts: '2026-01-01T00:00:00Z',
+        ts: '2026-01-01T00:00:00Z'
       });
     });
 
@@ -201,7 +204,7 @@ describe('ProjectionService', () => {
           from: `sender-${i}`,
           to: `recipient-${i}`,
           kind: 'message.sent',
-          ts: '2026-01-01T00:00:00Z',
+          ts: '2026-01-01T00:00:00Z'
         });
       }
 
@@ -211,8 +214,8 @@ describe('ProjectionService', () => {
         data: {
           sender: 'agent-X',
           to: ['agent-Y', 'agent-Z', 'agent-W'],
-          messageType: 'notify',
-        },
+          messageType: 'notify'
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -223,7 +226,7 @@ describe('ProjectionService', () => {
         from: 'agent-X',
         to: 'agent-W',
         kind: 'message.sent',
-        ts: '2026-01-01T00:00:00Z',
+        ts: '2026-01-01T00:00:00Z'
       });
     });
   });
@@ -240,8 +243,8 @@ describe('ProjectionService', () => {
         subject: { kind: 'signal', id: 'sig-1' },
         data: {
           sender: 'agent-A',
-          decodedPayload: { signalType: 'anomaly', severity: 'high', confidence: 0.95 },
-        },
+          decodedPayload: { signalType: 'anomaly', severity: 'high', confidence: 0.95 }
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -254,7 +257,7 @@ describe('ProjectionService', () => {
         sourceParticipantId: 'agent-A',
         ts: '2026-01-01T00:00:00Z',
         confidence: 0.95,
-        payload: { signalType: 'anomaly', severity: 'high', confidence: 0.95 },
+        payload: { signalType: 'anomaly', severity: 'high', confidence: 0.95 }
       });
     });
 
@@ -265,8 +268,8 @@ describe('ProjectionService', () => {
         subject: { kind: 'signal', id: 'sig-42' },
         data: {
           sender: 'agent-A',
-          decodedPayload: { signalType: 'anomaly', severity: 'high', detail: { score: 0.97 } },
-        },
+          decodedPayload: { signalType: 'anomaly', severity: 'high', detail: { score: 0.97 } }
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -275,7 +278,7 @@ describe('ProjectionService', () => {
       expect(result.signals.signals[0].payload).toEqual({
         signalType: 'anomaly',
         severity: 'high',
-        detail: { score: 0.97 },
+        detail: { score: 0.97 }
       });
     });
 
@@ -289,8 +292,8 @@ describe('ProjectionService', () => {
         subject: { kind: 'signal', id: 'sig-1' },
         data: {
           sender: 'agent-A',
-          decodedPayload: { signalType: 'anomaly' },
-        },
+          decodedPayload: { signalType: 'anomaly' }
+        }
       });
       const ack = makeEvent({
         type: 'signal.acknowledged',
@@ -300,8 +303,8 @@ describe('ProjectionService', () => {
         subject: { kind: 'signal', id: 'sig-1' },
         data: {
           sender: 'agent-B',
-          decodedPayload: { signalId: 'sig-1' },
-        },
+          decodedPayload: { signalId: 'sig-1' }
+        }
       });
 
       const result = service.applyEvents(base, [emitted, ack]);
@@ -316,7 +319,7 @@ describe('ProjectionService', () => {
       const ack = makeEvent({
         type: 'signal.acknowledged',
         subject: { kind: 'signal', id: 'sig-missing' },
-        data: { sender: 'agent-B', decodedPayload: { signalId: 'sig-missing' } },
+        data: { sender: 'agent-B', decodedPayload: { signalId: 'sig-missing' } }
       });
 
       const result = service.applyEvents(base, [ack]);
@@ -331,7 +334,7 @@ describe('ProjectionService', () => {
         base.signals.signals.push({
           id: `sig-${i}`,
           name: 'old',
-          ts: '2026-01-01T00:00:00Z',
+          ts: '2026-01-01T00:00:00Z'
         });
       }
 
@@ -339,8 +342,8 @@ describe('ProjectionService', () => {
         type: 'signal.emitted',
         subject: { kind: 'signal', id: 'sig-new' },
         data: {
-          decodedPayload: { signalType: 'new-signal' },
-        },
+          decodedPayload: { signalType: 'new-signal' }
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -366,9 +369,9 @@ describe('ProjectionService', () => {
           decodedPayload: {
             proposalId: 'prop-1',
             confidence: 0.8,
-            reason: 'Analysis complete',
-          },
-        },
+            reason: 'Analysis complete'
+          }
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -390,9 +393,9 @@ describe('ProjectionService', () => {
           decodedPayload: {
             action: 'step_up',
             outcome_positive: false,
-            commitmentId: 'commit-1',
-          },
-        },
+            commitmentId: 'commit-1'
+          }
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -407,8 +410,8 @@ describe('ProjectionService', () => {
         type: 'decision.finalized',
         subject: { kind: 'decision', id: 'dec-1' },
         data: {
-          decodedPayload: { action: 'approve', commitmentId: 'commit-1' },
-        },
+          decodedPayload: { action: 'approve', commitmentId: 'commit-1' }
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -423,8 +426,8 @@ describe('ProjectionService', () => {
         type: 'decision.finalized',
         subject: { kind: 'decision', id: 'dec-1' },
         data: {
-          decodedPayload: { action: 'declined', commitmentId: 'commit-1' },
-        },
+          decodedPayload: { action: 'declined', commitmentId: 'commit-1' }
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -439,8 +442,8 @@ describe('ProjectionService', () => {
         type: 'decision.finalized',
         subject: { kind: 'decision', id: 'dec-1' },
         data: {
-          decodedPayload: { action: 'step_up', commitmentId: 'commit-1' },
-        },
+          decodedPayload: { action: 'step_up', commitmentId: 'commit-1' }
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -453,7 +456,7 @@ describe('ProjectionService', () => {
       const base = service.empty('run-1');
       const event = makeEvent({
         type: 'run.created',
-        data: { status: 'starting', decisionPrompt: 'Decide whether to approve the transaction' },
+        data: { status: 'starting', decisionPrompt: 'Decide whether to approve the transaction' }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -471,8 +474,8 @@ describe('ProjectionService', () => {
           data: {
             sender: 'proposer',
             messageType: 'Proposal',
-            decodedPayload: { proposalId: 'prop-1', option: 'Deploy feature X', rationale: 'ready to ship' },
-          },
+            decodedPayload: { proposalId: 'prop-1', option: 'Deploy feature X', rationale: 'ready to ship' }
+          }
         }),
         makeEvent({
           type: 'proposal.updated',
@@ -482,8 +485,8 @@ describe('ProjectionService', () => {
           data: {
             sender: 'evaluator',
             messageType: 'Evaluation',
-            decodedPayload: { proposalId: 'prop-1', recommendation: 'APPROVE', confidence: 0.9, reason: 'looks good' },
-          },
+            decodedPayload: { proposalId: 'prop-1', recommendation: 'APPROVE', confidence: 0.9, reason: 'looks good' }
+          }
         }),
         makeEvent({
           type: 'proposal.updated',
@@ -493,9 +496,9 @@ describe('ProjectionService', () => {
           data: {
             sender: 'voter',
             messageType: 'Vote',
-            decodedPayload: { proposalId: 'prop-1', vote: 'APPROVE', reason: 'approved' },
-          },
-        }),
+            decodedPayload: { proposalId: 'prop-1', vote: 'APPROVE', reason: 'approved' }
+          }
+        })
       ];
 
       const result = service.applyEvents(base, events);
@@ -505,20 +508,20 @@ describe('ProjectionService', () => {
         participantId: 'proposer',
         action: 'Deploy feature X',
         reasons: ['ready to ship'],
-        messageType: 'Proposal',
+        messageType: 'Proposal'
       });
       expect(result.decision.current?.proposals?.[1]).toMatchObject({
         participantId: 'evaluator',
         action: 'APPROVE',
         vote: 'allow',
         confidence: 0.9,
-        messageType: 'Evaluation',
+        messageType: 'Evaluation'
       });
       expect(result.decision.current?.proposals?.[2]).toMatchObject({
         participantId: 'voter',
         action: 'APPROVE',
         vote: 'allow',
-        messageType: 'Vote',
+        messageType: 'Vote'
       });
     });
 
@@ -530,8 +533,8 @@ describe('ProjectionService', () => {
         subject: { kind: 'decision', id: 'dec-1' },
         data: {
           sender: 'system',
-          decodedPayload: { action: 'approve', commitmentId: 'commit-1' },
-        },
+          decodedPayload: { action: 'approve', commitmentId: 'commit-1' }
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -552,9 +555,9 @@ describe('ProjectionService', () => {
             action: 'approve',
             confidence: 1.0,
             reason: 'Consensus reached',
-            commitmentId: 'commit-1',
-          },
-        },
+            commitmentId: 'commit-1'
+          }
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -580,14 +583,14 @@ describe('ProjectionService', () => {
         type: 'artifact.created',
         seq: 1,
         subject: { kind: 'artifact', id: 'art-1' },
-        data: {},
+        data: {}
       });
       const event2 = makeEvent({
         type: 'artifact.created',
         id: 'evt-2',
         seq: 2,
         subject: { kind: 'artifact', id: 'art-2' },
-        data: {},
+        data: {}
       });
 
       const result = service.applyEvents(base, [event1, event2]);
@@ -611,8 +614,8 @@ describe('ProjectionService', () => {
             id: `evt-${i}`,
             seq: i,
             type: 'message.sent',
-            data: { sender: 'a', to: ['b'] },
-          }),
+            data: { sender: 'a', to: ['b'] }
+          })
         );
       }
 
@@ -638,7 +641,7 @@ describe('ProjectionService', () => {
 
       const event = makeEvent({
         type: 'session.state.changed',
-        data: { sessionId: 'session-1', state: 'SESSION_STATE_RESOLVED' },
+        data: { sessionId: 'session-1', state: 'SESSION_STATE_RESOLVED' }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -653,7 +656,12 @@ describe('ProjectionService', () => {
   // -----------------------------------------------------------------------
 
   describe('applyEvents — terminal participant sweep', () => {
-    function seed(base: RunStateProjection, id: string, status: 'idle' | 'active' | 'waiting', latestActivityAt?: string) {
+    function seed(
+      base: RunStateProjection,
+      id: string,
+      status: 'idle' | 'active' | 'waiting',
+      latestActivityAt?: string
+    ) {
       base.participants.push({ participantId: id, status, latestActivityAt });
       base.graph.nodes.push({ id, kind: 'participant', status });
     }
@@ -665,9 +673,7 @@ describe('ProjectionService', () => {
       seed(base, 'agent-B', 'waiting', '2026-01-01T00:00:03Z');
       seed(base, 'agent-C', 'idle');
 
-      const result = service.applyEvents(base, [
-        makeEvent({ type: 'run.completed', data: { status: 'completed' } }),
-      ]);
+      const result = service.applyEvents(base, [makeEvent({ type: 'run.completed', data: { status: 'completed' } })]);
 
       const byId = (id: string) => result.participants.find((p) => p.participantId === id)!;
       expect(byId('agent-A').status).toBe('completed');
@@ -688,7 +694,7 @@ describe('ProjectionService', () => {
       seed(base, 'agent-C', 'idle');
 
       const result = service.applyEvents(base, [
-        makeEvent({ type: 'run.failed', data: { status: 'failed', error: 'boom' } }),
+        makeEvent({ type: 'run.failed', data: { status: 'failed', error: 'boom' } })
       ]);
 
       const byId = (id: string) => result.participants.find((p) => p.participantId === id)!;
@@ -703,9 +709,7 @@ describe('ProjectionService', () => {
       seed(base, 'agent-A', 'active', '2026-01-01T00:00:05Z');
       seed(base, 'agent-B', 'idle');
 
-      const result = service.applyEvents(base, [
-        makeEvent({ type: 'run.cancelled', data: { status: 'cancelled' } }),
-      ]);
+      const result = service.applyEvents(base, [makeEvent({ type: 'run.cancelled', data: { status: 'cancelled' } })]);
 
       const byId = (id: string) => result.participants.find((p) => p.participantId === id)!;
       expect(byId('agent-A').status).toBe('completed');
@@ -719,9 +723,7 @@ describe('ProjectionService', () => {
       base.graph.nodes.push({ id: 'agent-A', kind: 'participant', status: 'failed' });
       seed(base, 'agent-B', 'active', '2026-01-01T00:00:05Z');
 
-      const result = service.applyEvents(base, [
-        makeEvent({ type: 'run.completed', data: { status: 'completed' } }),
-      ]);
+      const result = service.applyEvents(base, [makeEvent({ type: 'run.completed', data: { status: 'completed' } })]);
 
       expect(result.participants.find((p) => p.participantId === 'agent-A')!.status).toBe('failed');
       expect(result.participants.find((p) => p.participantId === 'agent-B')!.status).toBe('completed');
@@ -736,8 +738,8 @@ describe('ProjectionService', () => {
       const result = service.applyEvents(base, [
         makeEvent({
           type: 'session.state.changed',
-          data: { sessionId: 'session-1', state: 'SESSION_STATE_RESOLVED' },
-        }),
+          data: { sessionId: 'session-1', state: 'SESSION_STATE_RESOLVED' }
+        })
       ]);
 
       expect(result.participants.find((p) => p.participantId === 'agent-A')!.status).toBe('completed');
@@ -753,8 +755,8 @@ describe('ProjectionService', () => {
       const result = service.applyEvents(base, [
         makeEvent({
           type: 'session.state.changed',
-          data: { sessionId: 'session-1', state: 'SESSION_STATE_EXPIRED' },
-        }),
+          data: { sessionId: 'session-1', state: 'SESSION_STATE_EXPIRED' }
+        })
       ]);
 
       expect(result.participants.find((p) => p.participantId === 'agent-A')!.status).toBe('failed');
@@ -778,7 +780,7 @@ describe('ProjectionService', () => {
         const base = service.empty('run-1');
         const event = makeEvent({
           type: 'run.created',
-          data: { status: 'starting' },
+          data: { status: 'starting' }
         });
 
         const result = service.applyEvents(base, [event]);
@@ -804,7 +806,7 @@ describe('ProjectionService', () => {
       const event = makeEvent({
         type: 'run.created',
         seq: 1,
-        data: { status: 'starting' },
+        data: { status: 'starting' }
       });
 
       const result = await service.applyAndPersist('run-1', [event]);
@@ -827,8 +829,8 @@ describe('ProjectionService', () => {
           type: 'participant.seen',
           id: 'evt-2',
           seq: 2,
-          data: { participantId: 'agent-A' },
-        }),
+          data: { participantId: 'agent-A' }
+        })
       ];
 
       const result = await service.replayStateAt('run-1', events);
@@ -849,7 +851,7 @@ describe('ProjectionService', () => {
       const event = makeEvent({
         type: 'message.sent',
         data: { sender: 'a', to: ['b'] },
-        trace: { traceId: 'trace-1', spanId: 'span-1' },
+        trace: { traceId: 'trace-1', spanId: 'span-1' }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -876,7 +878,7 @@ describe('ProjectionService', () => {
             policyVersion: 'policy.fraud.majority',
             description: 'Majority veto policy'
           }
-        },
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -897,7 +899,7 @@ describe('ProjectionService', () => {
             decision: 'allow',
             reasons: ['quorum met', 'no blocking objections']
           }
-        },
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -922,16 +924,14 @@ describe('ProjectionService', () => {
             decision: 'deny',
             reasons: ['voting threshold not met: 1 of 3 required']
           }
-        },
+        }
       });
 
       const result = service.applyEvents(base, [event]);
 
       expect(result.policy.commitmentEvaluations).toHaveLength(1);
       expect(result.policy.commitmentEvaluations[0].decision).toBe('deny');
-      expect(result.policy.commitmentEvaluations[0].reasons).toEqual([
-        'voting threshold not met: 1 of 3 required'
-      ]);
+      expect(result.policy.commitmentEvaluations[0].reasons).toEqual(['voting threshold not met: 1 of 3 required']);
     });
 
     it('commitmentEvaluations capped at 50 entries', () => {
@@ -953,7 +953,7 @@ describe('ProjectionService', () => {
             decision: 'deny',
             reasons: ['cap test']
           }
-        },
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -977,9 +977,9 @@ describe('ProjectionService', () => {
             completionTokens: 45,
             totalTokens: 165,
             latencyMs: 890,
-            estimatedCostUsd: 0.00042,
-          },
-        },
+            estimatedCostUsd: 0.00042
+          }
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -992,14 +992,14 @@ describe('ProjectionService', () => {
         completionTokens: 45,
         totalTokens: 165,
         latencyMs: 890,
-        messageId: 'msg-1',
+        messageId: 'msg-1'
       });
       expect(result.llm.totals).toEqual({
         callCount: 1,
         promptTokens: 120,
         completionTokens: 45,
         totalTokens: 165,
-        estimatedCostUsd: 0.00042,
+        estimatedCostUsd: 0.00042
       });
     });
 
@@ -1011,12 +1011,12 @@ describe('ProjectionService', () => {
           promptTokens: 1,
           completionTokens: 1,
           totalTokens: 2,
-          ts: '2026-04-14T00:00:00Z',
+          ts: '2026-04-14T00:00:00Z'
         });
       }
       const event = makeEvent({
         type: 'llm.call.completed',
-        data: { sender: 'new-agent', decodedPayload: { promptTokens: 5, completionTokens: 5 } },
+        data: { sender: 'new-agent', decodedPayload: { promptTokens: 5, completionTokens: 5 } }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -1043,15 +1043,19 @@ describe('ProjectionService', () => {
           sessionId: 'session-1',
           expectedCommitments: [
             { id: 'commit-approve', title: 'Approve', requiredRoles: ['voter'] },
-            { id: 'commit-reject', title: 'Reject', requiredRoles: ['voter'] },
-          ],
-        },
+            { id: 'commit-reject', title: 'Reject', requiredRoles: ['voter'] }
+          ]
+        }
       });
 
       const result = service.applyEvents(base, [event]);
 
       expect(result.policy.expectedCommitments).toHaveLength(2);
-      expect(result.policy.expectedCommitments?.[0]).toEqual({ id: 'commit-approve', title: 'Approve', requiredRoles: ['voter'] });
+      expect(result.policy.expectedCommitments?.[0]).toEqual({
+        id: 'commit-approve',
+        title: 'Approve',
+        requiredRoles: ['voter']
+      });
       expect(result.policy.quorumStatus).toBe('pending');
     });
 
@@ -1070,8 +1074,8 @@ describe('ProjectionService', () => {
           data: {
             sender: 'voter-a',
             messageType: 'Vote',
-            decodedPayload: { proposalId: 'prop-1', vote: 'APPROVE' },
-          },
+            decodedPayload: { proposalId: 'prop-1', vote: 'APPROVE' }
+          }
         }),
         makeEvent({
           type: 'proposal.updated',
@@ -1080,8 +1084,8 @@ describe('ProjectionService', () => {
           data: {
             sender: 'voter-b',
             messageType: 'Vote',
-            decodedPayload: { proposalId: 'prop-1', vote: 'REJECT' },
-          },
+            decodedPayload: { proposalId: 'prop-1', vote: 'REJECT' }
+          }
         }),
         makeEvent({
           type: 'proposal.updated',
@@ -1090,9 +1094,9 @@ describe('ProjectionService', () => {
           data: {
             sender: 'voter-c',
             messageType: 'Vote',
-            decodedPayload: { proposalId: 'prop-1', vote: 'APPROVE' },
-          },
-        }),
+            decodedPayload: { proposalId: 'prop-1', vote: 'APPROVE' }
+          }
+        })
       ];
 
       const result = service.applyEvents(base, events);
@@ -1104,7 +1108,7 @@ describe('ProjectionService', () => {
         allow: 2,
         deny: 1,
         threshold: 2,
-        quorum: { required: 3, cast: 3 },
+        quorum: { required: 3, cast: 3 }
       });
       expect(result.policy.quorumStatus).toBe('pending');
     });
@@ -1115,8 +1119,8 @@ describe('ProjectionService', () => {
         type: 'policy.commitment.evaluated',
         subject: { kind: 'policy', id: 'commit-1' },
         data: {
-          decodedPayload: { commitmentId: 'commit-1', decision: 'allow', reasons: ['ok'] },
-        },
+          decodedPayload: { commitmentId: 'commit-1', decision: 'allow', reasons: ['ok'] }
+        }
       });
 
       const result = service.applyEvents(base, [event]);
@@ -1130,7 +1134,7 @@ describe('ProjectionService', () => {
       base.policy.quorumStatus = 'pending';
 
       const result = service.applyEvents(base, [
-        makeEvent({ type: 'run.failed', data: { status: 'failed', error: 'boom' } }),
+        makeEvent({ type: 'run.failed', data: { status: 'failed', error: 'boom' } })
       ]);
 
       expect(result.policy.quorumStatus).toBe('failed');

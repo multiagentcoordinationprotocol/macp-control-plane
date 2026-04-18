@@ -26,9 +26,7 @@ export class RequestLoggerMiddleware implements NestMiddleware {
         path,
         status_code: String(statusCode)
       });
-      this.logger.log(
-        JSON.stringify({ method, path: originalUrl, statusCode, durationMs: duration, requestId })
-      );
+      this.logger.log(JSON.stringify({ method, path: originalUrl, statusCode, durationMs: duration, requestId }));
     });
 
     next();
@@ -36,8 +34,6 @@ export class RequestLoggerMiddleware implements NestMiddleware {
 
   /** Collapse UUID path segments to `:id` to avoid high-cardinality labels. */
   private normalizePath(url: string): string {
-    return url
-      .split('?')[0]
-      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':id');
+    return url.split('?')[0].replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':id');
   }
 }

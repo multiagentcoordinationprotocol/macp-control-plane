@@ -13,7 +13,7 @@ export class DataRetentionService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly config: AppConfigService,
-    private readonly database: DatabaseService,
+    private readonly database: DatabaseService
   ) {}
 
   onModuleInit(): void {
@@ -24,7 +24,7 @@ export class DataRetentionService implements OnModuleInit, OnModuleDestroy {
 
     const intervalMs = this.config.dataRetentionIntervalHours * 60 * 60 * 1000;
     this.logger.log(
-      `Data retention enabled: TTL=${this.config.dataRetentionTtlDays}d, interval=${this.config.dataRetentionIntervalHours}h, batch=${this.config.dataRetentionBatchSize}`,
+      `Data retention enabled: TTL=${this.config.dataRetentionTtlDays}d, interval=${this.config.dataRetentionIntervalHours}h, batch=${this.config.dataRetentionBatchSize}`
     );
 
     // Run once at startup (after a short delay to let app stabilize), then on interval
@@ -63,7 +63,7 @@ export class DataRetentionService implements OnModuleInit, OnModuleDestroy {
       const deletedWebhookDeliveries = await this.purgeWebhookDeliveries(cutoff);
 
       this.logger.log(
-        `Retention complete: ${deletedRuns} runs, ${deletedAuditLogs} audit logs, ${deletedWebhookDeliveries} webhook deliveries purged`,
+        `Retention complete: ${deletedRuns} runs, ${deletedAuditLogs} audit logs, ${deletedWebhookDeliveries} webhook deliveries purged`
       );
 
       return { deletedRuns, deletedAuditLogs, deletedWebhookDeliveries };
@@ -88,20 +88,13 @@ export class DataRetentionService implements OnModuleInit, OnModuleDestroy {
       const staleIds = await this.database.db
         .select({ id: runs.id })
         .from(runs)
-        .where(
-          and(
-            inArray(runs.status, TERMINAL_STATUSES),
-            lt(runs.endedAt, cutoff),
-          ),
-        )
+        .where(and(inArray(runs.status, TERMINAL_STATUSES), lt(runs.endedAt, cutoff)))
         .limit(this.config.dataRetentionBatchSize);
 
       if (staleIds.length === 0) break;
 
       const ids = staleIds.map((r) => r.id);
-      const result = await this.database.db
-        .delete(runs)
-        .where(inArray(runs.id, ids));
+      const result = await this.database.db.delete(runs).where(inArray(runs.id, ids));
 
       deleted = (result as unknown as { rowCount: number }).rowCount ?? ids.length;
       total += deleted;
@@ -113,17 +106,13 @@ export class DataRetentionService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async purgeAuditLogs(cutoff: string): Promise<number> {
-    const result = await this.database.db
-      .delete(auditLog)
-      .where(lt(auditLog.createdAt, cutoff));
+    const result = await this.database.db.delete(auditLog).where(lt(auditLog.createdAt, cutoff));
 
     return (result as unknown as { rowCount: number }).rowCount ?? 0;
   }
 
   private async purgeWebhookDeliveries(cutoff: string): Promise<number> {
-    const result = await this.database.db
-      .delete(webhookDeliveries)
-      .where(lt(webhookDeliveries.createdAt, cutoff));
+    const result = await this.database.db.delete(webhookDeliveries).where(lt(webhookDeliveries.createdAt, cutoff));
 
     return (result as unknown as { rowCount: number }).rowCount ?? 0;
   }

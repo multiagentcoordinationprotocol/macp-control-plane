@@ -19,13 +19,20 @@ export class EventNormalizerService implements EventNormalizer {
     const ts = rawEvent.receivedAt;
     if (rawEvent.kind === 'stream-status') {
       return [
-        this.makeEvent(runId, ts, 'session.stream.opened', {
-          kind: 'session',
-          id: ctx.runtimeSessionId
-        }, {
-          status: rawEvent.streamStatus?.status,
-          detail: rawEvent.streamStatus?.detail
-        }, 'stream-status')
+        this.makeEvent(
+          runId,
+          ts,
+          'session.stream.opened',
+          {
+            kind: 'session',
+            id: ctx.runtimeSessionId
+          },
+          {
+            status: rawEvent.streamStatus?.status,
+            detail: rawEvent.streamStatus?.detail
+          },
+          'stream-status'
+        )
       ];
     }
 
@@ -80,7 +87,9 @@ export class EventNormalizerService implements EventNormalizer {
           try {
             const parsed = JSON.parse(Buffer.from(rawEvent.ack.error.details).toString('utf-8'));
             if (Array.isArray(parsed.reasons)) reasons = parsed.reasons;
-          } catch { /* ignore parse errors */ }
+          } catch {
+            /* ignore parse errors */
+          }
         }
         if (reasons.length === 0) {
           reasons = [rawEvent.ack.error.message];
@@ -128,11 +137,18 @@ export class EventNormalizerService implements EventNormalizer {
       // If it's a policy denial, also emit policy.denied
       if (err.code === 'POLICY_DENIED') {
         events.push(
-          this.makeEvent(runId, ts, 'policy.denied', { kind: 'policy', id: err.messageId || '' }, {
-            errorCode: err.code,
-            errorMessage: err.message,
-            decodedPayload: { decision: 'deny', reasons: [err.message] }
-          }, 'stream-inline-error')
+          this.makeEvent(
+            runId,
+            ts,
+            'policy.denied',
+            { kind: 'policy', id: err.messageId || '' },
+            {
+              errorCode: err.code,
+              errorMessage: err.message,
+              decodedPayload: { decision: 'deny', reasons: [err.message] }
+            },
+            'stream-inline-error'
+          )
         );
       }
       return events;
@@ -233,33 +249,57 @@ export class EventNormalizerService implements EventNormalizer {
       const progress = (decoded as Record<string, unknown>).progress;
       if (progress !== undefined) {
         canonical.push(
-          this.makeEvent(runId, ts, 'progress.reported', { kind: 'message', id: envelope.messageId }, {
-            modeName: envelope.mode,
-            messageType: envelope.messageType,
-            sender: envelope.sender,
-            decodedPayload: { percentage: progress, message: (decoded as Record<string, unknown>).status ?? '' }
-          }, envelope.messageType)
+          this.makeEvent(
+            runId,
+            ts,
+            'progress.reported',
+            { kind: 'message', id: envelope.messageId },
+            {
+              modeName: envelope.mode,
+              messageType: envelope.messageType,
+              sender: envelope.sender,
+              decodedPayload: { percentage: progress, message: (decoded as Record<string, unknown>).status ?? '' }
+            },
+            envelope.messageType
+          )
         );
       }
     }
     if (envelope.messageType === 'TaskComplete') {
       canonical.push(
-        this.makeEvent(runId, ts, 'progress.reported', { kind: 'message', id: envelope.messageId }, {
-          modeName: envelope.mode,
-          messageType: envelope.messageType,
-          sender: envelope.sender,
-          decodedPayload: { percentage: 100, message: 'completed' }
-        }, envelope.messageType)
+        this.makeEvent(
+          runId,
+          ts,
+          'progress.reported',
+          { kind: 'message', id: envelope.messageId },
+          {
+            modeName: envelope.mode,
+            messageType: envelope.messageType,
+            sender: envelope.sender,
+            decodedPayload: { percentage: 100, message: 'completed' }
+          },
+          envelope.messageType
+        )
       );
     }
     if (envelope.messageType === 'TaskFail') {
       canonical.push(
-        this.makeEvent(runId, ts, 'progress.reported', { kind: 'message', id: envelope.messageId }, {
-          modeName: envelope.mode,
-          messageType: envelope.messageType,
-          sender: envelope.sender,
-          decodedPayload: { percentage: undefined, message: (decoded as Record<string, unknown> | undefined)?.reason ?? 'failed' }
-        }, envelope.messageType)
+        this.makeEvent(
+          runId,
+          ts,
+          'progress.reported',
+          { kind: 'message', id: envelope.messageId },
+          {
+            modeName: envelope.mode,
+            messageType: envelope.messageType,
+            sender: envelope.sender,
+            decodedPayload: {
+              percentage: undefined,
+              message: (decoded as Record<string, unknown> | undefined)?.reason ?? 'failed'
+            }
+          },
+          envelope.messageType
+        )
       );
     }
 
@@ -267,37 +307,61 @@ export class EventNormalizerService implements EventNormalizer {
     if (envelope.messageType === 'PolicyResolved' && decoded) {
       const policyPayload = decoded as Record<string, unknown>;
       canonical.push(
-        this.makeEvent(runId, ts, 'policy.resolved', { kind: 'policy', id: String(policyPayload.policyId ?? policyPayload.policyVersion ?? '') }, {
-          modeName: envelope.mode,
-          messageType: envelope.messageType,
-          sender: envelope.sender,
-          policyVersion: policyPayload.policyVersion ?? policyPayload.policyId,
-          decodedPayload: policyPayload
-        }, envelope.messageType)
+        this.makeEvent(
+          runId,
+          ts,
+          'policy.resolved',
+          { kind: 'policy', id: String(policyPayload.policyId ?? policyPayload.policyVersion ?? '') },
+          {
+            modeName: envelope.mode,
+            messageType: envelope.messageType,
+            sender: envelope.sender,
+            policyVersion: policyPayload.policyVersion ?? policyPayload.policyId,
+            decodedPayload: policyPayload
+          },
+          envelope.messageType
+        )
       );
     }
 
     if (envelope.messageType === 'PolicyCommitmentEvaluated' && decoded) {
       const evalPayload = decoded as Record<string, unknown>;
       canonical.push(
-        this.makeEvent(runId, ts, 'policy.commitment.evaluated', { kind: 'policy', id: String(evalPayload.commitmentId ?? '') }, {
-          modeName: envelope.mode,
-          messageType: envelope.messageType,
-          sender: envelope.sender,
-          decodedPayload: evalPayload
-        }, envelope.messageType)
+        this.makeEvent(
+          runId,
+          ts,
+          'policy.commitment.evaluated',
+          { kind: 'policy', id: String(evalPayload.commitmentId ?? '') },
+          {
+            modeName: envelope.mode,
+            messageType: envelope.messageType,
+            sender: envelope.sender,
+            decodedPayload: evalPayload
+          },
+          envelope.messageType
+        )
       );
     }
 
-    if (envelope.messageType === 'PolicyDenied' || (decoded && (decoded as Record<string, unknown>).policyDenied === true)) {
+    if (
+      envelope.messageType === 'PolicyDenied' ||
+      (decoded && (decoded as Record<string, unknown>).policyDenied === true)
+    ) {
       const denyPayload = (decoded ?? {}) as Record<string, unknown>;
       canonical.push(
-        this.makeEvent(runId, ts, 'policy.denied', { kind: 'policy', id: String(denyPayload.commitmentId ?? denyPayload.policyId ?? '') }, {
-          modeName: envelope.mode,
-          messageType: envelope.messageType,
-          sender: envelope.sender,
-          decodedPayload: denyPayload
-        }, envelope.messageType)
+        this.makeEvent(
+          runId,
+          ts,
+          'policy.denied',
+          { kind: 'policy', id: String(denyPayload.commitmentId ?? denyPayload.policyId ?? '') },
+          {
+            modeName: envelope.mode,
+            messageType: envelope.messageType,
+            sender: envelope.sender,
+            decodedPayload: denyPayload
+          },
+          envelope.messageType
+        )
       );
     }
 
@@ -305,17 +369,24 @@ export class EventNormalizerService implements EventNormalizer {
     if (envelope.messageType === 'Progress' && decoded) {
       const progressPayload = decoded as Record<string, unknown>;
       canonical.push(
-        this.makeEvent(runId, ts, 'progress.reported', { kind: 'participant', id: envelope.sender }, {
-          modeName: envelope.mode,
-          messageType: envelope.messageType,
-          sender: envelope.sender,
-          decodedPayload: {
-            percentage: progressPayload.progress != null ? Number(progressPayload.progress) * 100 : undefined,
-            message: String(progressPayload.message ?? ''),
-            progressToken: progressPayload.progressToken,
-            total: progressPayload.total
-          }
-        }, envelope.messageType)
+        this.makeEvent(
+          runId,
+          ts,
+          'progress.reported',
+          { kind: 'participant', id: envelope.sender },
+          {
+            modeName: envelope.mode,
+            messageType: envelope.messageType,
+            sender: envelope.sender,
+            decodedPayload: {
+              percentage: progressPayload.progress != null ? Number(progressPayload.progress) * 100 : undefined,
+              message: String(progressPayload.message ?? ''),
+              progressToken: progressPayload.progressToken,
+              total: progressPayload.total
+            }
+          },
+          envelope.messageType
+        )
       );
     }
 
@@ -385,7 +456,8 @@ export class EventNormalizerService implements EventNormalizer {
         return { kind: 'proposal', id: String(proposalId ?? envelope.messageId) };
       }
       case 'decision.finalized': {
-        const decisionId = payload?.commitmentId ?? payload?.commitment_id ?? payload?.decisionId ?? payload?.decision_id;
+        const decisionId =
+          payload?.commitmentId ?? payload?.commitment_id ?? payload?.decisionId ?? payload?.decision_id;
         return { kind: 'decision', id: String(decisionId ?? envelope.messageId) };
       }
       case 'tool.called':
@@ -448,7 +520,7 @@ function extractLlmCall(payload?: Record<string, unknown> | null): Record<string
     meta?.llmCall as Record<string, unknown> | undefined,
     // `tokenUsage` is the minimal form — upgrade it to an llmCall shape.
     payload.tokenUsage as Record<string, unknown> | undefined,
-    meta?.tokenUsage as Record<string, unknown> | undefined,
+    meta?.tokenUsage as Record<string, unknown> | undefined
   ];
   for (const c of candidates) {
     if (!c || typeof c !== 'object') continue;
@@ -459,7 +531,7 @@ function extractLlmCall(payload?: Record<string, unknown> | null): Record<string
     const out: Record<string, unknown> = {
       promptTokens,
       completionTokens,
-      totalTokens: promptTokens + completionTokens,
+      totalTokens: promptTokens + completionTokens
     };
     if (c.model) out.model = String(c.model);
     if (c.latencyMs != null) out.latencyMs = Number(c.latencyMs);

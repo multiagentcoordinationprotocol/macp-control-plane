@@ -12,17 +12,20 @@ export class EventsController {
   @ApiOperation({
     summary: 'Cross-run canonical events with filters (§4.1).'
   })
-  async listEvents(
-    @Query(new ValidationPipe({ transform: true, whitelist: true })) query: ListCrossRunEventsQueryDto
-  ) {
+  async listEvents(@Query(new ValidationPipe({ transform: true, whitelist: true })) query: ListCrossRunEventsQueryDto) {
     const { data, total } = await this.eventRepository.listCanonicalFiltered({
       runId: query.runId,
       afterSeq: query.afterSeq,
       afterTs: query.afterTs,
       beforeTs: query.beforeTs,
-      types: query.type ? query.type.split(',').map((t) => t.trim()).filter(Boolean) : undefined,
+      types: query.type
+        ? query.type
+            .split(',')
+            .map((t) => t.trim())
+            .filter(Boolean)
+        : undefined,
       scenarioRef: query.scenarioRef,
-      limit: query.limit ?? 500,
+      limit: query.limit ?? 500
     });
     const limit = query.limit ?? 500;
     const nextCursor = data.length === limit ? data[data.length - 1].seq : undefined;

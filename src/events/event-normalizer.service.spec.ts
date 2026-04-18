@@ -16,10 +16,10 @@ function makeContext(overrides?: Partial<NormalizeContext>): NormalizeContext {
         modeVersion: '1.0.0',
         configurationVersion: '1.0.0',
         ttlMs: 30000,
-        participants: [{ id: 'agent-a' }, { id: 'agent-b' }],
-      },
+        participants: [{ id: 'agent-a' }, { id: 'agent-b' }]
+      }
     } as RunDescriptor,
-    ...overrides,
+    ...overrides
   };
 }
 
@@ -33,7 +33,7 @@ function makeEnvelope(overrides?: Record<string, unknown>) {
     sender: 'agent-a',
     timestampUnixMs: Date.now(),
     payload: Buffer.from('{}'),
-    ...overrides,
+    ...overrides
   };
 }
 
@@ -44,13 +44,13 @@ describe('EventNormalizerService', () => {
   beforeEach(() => {
     protoRegistry = {
       decodeKnown: jest.fn().mockReturnValue(undefined),
-      getKnownTypeName: jest.fn().mockReturnValue(undefined),
+      getKnownTypeName: jest.fn().mockReturnValue(undefined)
     } as unknown as jest.Mocked<ProtoRegistryService>;
 
     service = new EventNormalizerService(
       protoRegistry,
       { inboundMessagesTotal: { inc: jest.fn() } } as unknown as InstrumentationService,
-      { isActive: () => false, redact: <T>(v: T) => v } as any,
+      { isActive: () => false, redact: <T>(v: T) => v } as any
     );
   });
 
@@ -59,7 +59,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-status',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        streamStatus: { status: 'opened', detail: 'connected' },
+        streamStatus: { status: 'opened', detail: 'connected' }
       };
       const ctx = makeContext();
 
@@ -69,9 +69,7 @@ describe('EventNormalizerService', () => {
       expect(events[0].type).toBe('session.stream.opened');
       expect(events[0].runId).toBe('run-1');
       expect(events[0].subject).toEqual({ kind: 'session', id: 'session-1' });
-      expect(events[0].data).toEqual(
-        expect.objectContaining({ status: 'opened', detail: 'connected' }),
-      );
+      expect(events[0].data).toEqual(expect.objectContaining({ status: 'opened', detail: 'connected' }));
     });
   });
 
@@ -87,8 +85,8 @@ describe('EventNormalizerService', () => {
           startedAtUnixMs: 1000,
           expiresAtUnixMs: 31000,
           modeVersion: '1.0.0',
-          configurationVersion: '1.0.0',
-        },
+          configurationVersion: '1.0.0'
+        }
       };
       const ctx = makeContext();
 
@@ -102,15 +100,15 @@ describe('EventNormalizerService', () => {
           sessionId: 'session-1',
           state: 'SESSION_STATE_OPEN',
           modeName: 'decision',
-          modeVersion: '1.0.0',
-        }),
+          modeVersion: '1.0.0'
+        })
       );
     });
 
     it('should return empty array when session-snapshot has no sessionSnapshot data', () => {
       const raw: RawRuntimeEvent = {
         kind: 'session-snapshot',
-        receivedAt: '2026-01-01T00:00:00.000Z',
+        receivedAt: '2026-01-01T00:00:00.000Z'
       };
       const ctx = makeContext();
 
@@ -126,7 +124,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -140,8 +138,8 @@ describe('EventNormalizerService', () => {
           messageType: 'Signal',
           messageId: 'msg-1',
           sender: 'agent-a',
-          sessionId: 'session-1',
-        }),
+          sessionId: 'session-1'
+        })
       );
     });
 
@@ -150,7 +148,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext();
 
@@ -159,9 +157,7 @@ describe('EventNormalizerService', () => {
       const participantSeen = events.find((e) => e.type === 'participant.seen');
       expect(participantSeen).toBeDefined();
       expect(participantSeen!.subject).toEqual({ kind: 'participant', id: 'new-agent' });
-      expect(participantSeen!.data).toEqual(
-        expect.objectContaining({ participantId: 'new-agent' }),
-      );
+      expect(participantSeen!.data).toEqual(expect.objectContaining({ participantId: 'new-agent' }));
       expect(ctx.knownParticipants.has('new-agent')).toBe(true);
     });
 
@@ -170,7 +166,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -185,7 +181,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -197,8 +193,8 @@ describe('EventNormalizerService', () => {
       expect(signalEmitted!.data).toEqual(
         expect.objectContaining({
           messageType: 'Signal',
-          sender: 'agent-a',
-        }),
+          sender: 'agent-a'
+        })
       );
     });
 
@@ -210,7 +206,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -225,8 +221,8 @@ describe('EventNormalizerService', () => {
       const decoded = {
         some_payload: 'foo',
         metadata: {
-          llmCall: { model: 'gpt-4o-mini', promptTokens: 123, completionTokens: 45, latencyMs: 890 },
-        },
+          llmCall: { model: 'gpt-4o-mini', promptTokens: 123, completionTokens: 45, latencyMs: 890 }
+        }
       };
       protoRegistry.decodeKnown.mockReturnValue(decoded);
 
@@ -234,7 +230,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-04-14T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -247,20 +243,20 @@ describe('EventNormalizerService', () => {
         promptTokens: 123,
         completionTokens: 45,
         totalTokens: 168,
-        latencyMs: 890,
+        latencyMs: 890
       });
     });
 
     it('synthesizes llm.call.completed from minimal tokenUsage shape (§3.3)', () => {
       protoRegistry.decodeKnown.mockReturnValue({
-        tokenUsage: { promptTokens: 50, completionTokens: 10, model: 'claude-3-haiku' },
+        tokenUsage: { promptTokens: 50, completionTokens: 10, model: 'claude-3-haiku' }
       });
 
       const envelope = makeEnvelope({ messageType: 'Evaluation' });
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-04-14T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -271,7 +267,7 @@ describe('EventNormalizerService', () => {
       expect(llm!.data.decodedPayload).toMatchObject({
         model: 'claude-3-haiku',
         promptTokens: 50,
-        completionTokens: 10,
+        completionTokens: 10
       });
     });
 
@@ -282,7 +278,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-04-14T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -299,7 +295,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -318,7 +314,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -338,7 +334,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -354,7 +350,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -375,7 +371,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -384,7 +380,7 @@ describe('EventNormalizerService', () => {
       const progressEvents = events.filter((e) => e.type === 'progress.reported');
       expect(progressEvents).toHaveLength(1);
       expect(progressEvents[0].data.decodedPayload).toEqual(
-        expect.objectContaining({ percentage: 50, message: 'halfway done' }),
+        expect.objectContaining({ percentage: 50, message: 'halfway done' })
       );
     });
 
@@ -395,7 +391,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -404,7 +400,7 @@ describe('EventNormalizerService', () => {
       const progressEvents = events.filter((e) => e.type === 'progress.reported');
       expect(progressEvents).toHaveLength(1);
       expect(progressEvents[0].data.decodedPayload).toEqual(
-        expect.objectContaining({ percentage: 100, message: 'completed' }),
+        expect.objectContaining({ percentage: 100, message: 'completed' })
       );
     });
 
@@ -415,7 +411,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -423,9 +419,7 @@ describe('EventNormalizerService', () => {
 
       const progressEvents = events.filter((e) => e.type === 'progress.reported');
       expect(progressEvents).toHaveLength(1);
-      expect(progressEvents[0].data.decodedPayload).toEqual(
-        expect.objectContaining({ message: 'out of memory' }),
-      );
+      expect(progressEvents[0].data.decodedPayload).toEqual(expect.objectContaining({ message: 'out of memory' }));
     });
   });
 
@@ -442,7 +436,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
@@ -471,15 +465,13 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-b']) });
 
       const events = service.normalize('run-1', raw, ctx);
 
-      const ambientProgress = events.find(
-        (e) => e.type === 'progress.reported' && e.subject?.kind === 'participant',
-      );
+      const ambientProgress = events.find((e) => e.type === 'progress.reported' && e.subject?.kind === 'participant');
       expect(ambientProgress).toBeDefined();
       const payload = (ambientProgress!.data as Record<string, unknown>).decodedPayload as Record<string, unknown>;
       expect(payload.percentage).toBeUndefined();
@@ -494,15 +486,13 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
       const events = service.normalize('run-1', raw, ctx);
 
-      const ambientProgress = events.find(
-        (e) => e.type === 'progress.reported' && e.subject?.kind === 'participant',
-      );
+      const ambientProgress = events.find((e) => e.type === 'progress.reported' && e.subject?.kind === 'participant');
       expect(ambientProgress).toBeDefined();
       const payload = (ambientProgress!.data as Record<string, unknown>).decodedPayload as Record<string, unknown>;
       expect(payload.message).toBe('');
@@ -515,22 +505,18 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
       const events = service.normalize('run-1', raw, ctx);
 
       // Generic derive still produces a progress.reported with message subject
-      const genericProgress = events.filter(
-        (e) => e.type === 'progress.reported' && e.subject?.kind === 'message',
-      );
+      const genericProgress = events.filter((e) => e.type === 'progress.reported' && e.subject?.kind === 'message');
       expect(genericProgress.length).toBeGreaterThanOrEqual(1);
 
       // But no ambient progress with participant subject
-      const ambientProgress = events.filter(
-        (e) => e.type === 'progress.reported' && e.subject?.kind === 'participant',
-      );
+      const ambientProgress = events.filter((e) => e.type === 'progress.reported' && e.subject?.kind === 'participant');
       expect(ambientProgress).toHaveLength(0);
     });
 
@@ -542,15 +528,13 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
 
       const events = service.normalize('run-1', raw, ctx);
 
-      const ambientProgress = events.find(
-        (e) => e.type === 'progress.reported' && e.subject?.kind === 'participant',
-      );
+      const ambientProgress = events.find((e) => e.type === 'progress.reported' && e.subject?.kind === 'participant');
       expect(ambientProgress).toBeDefined();
       const payload = (ambientProgress!.data as Record<string, unknown>).decodedPayload as Record<string, unknown>;
       expect(payload.percentage).toBe(100);
@@ -559,14 +543,18 @@ describe('EventNormalizerService', () => {
 
   describe('policy lifecycle events', () => {
     it('should emit policy.resolved for PolicyResolved messageType', () => {
-      const decoded = { policyId: 'policy.fraud.majority', policyVersion: 'policy.fraud.majority', description: 'Majority veto' };
+      const decoded = {
+        policyId: 'policy.fraud.majority',
+        policyVersion: 'policy.fraud.majority',
+        description: 'Majority veto'
+      };
       protoRegistry.decodeKnown.mockReturnValue(decoded);
 
       const envelope = makeEnvelope({ messageType: 'PolicyResolved', sender: 'runtime' });
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['runtime']) });
 
@@ -587,7 +575,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['runtime']) });
 
@@ -606,7 +594,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        envelope,
+        envelope
       };
       const ctx = makeContext({ knownParticipants: new Set(['runtime']) });
 
@@ -632,7 +620,7 @@ describe('EventNormalizerService', () => {
             code: 'POLICY_DENIED',
             message: 'Voting quorum not met: 1 of 3 required'
           }
-        },
+        }
       };
       const ctx = makeContext();
 
@@ -662,7 +650,7 @@ describe('EventNormalizerService', () => {
             code: 'INVALID_SESSION_ID',
             message: 'Session not found'
           }
-        },
+        }
       };
       const ctx = makeContext();
 
@@ -684,8 +672,8 @@ describe('EventNormalizerService', () => {
           messageId: 'msg-1',
           sessionId: 'session-1',
           acceptedAtUnixMs: Date.now(),
-          sessionState: 'SESSION_STATE_OPEN',
-        },
+          sessionState: 'SESSION_STATE_OPEN'
+        }
       };
       const ctx = makeContext();
 
@@ -699,7 +687,7 @@ describe('EventNormalizerService', () => {
     it('should return empty array for stream-envelope without envelope data', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-envelope',
-        receivedAt: '2026-01-01T00:00:00.000Z',
+        receivedAt: '2026-01-01T00:00:00.000Z'
       };
       const ctx = makeContext();
 
@@ -714,7 +702,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-status',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        streamStatus: { status: 'opened' },
+        streamStatus: { status: 'opened' }
       };
       const ctx = makeContext();
 
@@ -723,7 +711,7 @@ describe('EventNormalizerService', () => {
       expect(events[0].source).toEqual({
         kind: 'runtime',
         name: 'rust-runtime',
-        rawType: 'stream-status',
+        rawType: 'stream-status'
       });
     });
 
@@ -732,7 +720,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-status',
         receivedAt: ts,
-        streamStatus: { status: 'opened' },
+        streamStatus: { status: 'opened' }
       };
       const ctx = makeContext();
 
@@ -745,7 +733,7 @@ describe('EventNormalizerService', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-status',
         receivedAt: '2026-01-01T00:00:00.000Z',
-        streamStatus: { status: 'opened' },
+        streamStatus: { status: 'opened' }
       };
       const ctx = makeContext();
 

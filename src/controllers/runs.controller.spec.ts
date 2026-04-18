@@ -41,17 +41,17 @@ describe('RunsController (observer mode)', () => {
     mockRunExecutor = {
       launch: jest.fn(),
       cancel: jest.fn(),
-      clone: jest.fn(),
+      clone: jest.fn()
     };
     mockRunManager = {
       listRuns: jest.fn(),
       getRun: jest.fn(),
       getState: jest.fn(),
       deleteRun: jest.fn(),
-      archiveRun: jest.fn(),
+      archiveRun: jest.fn()
     };
     mockEventRepository = {
-      listCanonicalByRun: jest.fn(),
+      listCanonicalByRun: jest.fn()
     };
     mockReplayService = {};
     mockStreamHub = {};
@@ -68,7 +68,10 @@ describe('RunsController (observer mode)', () => {
       mockConfig as unknown as AppConfigService,
       mockProjectionService as unknown as ProjectionService,
       mockOutboundMessageRepository as unknown as OutboundMessageRepository,
-      { activeSseConnections: { inc: jest.fn(), dec: jest.fn() }, signalsTotal: { inc: jest.fn() } } as unknown as InstrumentationService,
+      {
+        activeSseConnections: { inc: jest.fn(), dec: jest.fn() },
+        signalsTotal: { inc: jest.fn() }
+      } as unknown as InstrumentationService
     );
   });
 
@@ -83,7 +86,7 @@ describe('RunsController (observer mode)', () => {
         limit: 10,
         offset: 0,
         sortBy: 'createdAt' as const,
-        sortOrder: 'desc' as const,
+        sortOrder: 'desc' as const
       };
       const result = await controller.listRuns(query as any);
 
@@ -95,7 +98,7 @@ describe('RunsController (observer mode)', () => {
       mockRunManager.listRuns.mockResolvedValue([]);
       await controller.listRuns({} as any);
       expect(mockRunManager.listRuns).toHaveBeenCalledWith(
-        expect.objectContaining({ limit: 50, offset: 0, sortBy: 'createdAt', sortOrder: 'desc' }),
+        expect.objectContaining({ limit: 50, offset: 0, sortBy: 'createdAt', sortOrder: 'desc' })
       );
     });
   });
@@ -113,8 +116,8 @@ describe('RunsController (observer mode)', () => {
           modeVersion: '1.0.0',
           configurationVersion: 'config.default',
           ttlMs: 60000,
-          participants: [{ id: 'agent-1' }],
-        },
+          participants: [{ id: 'agent-1' }]
+        }
       };
       const result = await controller.createRun(body as any);
 
@@ -123,7 +126,7 @@ describe('RunsController (observer mode)', () => {
         runId: 'run-123',
         sessionId: 'sess-alloc-1',
         status: 'queued',
-        traceId: 'trace-abc',
+        traceId: 'trace-abc'
       });
     });
   });
@@ -192,9 +195,9 @@ describe('RunsController (observer mode)', () => {
 
   describe('cloneRun', () => {
     it('rejects context override (scenario-specific, not accepted by control-plane)', async () => {
-      await expect(
-        controller.cloneRun('run-1', { context: { some: 'thing' } } as any),
-      ).rejects.toThrow(BadRequestException);
+      await expect(controller.cloneRun('run-1', { context: { some: 'thing' } } as any)).rejects.toThrow(
+        BadRequestException
+      );
     });
 
     it('delegates to runExecutor.clone and returns {runId, sessionId, status, traceId}', async () => {
@@ -208,7 +211,7 @@ describe('RunsController (observer mode)', () => {
         runId: 'run-2',
         sessionId: 'sess-2',
         status: 'queued',
-        traceId: 't2',
+        traceId: 't2'
       });
     });
   });

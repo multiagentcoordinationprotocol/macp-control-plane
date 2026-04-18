@@ -20,38 +20,38 @@ describe('StreamConsumerService', () => {
 
   beforeEach(() => {
     runtimeRegistry = {
-      get: jest.fn(),
+      get: jest.fn()
     } as unknown as jest.Mocked<RuntimeProviderRegistry>;
 
     normalizer = {
-      normalize: jest.fn().mockReturnValue([]),
+      normalize: jest.fn().mockReturnValue([])
     } as unknown as jest.Mocked<EventNormalizerService>;
 
     eventService = {
       emitControlPlaneEvents: jest.fn().mockResolvedValue([]),
-      persistRawAndCanonical: jest.fn().mockResolvedValue([]),
+      persistRawAndCanonical: jest.fn().mockResolvedValue([])
     } as unknown as jest.Mocked<RunEventService>;
 
     runtimeSessionRepository = {
-      updateState: jest.fn().mockResolvedValue(null),
+      updateState: jest.fn().mockResolvedValue(null)
     } as unknown as jest.Mocked<RuntimeSessionRepository>;
 
     runManager = {
       markCompleted: jest.fn().mockResolvedValue({}),
-      markFailed: jest.fn().mockResolvedValue({}),
+      markFailed: jest.fn().mockResolvedValue({})
     } as unknown as jest.Mocked<RunManagerService>;
 
     streamHub = {
       complete: jest.fn(),
       publishEvent: jest.fn(),
-      publishSnapshot: jest.fn(),
+      publishSnapshot: jest.fn()
     } as unknown as jest.Mocked<StreamHubService>;
 
     config = {
       streamBackoffBaseMs: 250,
       streamBackoffMaxMs: 30000,
       streamIdleTimeoutMs: 120000,
-      streamMaxRetries: 5,
+      streamMaxRetries: 5
     } as AppConfigService;
 
     service = new StreamConsumerService(
@@ -62,13 +62,16 @@ describe('StreamConsumerService', () => {
       runManager,
       streamHub,
       config,
-      { activeStreams: { inc: jest.fn(), dec: jest.fn() }, streamReconnectsTotal: { inc: jest.fn() } } as unknown as InstrumentationService,
+      {
+        activeStreams: { inc: jest.fn(), dec: jest.fn() },
+        streamReconnectsTotal: { inc: jest.fn() }
+      } as unknown as InstrumentationService,
       {
         withRunSpan: jest.fn(<T>(_runId: string, _name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
         withSpan: jest.fn(<T>(_name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
         addRunSpanEvent: jest.fn(),
-        getRunTraceContext: jest.fn().mockReturnValue(undefined),
-      } as any,
+        getRunTraceContext: jest.fn().mockReturnValue(undefined)
+      } as any
     );
   });
 
@@ -82,12 +85,12 @@ describe('StreamConsumerService', () => {
       Math.random = () => 0;
 
       try {
-        expect(backoffMs(0)).toBe(250);   // 250 * 2^0 = 250
-        expect(backoffMs(1)).toBe(500);   // 250 * 2^1 = 500
-        expect(backoffMs(2)).toBe(1000);  // 250 * 2^2 = 1000
-        expect(backoffMs(3)).toBe(2000);  // 250 * 2^3 = 2000
-        expect(backoffMs(4)).toBe(4000);  // 250 * 2^4 = 4000
-        expect(backoffMs(5)).toBe(8000);  // 250 * 2^5 = 8000
+        expect(backoffMs(0)).toBe(250); // 250 * 2^0 = 250
+        expect(backoffMs(1)).toBe(500); // 250 * 2^1 = 500
+        expect(backoffMs(2)).toBe(1000); // 250 * 2^2 = 1000
+        expect(backoffMs(3)).toBe(2000); // 250 * 2^3 = 2000
+        expect(backoffMs(4)).toBe(4000); // 250 * 2^4 = 4000
+        expect(backoffMs(5)).toBe(8000); // 250 * 2^5 = 8000
       } finally {
         Math.random = originalRandom;
       }
@@ -128,7 +131,7 @@ describe('StreamConsumerService', () => {
   describe('start()', () => {
     it('should be idempotent — second call returns immediately without starting a new loop', async () => {
       const mockProvider = {
-        getSession: jest.fn().mockReturnValue(new Promise(() => {})), // never resolves, keeps loop active
+        getSession: jest.fn().mockReturnValue(new Promise(() => {})) // never resolves, keeps loop active
       };
       runtimeRegistry.get.mockReturnValue(mockProvider as any);
 
@@ -142,12 +145,12 @@ describe('StreamConsumerService', () => {
             modeVersion: '1.0',
             configurationVersion: '1.0',
             ttlMs: 60000,
-            participants: [{ id: 'agent-1' }],
-          },
+            participants: [{ id: 'agent-1' }]
+          }
         },
         runtimeKind: 'rust',
         runtimeSessionId: 'session-1',
-        subscriberId: 'sub-1',
+        subscriberId: 'sub-1'
       };
 
       await service.start(params);
@@ -162,7 +165,7 @@ describe('StreamConsumerService', () => {
   describe('stop()', () => {
     it('should set the aborted flag on the active stream marker', async () => {
       const mockProvider = {
-        getSession: jest.fn().mockReturnValue(new Promise(() => {})),
+        getSession: jest.fn().mockReturnValue(new Promise(() => {}))
       };
       runtimeRegistry.get.mockReturnValue(mockProvider as any);
 
@@ -176,12 +179,12 @@ describe('StreamConsumerService', () => {
             modeVersion: '1.0',
             configurationVersion: '1.0',
             ttlMs: 60000,
-            participants: [{ id: 'agent-1' }],
-          },
+            participants: [{ id: 'agent-1' }]
+          }
         },
         runtimeKind: 'rust',
         runtimeSessionId: 'session-1',
-        subscriberId: 'sub-1',
+        subscriberId: 'sub-1'
       };
 
       await service.start(params);
@@ -204,7 +207,7 @@ describe('StreamConsumerService', () => {
   describe('onModuleDestroy()', () => {
     it('should abort all active streams', async () => {
       const mockProvider = {
-        getSession: jest.fn().mockReturnValue(new Promise(() => {})),
+        getSession: jest.fn().mockReturnValue(new Promise(() => {}))
       };
       runtimeRegistry.get.mockReturnValue(mockProvider as any);
 
@@ -218,12 +221,12 @@ describe('StreamConsumerService', () => {
             modeVersion: '1.0',
             configurationVersion: '1.0',
             ttlMs: 60000,
-            participants: [{ id: 'agent-1' }],
-          },
+            participants: [{ id: 'agent-1' }]
+          }
         },
         runtimeKind: 'rust',
         runtimeSessionId: `session-${runId}`,
-        subscriberId: 'sub-1',
+        subscriberId: 'sub-1'
       });
 
       await service.start(makeParams('run-a'));
@@ -250,7 +253,7 @@ describe('StreamConsumerService', () => {
 
     it('should return false when a stream is active but not connected', async () => {
       const mockProvider = {
-        getSession: jest.fn().mockReturnValue(new Promise(() => {})),
+        getSession: jest.fn().mockReturnValue(new Promise(() => {}))
       };
       runtimeRegistry.get.mockReturnValue(mockProvider as any);
 
@@ -264,12 +267,12 @@ describe('StreamConsumerService', () => {
             modeVersion: '1.0',
             configurationVersion: '1.0',
             ttlMs: 60000,
-            participants: [{ id: 'agent-1' }],
-          },
+            participants: [{ id: 'agent-1' }]
+          }
         },
         runtimeKind: 'rust',
         runtimeSessionId: 'session-1',
-        subscriberId: 'sub-1',
+        subscriberId: 'sub-1'
       });
 
       // Stream is active but not yet connected

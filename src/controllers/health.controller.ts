@@ -47,7 +47,11 @@ export class HealthController {
     try {
       runtime = await this.runtimeRegistry.get(this.config.runtimeKind).health();
     } catch (error) {
-      runtime = { ok: false, runtimeKind: this.config.runtimeKind, detail: error instanceof Error ? error.message : String(error) };
+      runtime = {
+        ok: false,
+        runtimeKind: this.config.runtimeKind,
+        detail: error instanceof Error ? error.message : String(error)
+      };
     }
 
     const streamHealthy = this.streamConsumer.isHealthy();

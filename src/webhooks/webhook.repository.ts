@@ -35,20 +35,14 @@ export class WebhookRepository {
     return this.database.db.select().from(webhooks);
   }
 
-  async update(
-    id: string,
-    fields: { url?: string; events?: string[]; secret?: string; active?: boolean }
-  ) {
+  async update(id: string, fields: { url?: string; events?: string[]; secret?: string; active?: boolean }) {
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
     if (fields.url !== undefined) updates.url = fields.url;
     if (fields.events !== undefined) updates.events = fields.events;
     if (fields.secret !== undefined) updates.secret = fields.secret;
     if (fields.active !== undefined) updates.active = fields.active;
 
-    await this.database.db
-      .update(webhooks)
-      .set(updates)
-      .where(eq(webhooks.id, id));
+    await this.database.db.update(webhooks).set(updates).where(eq(webhooks.id, id));
     return this.findById(id);
   }
 

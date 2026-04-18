@@ -20,7 +20,7 @@ function makeMockDb() {
     select: selectFn,
     // Expose inner mocks for assertions
     _insert: { values: insertValues, onConflictDoUpdate },
-    _select: { from: selectFrom, where: selectWhere, limit: selectLimit },
+    _select: { from: selectFrom, where: selectWhere, limit: selectLimit }
   };
 }
 
@@ -36,7 +36,7 @@ function fakeProjection(): RunStateProjection {
     signals: { items: [] },
     timeline: { entries: [] },
     trace: { spans: [] },
-    progress: { percent: 50 },
+    progress: { percent: 50 }
   } as unknown as RunStateProjection;
 }
 
@@ -73,7 +73,7 @@ describe('ProjectionRepository', () => {
         version: 5,
         schemaVersion: 1,
         runSummary: { id: 'run-1' },
-        participants: [],
+        participants: []
       };
       mockDb._select.limit.mockResolvedValue([fakeRow]);
 
@@ -103,16 +103,16 @@ describe('ProjectionRepository', () => {
           signals: projection.signals,
           timeline: projection.timeline,
           traceSummary: projection.trace,
-          progress: projection.progress,
-        }),
+          progress: projection.progress
+        })
       );
       expect(mockDb._insert.onConflictDoUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
           set: expect.objectContaining({
             version: 10,
-            schemaVersion: 2,
-          }),
-        }),
+            schemaVersion: 2
+          })
+        })
       );
     });
 
@@ -123,15 +123,15 @@ describe('ProjectionRepository', () => {
 
       expect(mockDb._insert.values).toHaveBeenCalledWith(
         expect.objectContaining({
-          schemaVersion: 0,
-        }),
+          schemaVersion: 0
+        })
       );
       expect(mockDb._insert.onConflictDoUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
           set: expect.objectContaining({
-            schemaVersion: 0,
-          }),
-        }),
+            schemaVersion: 0
+          })
+        })
       );
     });
 
@@ -161,8 +161,8 @@ describe('ProjectionRepository', () => {
 
       expect(mockDb._insert.onConflictDoUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
-          setWhere: expect.anything(),
-        }),
+          setWhere: expect.anything()
+        })
       );
 
       // Verify the onConflictDoUpdate call has target, set, and setWhere
@@ -179,8 +179,8 @@ describe('ProjectionRepository', () => {
 
       expect(mockDb._insert.values).toHaveBeenCalledWith(
         expect.objectContaining({
-          updatedAt: expect.any(String),
-        }),
+          updatedAt: expect.any(String)
+        })
       );
     });
   });

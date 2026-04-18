@@ -31,15 +31,11 @@ export class DatabaseService implements OnModuleDestroy {
   }
 
   async tryAdvisoryLock(key: string): Promise<boolean> {
-    const result = await this.db.execute(
-      sql`SELECT pg_try_advisory_lock(hashtext(${key})) AS acquired`
-    );
+    const result = await this.db.execute(sql`SELECT pg_try_advisory_lock(hashtext(${key})) AS acquired`);
     return (result.rows[0] as { acquired: boolean })?.acquired === true;
   }
 
   async advisoryUnlock(key: string): Promise<void> {
-    await this.db.execute(
-      sql`SELECT pg_advisory_unlock(hashtext(${key}))`
-    );
+    await this.db.execute(sql`SELECT pg_advisory_unlock(hashtext(${key}))`);
   }
 }

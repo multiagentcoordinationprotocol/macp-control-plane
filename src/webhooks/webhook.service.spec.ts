@@ -17,7 +17,7 @@ describe('WebhookService', () => {
     runId: 'run-1',
     status: 'completed',
     timestamp: '2026-04-07T00:00:00.000Z',
-    data: { result: 'success' },
+    data: { result: 'success' }
   };
 
   const makeWebhook = (overrides?: Record<string, unknown>) => ({
@@ -28,7 +28,7 @@ describe('WebhookService', () => {
     active: true,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
-    ...overrides,
+    ...overrides
   });
 
   const makeDelivery = (overrides?: Record<string, unknown>) => ({
@@ -40,14 +40,14 @@ describe('WebhookService', () => {
     status: 'pending',
     attempts: 0,
     createdAt: '2026-04-07T00:00:00.000Z',
-    ...overrides,
+    ...overrides
   });
 
   beforeEach(async () => {
     jest.useFakeTimers();
 
     instrumentation = {
-      webhookDeliveriesTotal: { inc: jest.fn() },
+      webhookDeliveriesTotal: { inc: jest.fn() }
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -61,8 +61,8 @@ describe('WebhookService', () => {
             listActive: jest.fn(),
             findById: jest.fn(),
             update: jest.fn(),
-            delete: jest.fn(),
-          },
+            delete: jest.fn()
+          }
         },
         {
           provide: WebhookDeliveryRepository,
@@ -70,14 +70,14 @@ describe('WebhookService', () => {
             create: jest.fn(),
             markDelivered: jest.fn(),
             markFailed: jest.fn(),
-            listPending: jest.fn(),
-          },
+            listPending: jest.fn()
+          }
         },
         {
           provide: InstrumentationService,
-          useValue: instrumentation,
-        },
-      ],
+          useValue: instrumentation
+        }
+      ]
     }).compile();
 
     service = module.get(WebhookService);
@@ -87,7 +87,7 @@ describe('WebhookService', () => {
     // Mock global fetch
     fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
       ok: true,
-      status: 200,
+      status: 200
     } as Response);
   });
 
@@ -163,7 +163,7 @@ describe('WebhookService', () => {
         webhookId: 'wh-match',
         event: 'run.completed',
         runId: 'run-1',
-        payload: samplePayload as unknown as Record<string, unknown>,
+        payload: samplePayload as unknown as Record<string, unknown>
       });
     });
 
@@ -175,9 +175,7 @@ describe('WebhookService', () => {
       await service.fireEvent(samplePayload);
 
       expect(deliveryRepository.create).toHaveBeenCalledTimes(1);
-      expect(deliveryRepository.create).toHaveBeenCalledWith(
-        expect.objectContaining({ webhookId: 'wh-wildcard' }),
-      );
+      expect(deliveryRepository.create).toHaveBeenCalledWith(expect.objectContaining({ webhookId: 'wh-wildcard' }));
     });
 
     it('should create delivery records before attempting delivery', async () => {
@@ -247,10 +245,10 @@ describe('WebhookService', () => {
           headers: expect.objectContaining({
             'Content-Type': 'application/json',
             'X-MACP-Signature': expectedSignature,
-            'X-MACP-Event': 'run.completed',
+            'X-MACP-Event': 'run.completed'
           }),
-          body,
-        }),
+          body
+        })
       );
     });
 

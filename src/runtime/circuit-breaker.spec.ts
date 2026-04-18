@@ -3,7 +3,7 @@ import { CircuitBreaker, CircuitBreakerConfig } from './circuit-breaker';
 describe('CircuitBreaker', () => {
   const defaultConfig: CircuitBreakerConfig = {
     failureThreshold: 3,
-    resetTimeoutMs: 5000,
+    resetTimeoutMs: 5000
   };
 
   let breaker: CircuitBreaker;
@@ -29,18 +29,14 @@ describe('CircuitBreaker', () => {
 
   it('stays CLOSED when failures are below threshold', async () => {
     for (let i = 0; i < defaultConfig.failureThreshold - 1; i++) {
-      await expect(
-        breaker.execute(() => Promise.reject(new Error('fail'))),
-      ).rejects.toThrow('fail');
+      await expect(breaker.execute(() => Promise.reject(new Error('fail')))).rejects.toThrow('fail');
     }
     expect(breaker.getState()).toBe('CLOSED');
   });
 
   it('opens after reaching failure threshold', async () => {
     for (let i = 0; i < defaultConfig.failureThreshold; i++) {
-      await expect(
-        breaker.execute(() => Promise.reject(new Error('fail'))),
-      ).rejects.toThrow('fail');
+      await expect(breaker.execute(() => Promise.reject(new Error('fail')))).rejects.toThrow('fail');
     }
     expect(breaker.getState()).toBe('OPEN');
   });
@@ -48,17 +44,13 @@ describe('CircuitBreaker', () => {
   it('rejects calls when OPEN', async () => {
     // Trip the breaker
     for (let i = 0; i < defaultConfig.failureThreshold; i++) {
-      await expect(
-        breaker.execute(() => Promise.reject(new Error('fail'))),
-      ).rejects.toThrow('fail');
+      await expect(breaker.execute(() => Promise.reject(new Error('fail')))).rejects.toThrow('fail');
     }
     expect(breaker.getState()).toBe('OPEN');
 
     // Subsequent call should be rejected without executing the function
     const fn = jest.fn().mockResolvedValue('should not run');
-    await expect(breaker.execute(fn)).rejects.toThrow(
-      'Circuit breaker is OPEN',
-    );
+    await expect(breaker.execute(fn)).rejects.toThrow('Circuit breaker is OPEN');
     expect(fn).not.toHaveBeenCalled();
   });
 
@@ -68,9 +60,7 @@ describe('CircuitBreaker', () => {
 
     // Trip the breaker
     for (let i = 0; i < defaultConfig.failureThreshold; i++) {
-      await expect(
-        breaker.execute(() => Promise.reject(new Error('fail'))),
-      ).rejects.toThrow('fail');
+      await expect(breaker.execute(() => Promise.reject(new Error('fail')))).rejects.toThrow('fail');
     }
     expect(breaker.getState()).toBe('OPEN');
 
@@ -85,9 +75,7 @@ describe('CircuitBreaker', () => {
 
     // Trip the breaker
     for (let i = 0; i < defaultConfig.failureThreshold; i++) {
-      await expect(
-        breaker.execute(() => Promise.reject(new Error('fail'))),
-      ).rejects.toThrow('fail');
+      await expect(breaker.execute(() => Promise.reject(new Error('fail')))).rejects.toThrow('fail');
     }
 
     // Advance time past reset timeout to enter HALF_OPEN
@@ -106,9 +94,7 @@ describe('CircuitBreaker', () => {
 
     // Trip the breaker
     for (let i = 0; i < defaultConfig.failureThreshold; i++) {
-      await expect(
-        breaker.execute(() => Promise.reject(new Error('fail'))),
-      ).rejects.toThrow('fail');
+      await expect(breaker.execute(() => Promise.reject(new Error('fail')))).rejects.toThrow('fail');
     }
 
     // Advance time past reset timeout to enter HALF_OPEN
@@ -117,18 +103,14 @@ describe('CircuitBreaker', () => {
 
     // A failure in HALF_OPEN should re-open the circuit
     // The failure count was already at threshold; one more failure pushes it above
-    await expect(
-      breaker.execute(() => Promise.reject(new Error('still failing'))),
-    ).rejects.toThrow('still failing');
+    await expect(breaker.execute(() => Promise.reject(new Error('still failing')))).rejects.toThrow('still failing');
     expect(breaker.getState()).toBe('OPEN');
   });
 
   it('resets failure count on success', async () => {
     // Accumulate failures just below threshold
     for (let i = 0; i < defaultConfig.failureThreshold - 1; i++) {
-      await expect(
-        breaker.execute(() => Promise.reject(new Error('fail'))),
-      ).rejects.toThrow('fail');
+      await expect(breaker.execute(() => Promise.reject(new Error('fail')))).rejects.toThrow('fail');
     }
     expect(breaker.getState()).toBe('CLOSED');
 
@@ -138,26 +120,20 @@ describe('CircuitBreaker', () => {
 
     // Now we need the full threshold again to trip the breaker
     for (let i = 0; i < defaultConfig.failureThreshold - 1; i++) {
-      await expect(
-        breaker.execute(() => Promise.reject(new Error('fail'))),
-      ).rejects.toThrow('fail');
+      await expect(breaker.execute(() => Promise.reject(new Error('fail')))).rejects.toThrow('fail');
     }
     // Should still be CLOSED because count was reset
     expect(breaker.getState()).toBe('CLOSED');
   });
 
   it('returns the value from the executed function', async () => {
-    const result = await breaker.execute(() =>
-      Promise.resolve({ data: 'hello' }),
-    );
+    const result = await breaker.execute(() => Promise.resolve({ data: 'hello' }));
     expect(result).toEqual({ data: 'hello' });
   });
 
   it('propagates the original error from the executed function', async () => {
     const originalError = new Error('specific error');
-    await expect(breaker.execute(() => Promise.reject(originalError))).rejects.toBe(
-      originalError,
-    );
+    await expect(breaker.execute(() => Promise.reject(originalError))).rejects.toBe(originalError);
   });
 
   describe('getHistory (§5.3)', () => {

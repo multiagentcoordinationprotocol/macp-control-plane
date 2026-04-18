@@ -54,13 +54,16 @@ export class RuntimeController {
   @ApiOperation({ summary: 'Register a governance policy with the runtime.' })
   @ApiBody({ description: 'Policy descriptor with rules' })
   @ApiOkResponse({ type: RuntimeRegisterPolicyResultDto })
-  async registerPolicy(@Body() body: {
-    policyId: string;
-    mode: string;
-    description: string;
-    rules: Record<string, unknown>;
-    schemaVersion?: number;
-  }) {
+  async registerPolicy(
+    @Body()
+    body: {
+      policyId: string;
+      mode: string;
+      description: string;
+      rules: Record<string, unknown>;
+      schemaVersion?: number;
+    }
+  ) {
     // Pre-validate before forwarding to runtime
     if (!body.policyId || body.policyId.trim().length === 0) {
       throw new BadRequestException('policyId is required');
@@ -131,7 +134,8 @@ export class RuntimeController {
     const policy = await provider.getPolicy({ policyId });
     return {
       ...policy,
-      rules: typeof policy.rules === 'string' ? JSON.parse(policy.rules) : JSON.parse(Buffer.from(policy.rules).toString())
+      rules:
+        typeof policy.rules === 'string' ? JSON.parse(policy.rules) : JSON.parse(Buffer.from(policy.rules).toString())
     };
   }
 

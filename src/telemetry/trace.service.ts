@@ -62,7 +62,11 @@ export class TraceService {
   }
 
   /** Add a span event (timestamped annotation) to the active run span, if any. */
-  addRunSpanEvent(runId: string, name: string, attributes?: Record<string, string | number | boolean | undefined>): void {
+  addRunSpanEvent(
+    runId: string,
+    name: string,
+    attributes?: Record<string, string | number | boolean | undefined>
+  ): void {
     const span = this.runSpans.get(runId);
     if (!span) return;
     const clean: Record<string, string | number | boolean> = {};

@@ -16,10 +16,7 @@ import { CANONICAL_EVENT_TYPES } from '../contracts/control-plane';
  * through a full projection state to observe its effect.
  */
 describe('Projection coverage invariant — every canonical event has a reducer', () => {
-  const projectionSource = readFileSync(
-    join(__dirname, 'projection.service.ts'),
-    'utf8',
-  );
+  const projectionSource = readFileSync(join(__dirname, 'projection.service.ts'), 'utf8');
 
   // A type is "covered" if the literal `case 'foo':` appears in projection.service.ts
   // OR if it's a documented intentional no-op.
@@ -36,7 +33,7 @@ describe('Projection coverage invariant — every canonical event has a reducer'
     'tool.completed',
     // policy.denied is visible via the policy projection via commitment evaluations
     // and the event list; no dedicated reducer branch required today.
-    'policy.denied',
+    'policy.denied'
   ]);
 
   for (const eventType of CANONICAL_EVENT_TYPES) {

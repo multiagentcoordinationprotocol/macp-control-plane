@@ -77,6 +77,17 @@ Runtime gRPC stream
         → StreamHubService.publishEvent (SSE → live UI subscribers)
 ```
 
+## Session Discovery (WatchSessions)
+
+When `SESSION_DISCOVERY_ENABLED=true` (default), the `SessionDiscoveryService` subscribes
+to the runtime's `WatchSessions` gRPC stream and auto-creates run records for sessions
+started by external launchers (not via `POST /runs`). For each `created` event, it creates
+a run, binds the session, subscribes the observer stream, and begins projecting events.
+Terminal events (`resolved`, `expired`) finalize the auto-discovered run.
+
+This enables the control-plane to observe and project any session the runtime hosts, even
+if the launching service doesn't use the control-plane's `POST /runs` endpoint.
+
 ## Message / Signal / Context — removed (direct-agent-auth CP-5/6/7)
 
 The `POST /runs/:id/{messages,signal,context}` endpoints were removed 2026-04-15 and now

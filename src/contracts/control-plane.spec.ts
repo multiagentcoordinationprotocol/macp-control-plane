@@ -28,7 +28,7 @@ describe('CANONICAL_EVENT_TYPES (§3 contract stability)', () => {
       'policy.resolved',
       'policy.commitment.evaluated',
       'policy.denied',
-      'llm.call.completed',
+      'llm.call.completed'
     ];
     expect([...CANONICAL_EVENT_TYPES].sort()).toEqual(expected.sort());
   });

@@ -156,10 +156,7 @@ describe('RunRecoveryService', () => {
 
     await service.onApplicationBootstrap();
 
-    expect(mockRunManager.markFailed).toHaveBeenCalledWith(
-      'run-3',
-      expect.any(Error)
-    );
+    expect(mockRunManager.markFailed).toHaveBeenCalledWith('run-3', expect.any(Error));
   });
 
   it('does not crash if markFailed also fails', async () => {

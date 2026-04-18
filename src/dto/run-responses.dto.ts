@@ -1,5 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { CanonicalEvent, MetricsSummary, RunComparisonResult, RunExportBundle, RunStateProjection, RunStatus } from '../contracts/control-plane';
+import {
+  CanonicalEvent,
+  MetricsSummary,
+  RunComparisonResult,
+  RunExportBundle,
+  RunStateProjection,
+  RunStatus
+} from '../contracts/control-plane';
 
 export class CreateRunResponseDto {
   @ApiProperty()

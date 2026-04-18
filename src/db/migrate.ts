@@ -43,9 +43,7 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
     }
 
     // Get already-applied migrations
-    const result = await client.query<{ name: string }>(
-      `SELECT name FROM ${MIGRATIONS_TABLE} ORDER BY name`
-    );
+    const result = await client.query<{ name: string }>(`SELECT name FROM ${MIGRATIONS_TABLE} ORDER BY name`);
     const applied = new Set(result.rows.map((r) => r.name));
 
     const pending = files.filter((f) => !applied.has(f));
@@ -63,10 +61,7 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
       await client.query('BEGIN');
       try {
         await client.query(sql);
-        await client.query(
-          `INSERT INTO ${MIGRATIONS_TABLE} (name) VALUES ($1)`,
-          [file]
-        );
+        await client.query(`INSERT INTO ${MIGRATIONS_TABLE} (name) VALUES ($1)`, [file]);
         await client.query('COMMIT');
         console.log(`  ✓ ${file}`);
       } catch (err) {
@@ -84,9 +79,7 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
 
 // Allow standalone execution: node dist/db/migrate.js
 if (require.main === module) {
-  const databaseUrl =
-    process.env.DATABASE_URL ??
-    'postgres://postgres:postgres@localhost:5432/macp_control_plane';
+  const databaseUrl = process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/macp_control_plane';
 
   runMigrations(databaseUrl).catch((err) => {
     console.error('Migration failed:', err instanceof Error ? err.message : String(err));

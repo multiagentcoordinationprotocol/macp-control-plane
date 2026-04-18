@@ -10,7 +10,7 @@ describe('EventsController (§4.1)', () => {
       listCanonicalFiltered: jest.fn().mockResolvedValue({
         data: [{ id: 'e1', runId: 'r1', seq: 1, type: 'signal.emitted' }],
         total: 1
-      }),
+      })
     };
     controller = new EventsController(mockRepo as unknown as EventRepository);
   });
@@ -28,7 +28,7 @@ describe('EventsController (§4.1)', () => {
 
     expect(mockRepo.listCanonicalFiltered).toHaveBeenCalledWith(
       expect.objectContaining({
-        types: ['signal.emitted', 'signal.acknowledged', 'policy.denied'],
+        types: ['signal.emitted', 'signal.acknowledged', 'policy.denied']
       })
     );
   });
@@ -40,7 +40,7 @@ describe('EventsController (§4.1)', () => {
       afterSeq: 100,
       afterTs: '2026-04-13T00:00:00Z',
       beforeTs: '2026-04-14T00:00:00Z',
-      limit: 50,
+      limit: 50
     } as any);
 
     expect(mockRepo.listCanonicalFiltered).toHaveBeenCalledWith(
@@ -50,7 +50,7 @@ describe('EventsController (§4.1)', () => {
         afterSeq: 100,
         afterTs: '2026-04-13T00:00:00Z',
         beforeTs: '2026-04-14T00:00:00Z',
-        limit: 50,
+        limit: 50
       })
     );
   });
@@ -58,7 +58,7 @@ describe('EventsController (§4.1)', () => {
   it('sets nextCursor only when page is full (data.length === limit)', async () => {
     mockRepo.listCanonicalFiltered.mockResolvedValueOnce({
       data: Array.from({ length: 50 }, (_, i) => ({ seq: i + 1 })),
-      total: 120,
+      total: 120
     });
 
     const result = await controller.listEvents({ limit: 50 } as any);
@@ -69,7 +69,7 @@ describe('EventsController (§4.1)', () => {
   it('omits nextCursor when page is not full', async () => {
     mockRepo.listCanonicalFiltered.mockResolvedValueOnce({
       data: [{ seq: 1 }, { seq: 2 }],
-      total: 2,
+      total: 2
     });
 
     const result = await controller.listEvents({ limit: 500 } as any);

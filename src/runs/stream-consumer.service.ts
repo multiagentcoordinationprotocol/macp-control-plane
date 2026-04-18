@@ -128,9 +128,7 @@ export class StreamConsumerService implements OnModuleDestroy {
   ): Promise<void> {
     const provider = this.runtimeRegistry.get(params.runtimeKind);
     const context = {
-      knownParticipants: new Set<string>(
-        params.execution.session.participants.map((item) => item.id),
-      ),
+      knownParticipants: new Set<string>(params.execution.session.participants.map((item) => item.id)),
       execution: params.execution,
       runtimeSessionId: params.runtimeSessionId
     };
@@ -147,7 +145,9 @@ export class StreamConsumerService implements OnModuleDestroy {
         }
       } catch (error) {
         marker.connected = false;
-        this.logger.warn(`stream error for run ${params.runId}: ${error instanceof Error ? error.message : String(error)}`);
+        this.logger.warn(
+          `stream error for run ${params.runId}: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
 
       // Stream ended — check if already finalized
@@ -189,7 +189,12 @@ export class StreamConsumerService implements OnModuleDestroy {
       retries += 1;
       this.instrumentation.streamReconnectsTotal.inc();
       if (retries > maxRetries) {
-        await this.finalizeRun(params.runId, marker, 'failed', new Error('polling exhausted without terminal session state'));
+        await this.finalizeRun(
+          params.runId,
+          marker,
+          'failed',
+          new Error('polling exhausted without terminal session state')
+        );
         return;
       }
 
@@ -206,10 +211,7 @@ export class StreamConsumerService implements OnModuleDestroy {
     }
   }
 
-  private async *withIdleTimeout<T>(
-    iterable: AsyncIterable<T>,
-    timeoutMs: number
-  ): AsyncIterable<T> {
+  private async *withIdleTimeout<T>(iterable: AsyncIterable<T>, timeoutMs: number): AsyncIterable<T> {
     const iterator = iterable[Symbol.asyncIterator]();
     try {
       while (true) {
@@ -279,11 +281,7 @@ export class StreamConsumerService implements OnModuleDestroy {
 
     const sessionStateChange = emitted.find((event) => event.type === 'session.state.changed');
     if (sessionStateChange && typeof sessionStateChange.data.state === 'string') {
-      await this.runtimeSessionRepository.updateState(
-        runId,
-        sessionStateChange.data.state,
-        new Date().toISOString()
-      );
+      await this.runtimeSessionRepository.updateState(runId, sessionStateChange.data.state, new Date().toISOString());
       if (sessionStateChange.data.state === 'SESSION_STATE_RESOLVED') {
         await this.finalizeRun(runId, marker, 'completed');
         return;
@@ -293,6 +291,5 @@ export class StreamConsumerService implements OnModuleDestroy {
         return;
       }
     }
-
   }
 }

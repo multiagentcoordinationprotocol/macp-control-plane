@@ -23,12 +23,12 @@ describe('RedactionService (§8.3)', () => {
     const out = svc.redact({
       a: 'my secret value',
       b: ['no secret', 'clean'],
-      nested: { c: 'secret inside', d: 42 },
+      nested: { c: 'secret inside', d: 42 }
     });
     expect(out).toEqual({
       a: 'my [REDACTED] value',
       b: ['no [REDACTED]', 'clean'],
-      nested: { c: '[REDACTED] inside', d: 42 },
+      nested: { c: '[REDACTED] inside', d: 42 }
     });
   });
 

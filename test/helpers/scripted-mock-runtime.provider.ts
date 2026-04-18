@@ -23,6 +23,7 @@ import {
   RuntimeSubscribeSessionRequest,
   RuntimeUnregisterPolicyRequest,
   RuntimeUnregisterPolicyResult,
+  SessionLifecycleEvent,
 } from '../../src/contracts/runtime';
 
 export interface ScriptedEvent {
@@ -242,6 +243,17 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
       return all.filter((p) => p.mode === req.mode || p.mode === '*');
     }
     return all;
+  }
+
+  // ── Session lifecycle observation (stub) ────────────────────────────
+
+  async listSessions(): Promise<RuntimeSessionSnapshot[]> {
+    return [];
+  }
+
+  async *watchSessions(): AsyncIterable<SessionLifecycleEvent> {
+    // Scripted mock does not produce session lifecycle events — tests that need
+    // them should use a dedicated fixture or override this method.
   }
 
   private makeAck(sessionId: string, messageId?: string): RuntimeAck {

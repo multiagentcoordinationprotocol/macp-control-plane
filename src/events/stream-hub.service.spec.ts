@@ -24,13 +24,13 @@ describe('StreamHubService', () => {
     ts: new Date().toISOString(),
     type: 'message.sent',
     source: { kind: 'runtime', name: 'test-runtime' },
-    data: { content: `event-${seq}` },
+    data: { content: `event-${seq}` }
   });
 
   const makeSnapshot = (runId: string): RunStateProjection => ({
     run: {
       runId,
-      status: 'running',
+      status: 'running'
     },
     participants: [],
     graph: { nodes: [], edges: [] },
@@ -41,7 +41,10 @@ describe('StreamHubService', () => {
     trace: { spanCount: 0, linkedArtifacts: [] },
     outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
     policy: { policyVersion: '', commitmentEvaluations: [] },
-    llm: { calls: [], totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 } },
+    llm: {
+      calls: [],
+      totals: { callCount: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, estimatedCostUsd: 0 }
+    }
   });
 
   describe('publishEvent()', () => {
@@ -115,7 +118,7 @@ describe('StreamHubService', () => {
       const sub = service.stream('run-1').subscribe({
         complete: () => {
           completed = true;
-        },
+        }
       });
 
       service.complete('run-1');
@@ -141,10 +144,7 @@ describe('StreamHubService', () => {
       sub.unsubscribe();
 
       // A cleanup timer should now be scheduled
-      const timers = (strategy as any).cleanupTimers as Map<
-        string,
-        ReturnType<typeof setTimeout>
-      >;
+      const timers = (strategy as any).cleanupTimers as Map<string, ReturnType<typeof setTimeout>>;
       expect(timers.has('run-1')).toBe(true);
 
       // complete() should clear it
@@ -185,10 +185,7 @@ describe('StreamHubService', () => {
       const sub2 = service.stream('run-1').subscribe();
 
       // The cleanup timer should have been cancelled
-      const timers = (strategy as any).cleanupTimers as Map<
-        string,
-        ReturnType<typeof setTimeout>
-      >;
+      const timers = (strategy as any).cleanupTimers as Map<string, ReturnType<typeof setTimeout>>;
       expect(timers.has('run-1')).toBe(false);
 
       // Advance past the original cleanup time
@@ -230,12 +227,12 @@ describe('StreamHubService', () => {
       const sub1 = service.stream('run-1').subscribe({
         complete: () => {
           completed1 = true;
-        },
+        }
       });
       const sub2 = service.stream('run-2').subscribe({
         complete: () => {
           completed2 = true;
-        },
+        }
       });
 
       service.complete('run-1');
@@ -260,15 +257,15 @@ describe('StreamHubService', () => {
       const completions: string[] = [];
 
       const sub1 = service.stream('run-1').subscribe({
-        complete: () => completions.push('run-1'),
+        complete: () => completions.push('run-1')
       });
       const sub2 = service.stream('run-2').subscribe({
-        complete: () => completions.push('run-2'),
+        complete: () => completions.push('run-2')
       });
 
       // Create a cleanup timer by unsubscribing from a stream
       const sub3 = service.stream('run-3').subscribe({
-        complete: () => completions.push('run-3'),
+        complete: () => completions.push('run-3')
       });
       sub3.unsubscribe();
 
@@ -281,10 +278,7 @@ describe('StreamHubService', () => {
       // All internal maps should be cleared
       const subjects = (strategy as any).subjects as Map<string, unknown>;
       const counts = (strategy as any).subscriberCounts as Map<string, number>;
-      const timers = (strategy as any).cleanupTimers as Map<
-        string,
-        ReturnType<typeof setTimeout>
-      >;
+      const timers = (strategy as any).cleanupTimers as Map<string, ReturnType<typeof setTimeout>>;
 
       expect(subjects.size).toBe(0);
       expect(counts.size).toBe(0);

@@ -32,11 +32,7 @@ export class RuntimeSessionRepository {
   }
 
   async findByRunId(runId: string) {
-    const rows = await this.database.db
-      .select()
-      .from(runtimeSessions)
-      .where(eq(runtimeSessions.runId, runId))
-      .limit(1);
+    const rows = await this.database.db.select().from(runtimeSessions).where(eq(runtimeSessions.runId, runId)).limit(1);
     return rows[0] ?? null;
   }
 

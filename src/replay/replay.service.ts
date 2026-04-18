@@ -105,10 +105,18 @@ export class ReplayService {
       seq: row.seq,
       ts: row.ts,
       type: row.type,
-      subject: row.subjectKind && row.subjectId
-        ? { kind: row.subjectKind as CanonicalEvent['subject'] extends { kind: infer K } ? K : never, id: row.subjectId }
-        : undefined,
-      source: { kind: row.sourceKind as 'runtime' | 'control-plane' | 'replay', name: row.sourceName, rawType: row.rawType ?? undefined },
+      subject:
+        row.subjectKind && row.subjectId
+          ? {
+              kind: row.subjectKind as CanonicalEvent['subject'] extends { kind: infer K } ? K : never,
+              id: row.subjectId
+            }
+          : undefined,
+      source: {
+        kind: row.sourceKind as 'runtime' | 'control-plane' | 'replay',
+        name: row.sourceName,
+        rawType: row.rawType ?? undefined
+      },
       trace: {
         traceId: row.traceId ?? undefined,
         spanId: row.spanId ?? undefined,
