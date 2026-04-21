@@ -15,7 +15,7 @@ function safeNumber(val: unknown, fallback = 0): number {
  *   { "tokenUsage": { "promptTokens": N, "completionTokens": N, "model": "..." } }
  *
  * This can appear in:
- *   - event.data.metadata.tokenUsage (sent via POST /runs/:id/messages metadata)
+ *   - event.data.metadata.tokenUsage (envelope metadata emitted by agents via the macp-sdk)
  *   - event.data.decodedPayload.tokenUsage (embedded in proto payload)
  *   - event.data.payloadDescriptor.tokenUsage (from payload descriptor)
  *   - event.data.tokenUsage (direct)

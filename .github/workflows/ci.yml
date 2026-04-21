@@ -132,9 +132,48 @@ jobs:
           fi
           echo "No leaked secrets detected."
 
+  conventions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce code conventions (see CLAUDE.md)
+        run: |
+          set -o pipefail
+          fail=0
+
+          echo "::group::throw new Error outside allowed files"
+          if grep -rn "throw new Error" src --include='*.ts' | grep -vE '(app-config|migrate|\.spec\.ts|circuit-breaker\.ts|proto-registry\.service\.ts|grpc-helpers\.ts|run\.repository\.ts|webhook\.service\.ts|run-recovery\.service\.ts)'; then
+            echo "::error::throw new Error found outside allowed files. Use AppException or a Nest built-in."
+            fail=1
+          fi
+          echo "::endgroup::"
+
+          echo "::group::console.* outside migrate / specs"
+          if grep -rn 'console\.' src --include='*.ts' | grep -vE '(migrate|\.spec\.ts)'; then
+            echo "::error::console.* found outside migrate / tests. Use Nest Logger instead."
+            fail=1
+          fi
+          echo "::endgroup::"
+
+          echo "::group::process.env outside allowed files"
+          if grep -rn 'process\.env' src --include='*.ts' | grep -vE '(app-config|main\.ts|telemetry/telemetry\.ts|db/migrate\.ts|\.spec\.ts)'; then
+            echo "::error::process.env read outside app-config/main/telemetry/migrate. Centralize in AppConfigService."
+            fail=1
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Observer-only: no write-path endpoints reintroduced"
+          if grep -rn 'POST.*runs/:id/\(messages\|signal\|context\)' src --include='*.ts' | grep -vE '(gone\(|\.spec\.ts|REMOVED|deprecated)'; then
+            echo "::error::Write-path endpoint references found. Control-plane is observer-only (direct-agent-auth)."
+            fail=1
+          fi
+          echo "::endgroup::"
+
+          exit $fail
+
   build:
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test, check-env-secrets]
+    needs: [lint, typecheck, test, check-env-secrets, conventions]
     permissions:
       contents: read
       packages: read

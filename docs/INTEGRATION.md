@@ -8,7 +8,7 @@
 
 Key methods to implement (observer-only surface, post direct-agent-auth):
 - `initialize()` — protocol version negotiation.
-- `subscribeSession({runId, runtimeSessionId})` — read-only `StreamSession` observer; returns `{events, abort}`. **Never writes envelopes.**
+- `subscribeSession({runId, runtimeSessionId, afterSequence?})` — read-only `StreamSession` observer; returns `{events, abort}`. **Never writes envelopes.** Per RFC-MACP-0006 §3.2 the provider writes a single passive-subscribe frame (`{subscribeSessionId, afterSequence}`) and immediately half-closes the write side; the runtime then replays accepted history from `afterSequence` (default 0 = full replay) before switching to live broadcast.
 - `getSession()` — poll for session state (used by the observer's `pollForOpenSession` loop).
 - `cancelSession()` — only called when `run.metadata.cancellationDelegated === true` (Option B in direct-agent-auth §Cancellation design).
 - `getManifest()` / `listModes()` / `listRoots()` / `health()` — metadata.

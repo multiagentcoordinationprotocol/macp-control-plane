@@ -76,17 +76,6 @@ export interface RuntimeInitializeResult {
   instructions?: string;
 }
 
-/**
- * Result shape returned once the observer has confirmed the session is OPEN.
- * `initiator` is learned from the runtime's session metadata (GetSession response),
- * never chosen by the control-plane.
- */
-export interface RuntimeSessionOpenResult {
-  runtimeSessionId: string;
-  initiator: string;
-  ack: RuntimeAck;
-}
-
 export interface RuntimeGetSessionRequest {
   runId: string;
   runtimeSessionId: string;
@@ -156,6 +145,11 @@ export interface RuntimeCallOptions {
 export interface RuntimeSubscribeSessionRequest {
   runId: string;
   runtimeSessionId: string;
+  /**
+   * RFC-MACP-0006 §3.2: replay log sequence to start from. 0 (default) replays
+   * the full accepted history before switching to live broadcast.
+   */
+  afterSequence?: number;
 }
 
 /**

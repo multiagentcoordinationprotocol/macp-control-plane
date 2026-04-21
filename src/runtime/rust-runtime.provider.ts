@@ -44,8 +44,11 @@ export interface GrpcCallOptions {
  *  - Never calls `Send`. Agents emit their own envelopes directly against the runtime.
  *  - Never allocates a sessionId. The control-plane allocates at POST /runs; the initiator
  *    agent calls SessionStart with its own Bearer token.
- *  - `subscribeSession()` attaches a read-only bidi `StreamSession` — the control-plane
- *    only reads; it does not write the first frame (no SessionStart, no SessionWatch).
+ *  - `subscribeSession()` attaches a read-only bidi `StreamSession`. Per RFC-MACP-0006 §3.2
+ *    the control-plane writes exactly one passive-subscribe frame
+ *    (`{subscribeSessionId, afterSequence}`, no envelope) to bind the stream to the
+ *    session's broadcast channel and request history replay, then closes the write side.
+ *    It never writes an envelope (no SessionStart, no SessionWatch).
  *
  * The previously-shipped `openSession()` / `startSession()` / `send()` / `chooseInitiator()`
  * paths were deleted in CP-3 because they violated §2, §3, and §5 of the plan's invariants.
@@ -246,12 +249,25 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
           notify();
         });
 
-        // Observer stream: end the write side immediately — we only read.
-        // This tells the runtime the client is a passive subscriber.
+        // RFC-MACP-0006 §3.2: write a passive-subscribe frame so the runtime binds
+        // this stream to the session's broadcast channel and replays accepted
+        // history from `afterSequence` onwards. Then end the write side — we
+        // only read from here on.
+        try {
+          grpcCall.write({
+            subscribeSessionId: req.runtimeSessionId,
+            afterSequence: req.afterSequence ?? 0
+          });
+        } catch (error) {
+          streamFailure = error instanceof Error ? error : new Error(String(error));
+          ended = true;
+          notify();
+          return;
+        }
         try {
           grpcCall.end();
         } catch {
-          /* some gRPC impls no-op on empty streams */
+          /* some gRPC impls no-op on half-closed streams */
         }
       } catch (error) {
         streamFailure = error instanceof Error ? error : new Error(String(error));
