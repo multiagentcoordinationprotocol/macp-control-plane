@@ -43,21 +43,21 @@
 4. Manually cancel: `POST /runs/{id}/cancel`
 5. If recovery is enabled (`RUN_RECOVERY_ENABLED=true`), the system auto-recovers orphaned runs on startup
 
-## Message Send Failures
+## Legacy Write Endpoints Return 410 Gone
 
-**Symptom:** `POST /runs/:id/messages` returns 400 or 502
+**Symptom:** `POST /runs/:id/messages`, `/signal`, or `/context` returns `410 Gone` with `errorCode: ENDPOINT_REMOVED`.
 
-**Common causes:**
-- Run not in `binding_session` or `running` state → check `GET /runs/:id`
-- Invalid payload encoding → use `payloadEnvelope` with `encoding: "proto"` for real runtime
-- Non-existent participant → `from` must match a registered participant ID
-- Session expired → check session TTL
+**Explanation:** The control-plane is observer-only as of the 2026-04-15 direct-agent-auth refactor. Agents authenticate to the runtime directly and emit their own envelopes via `macp-sdk-python` / `macp-sdk-typescript`. See `docs/API.md` § "Messages & Signals — emission is NOT via the control-plane" for migration guidance.
 
-## Signals Not Appearing in Projection
+## Agent Envelopes Not Appearing in Projection
 
-**Symptom:** `POST /runs/:id/signal` succeeds but signals don't appear in `GET /runs/:id/state`
+**Symptom:** Agents call `session.send(...)` via the SDK but events don't appear in `GET /runs/:id/state`.
 
-**Explanation:** Signals are recorded as `message.sent` events by the control plane. The `signal.emitted` projection entries only appear when the runtime echoes signals back via the gRPC stream as `stream-envelope` events with `messageType: Signal`. With a mock runtime that doesn't echo signals, only `message.sent` events (with `subject.kind: signal`) appear.
+**Checks:**
+1. Confirm the run's `runtimeSessionId` matches the `session_id` the agent is writing to (`GET /runs/:id`).
+2. Check stream consumer logs for `StreamSession` reconnection loops — the observer subscribes read-only and must be connected.
+3. Confirm the runtime echoes envelopes back on the stream (some runtimes only echo certain message types). `signal.emitted` and `message.sent` canonical events require `stream-envelope` entries on the observer stream.
+4. For session discovery, verify `SESSION_DISCOVERY_ENABLED=true` so externally-launched sessions auto-create runs.
 
 ## SSE Stream Drops
 
@@ -101,11 +101,11 @@
 | `CIRCUIT_BREAKER_OPEN` | 503 | Runtime circuit breaker is open |
 | `STREAM_EXHAUSTED` | 500 | Max stream reconnection retries reached |
 | `SESSION_EXPIRED` | 410 | Runtime session has expired |
-| `KICKOFF_FAILED` | 502 | Kickoff message failed after retries |
 | `MODE_NOT_SUPPORTED` | 400 | Runtime does not support requested mode |
 | `VALIDATION_ERROR` | 400 | Request body validation failed |
-| `MESSAGE_SEND_FAILED` | 502 | Runtime rejected a session message |
-| `SIGNAL_DISPATCH_FAILED` | 502 | Runtime rejected a signal |
-| `CONTEXT_UPDATE_FAILED` | 502 | Runtime rejected context update |
 | `INVALID_SESSION_ID` | 400 | Session ID not recognized by runtime |
+| `UNKNOWN_POLICY_VERSION` | 400 | Policy version not found in registry |
+| `POLICY_DENIED` | 403 | Commitment rejected by policy rules |
+| `INVALID_POLICY_DEFINITION` | 400 | Policy rules fail schema validation |
+| `SESSION_ALREADY_EXISTS` | 409 | Duplicate session start attempt |
 | `INTERNAL_ERROR` | 500 | Unexpected server error |

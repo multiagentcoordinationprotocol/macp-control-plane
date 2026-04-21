@@ -414,12 +414,12 @@ Metrics summary including token usage and estimated cost:
 }
 ```
 
-**Token usage convention:** Agents include token data in message metadata:
+**Token usage convention:** Agents include token data in envelope metadata when sending via `macp-sdk-*` directly to the runtime. The control-plane observes that envelope on its read-only stream:
 ```json
-POST /runs/:id/messages
+// Envelope emitted by the agent via the SDK (e.g. session.send(...))
 {
-  "from": "fraud-agent",
   "messageType": "Evaluation",
+  "sender": "fraud-agent",
   "payload": { ... },
   "metadata": {
     "tokenUsage": {
@@ -805,7 +805,7 @@ Emitted for each commitment the runtime evaluates against the active policy.
 
 Emitted in two cases:
 1. The runtime sends a `PolicyDenied` stream message.
-2. A send-ack (`POST /runs/:id/messages`) returns `error.code = "POLICY_DENIED"`. The control-plane synthesizes the event so deny reasons are visible on the event stream even if the runtime doesn't echo them back.
+2. A runtime-emitted send-ack observed on the stream carries `error.code = "POLICY_DENIED"` (the agent's `Send` RPC was rejected by policy). The control-plane synthesizes the event so deny reasons are visible on the event stream even if the runtime doesn't echo them back as a dedicated `PolicyDenied` envelope.
 
 ```json
 {
