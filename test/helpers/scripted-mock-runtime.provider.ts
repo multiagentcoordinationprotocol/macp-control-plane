@@ -256,6 +256,11 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
     // them should use a dedicated fixture or override this method.
   }
 
+  async *watchSignals(): AsyncIterable<RawRuntimeEvent> {
+    // Scripted mock does not produce ambient Signal/Progress envelopes —
+    // tests that need them should override this method.
+  }
+
   private makeAck(sessionId: string, messageId?: string): RuntimeAck {
     return {
       ok: true,
