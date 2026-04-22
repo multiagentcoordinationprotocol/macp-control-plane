@@ -251,8 +251,14 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
 
         // RFC-MACP-0006 §3.2: write a passive-subscribe frame so the runtime binds
         // this stream to the session's broadcast channel and replays accepted
-        // history from `afterSequence` onwards. Then end the write side — we
-        // only read from here on.
+        // history from `afterSequence` onwards.
+        //
+        // We deliberately do NOT half-close the write side here. The runtime's
+        // StreamSession loop treats client half-close as "client is done with
+        // the stream entirely" and breaks after draining queued envelopes —
+        // dropping every envelope broadcast after the half-close. Keeping the
+        // bidi stream open lets the runtime continue forwarding live envelopes
+        // (Vote, Commitment, etc.) for the session's full lifetime.
         try {
           grpcCall.write({
             subscribeSessionId: req.runtimeSessionId,
@@ -263,11 +269,6 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
           ended = true;
           notify();
           return;
-        }
-        try {
-          grpcCall.end();
-        } catch {
-          /* some gRPC impls no-op on half-closed streams */
         }
       } catch (error) {
         streamFailure = error instanceof Error ? error : new Error(String(error));
@@ -491,6 +492,95 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
             }
           },
           async return(): Promise<IteratorResult<SessionLifecycleEvent>> {
+            if (grpcCall) {
+              try {
+                grpcCall.cancel();
+              } catch {
+                /* ignore */
+              }
+            }
+            return { done: true, value: undefined };
+          }
+        };
+      }
+    };
+  }
+
+  /**
+   * Subscribe to the runtime's WatchSignals stream. Mirrors the watchSessions
+   * pattern: long-lived async iterable that yields a RawRuntimeEvent per Signal
+   * or Progress envelope, with auto-cancel on consumer return().
+   */
+  watchSignals(): AsyncIterable<RawRuntimeEvent> {
+    const credentialResolver = this.credentialResolver;
+    const client = this.client;
+    const kind = this.kind;
+
+    return {
+      [Symbol.asyncIterator]() {
+        let grpcCall: any = null;
+        const buffer: RawRuntimeEvent[] = [];
+        let resolveWait: (() => void) | null = null;
+        let ended = false;
+        let streamError: Error | null = null;
+
+        const notify = () => {
+          if (resolveWait) {
+            const r = resolveWait;
+            resolveWait = null;
+            r();
+          }
+        };
+
+        const launch = async () => {
+          try {
+            const creds = await credentialResolver.resolve({ runtimeKind: kind });
+            const metadata = buildMetadata(creds.metadata);
+            const method = getClientMethod(client, 'WatchSignals');
+            grpcCall = method.call(client, {}, metadata);
+
+            grpcCall.on('data', (chunk: any) => {
+              const receivedAt = new Date().toISOString();
+              const rawEnvelope = chunk.envelope ?? chunk.signal ?? chunk;
+              if (!rawEnvelope || (!rawEnvelope.messageType && !rawEnvelope.message_type)) return;
+              const envelope = fromEnvelope(rawEnvelope);
+              buffer.push({ kind: 'stream-envelope', receivedAt, envelope });
+              notify();
+            });
+
+            grpcCall.on('error', (err: Error) => {
+              streamError = err;
+              ended = true;
+              notify();
+            });
+            grpcCall.on('end', () => {
+              ended = true;
+              notify();
+            });
+          } catch (err) {
+            streamError = err instanceof Error ? err : new Error(String(err));
+            ended = true;
+            notify();
+          }
+        };
+
+        void launch();
+
+        return {
+          async next(): Promise<IteratorResult<RawRuntimeEvent>> {
+            while (true) {
+              if (buffer.length > 0) return { done: false, value: buffer.shift()! };
+              if (ended) {
+                if (streamError) throw streamError;
+                return { done: true, value: undefined };
+              }
+              await new Promise<void>((r) => {
+                if (buffer.length > 0 || ended) r();
+                else resolveWait = r;
+              });
+            }
+          },
+          async return(): Promise<IteratorResult<RawRuntimeEvent>> {
             if (grpcCall) {
               try {
                 grpcCall.cancel();

@@ -16,6 +16,13 @@ export const PROJECTION_SCHEMA_VERSION = 3;
 @Injectable()
 export class ProjectionService {
   private readonly logger = new Logger(ProjectionService.name);
+  // Per-run serialization to prevent concurrent stream-consumer + signal-consumer
+  // updates from racing on the read-merge-write cycle. Without this, the
+  // optimistic version-check in projection.repository.upsert can drop a
+  // signal-consumer's signal when a higher-version stream-consumer write
+  // lands later (the second writer reads stale state, doesn't include the
+  // signal, and overwrites the version-7 update with version-15).
+  private readonly applyLocks = new Map<string, Promise<unknown>>();
 
   constructor(private readonly projectionRepository: ProjectionRepository) {}
 
@@ -46,7 +53,7 @@ export class ProjectionService {
         accepted: 0,
         rejected: 0
       },
-      policy: ((row as unknown as Record<string, unknown>).policy as RunStateProjection['policy']) ?? {
+      policy: (row.policy as unknown as RunStateProjection['policy']) ?? {
         policyVersion: '',
         commitmentEvaluations: []
       },
@@ -58,15 +65,27 @@ export class ProjectionService {
   }
 
   async applyAndPersist(runId: string, events: CanonicalEvent[], tx?: unknown): Promise<RunStateProjection> {
-    const current = (await this.get(runId)) ?? this.empty(runId);
-    const next = this.applyEvents(current, events);
-    const version = (events.at(-1)?.seq ?? current.timeline.latestSeq) || 0;
-    await this.projectionRepository.upsert(
+    // Chain on the per-run lock so concurrent updates serialize.
+    const prior = this.applyLocks.get(runId) ?? Promise.resolve();
+    const next = prior.then(async () => {
+      const current = (await this.get(runId)) ?? this.empty(runId);
+      const merged = this.applyEvents(current, events);
+      const version = (events.at(-1)?.seq ?? current.timeline.latestSeq) || 0;
+      await this.projectionRepository.upsert(
+        runId,
+        merged,
+        version,
+        PROJECTION_SCHEMA_VERSION,
+        tx as Parameters<typeof this.projectionRepository.upsert>[4]
+      );
+      return merged;
+    });
+    this.applyLocks.set(
       runId,
-      next,
-      version,
-      PROJECTION_SCHEMA_VERSION,
-      tx as Parameters<typeof this.projectionRepository.upsert>[4]
+      next.finally(() => {
+        // Release if still latest; otherwise leave the chain head intact.
+        if (this.applyLocks.get(runId) === next) this.applyLocks.delete(runId);
+      })
     );
     return next;
   }
@@ -247,10 +266,16 @@ export class ProjectionService {
           const proposalPayload = event.data.decodedPayload as Record<string, unknown> | undefined;
           const messageType = String(event.data.messageType ?? '');
           const sender = String(event.data.sender ?? '');
+          const explicitConfidence = safeOptionalNumber(proposalPayload?.confidence);
+          // Vote envelopes don't carry confidence in their payload schema, but a
+          // Vote IS by definition a confident decision — default to 1.0 so the
+          // per-contributor table doesn't render "—" for every voter.
+          const contributionConfidence =
+            explicitConfidence ?? (messageType === 'Vote' ? 1.0 : undefined);
           const contribution: DecisionProposalContribution = {
             participantId: sender,
             action: inferContributionAction(messageType, proposalPayload),
-            confidence: safeOptionalNumber(proposalPayload?.confidence),
+            confidence: contributionConfidence,
             reasons: extractReasons(proposalPayload),
             ts: event.ts,
             vote: inferContributionVote(messageType, proposalPayload),
@@ -260,16 +285,26 @@ export class ProjectionService {
           const proposalId = String(
             proposalPayload?.proposalId ?? proposalPayload?.requestId ?? event.subject?.id ?? ''
           );
+          // Aggregate confidence: when proposals contain Votes, prefer the
+          // approve-ratio (so 3-of-3 approves = 100%; 2-of-4 = 50%). Falls
+          // back to the explicit payload value or any prior aggregate.
+          const allContributions = [...existingProposals, contribution];
+          const voteContributions = allContributions.filter((p) => p.vote === 'allow' || p.vote === 'deny');
+          const approveCount = voteContributions.filter((p) => p.vote === 'allow').length;
+          const aggregateConfidence =
+            voteContributions.length > 0
+              ? approveCount / voteContributions.length
+              : (explicitConfidence ?? next.decision.current?.confidence);
           next.decision.current = {
             ...(next.decision.current ?? { finalized: false }),
             action: proposalId || String(event.subject?.id ?? 'proposal'),
-            confidence: safeOptionalNumber(proposalPayload?.confidence) ?? next.decision.current?.confidence,
+            confidence: aggregateConfidence,
             reasons: [
               String(proposalPayload?.reason ?? proposalPayload?.summary ?? proposalPayload?.rationale ?? event.type)
             ].filter(Boolean),
             finalized: false,
             proposalId,
-            proposals: [...existingProposals, contribution].slice(-50)
+            proposals: allContributions.slice(-50)
           };
 
           // Update voteTally if this is a vote-bearing contribution
@@ -285,10 +320,17 @@ export class ProjectionService {
           const outcomePositive: boolean | null =
             explicitOutcome != null ? Boolean(explicitOutcome) : inferOutcomePositiveFromAction(action);
           const sender = (event.data.sender as string | undefined) ?? undefined;
+          // Final aggregate confidence: prefer explicit, otherwise compute
+          // from the vote tally we accumulated during proposal.updated.
+          const priorProposals = next.decision.current?.proposals ?? [];
+          const priorVotes = priorProposals.filter((p) => p.vote === 'allow' || p.vote === 'deny');
+          const priorApprove = priorVotes.filter((p) => p.vote === 'allow').length;
+          const computedAggregate = priorVotes.length > 0 ? priorApprove / priorVotes.length : undefined;
           next.decision.current = {
             ...(next.decision.current ?? { finalized: false }),
             action,
-            confidence: safeOptionalNumber(payload?.confidence) ?? next.decision.current?.confidence,
+            confidence:
+              safeOptionalNumber(payload?.confidence) ?? computedAggregate ?? next.decision.current?.confidence,
             reasons: [String(payload?.reason ?? 'Commitment observed')],
             finalized: true,
             proposalId: String(payload?.commitmentId ?? next.decision.current?.proposalId ?? ''),
@@ -299,6 +341,17 @@ export class ProjectionService {
           next.run.status = 'completed';
           // Propagate outcomePositive to policy projection
           next.policy.outcomePositive = outcomePositive;
+          // Derive policy.resolved from a successful commit. The runtime does
+          // not emit PolicyResolved / PolicyCommitmentEvaluated envelopes
+          // (RFC-MACP-0012 forward-compat surface that's not yet implemented),
+          // but the runtime's policy evaluator HAS approved the commit by the
+          // time decision.finalized fires — so we can mark the policy as
+          // resolved here. This flips the PolicyPanel header from "pending"
+          // to "resolved" for committed runs.
+          next.policy.resolvedAt = next.policy.resolvedAt ?? event.ts;
+          if (next.policy.quorumStatus === undefined || next.policy.quorumStatus === 'pending') {
+            next.policy.quorumStatus = outcomePositive === false ? 'failed' : 'reached';
+          }
           break;
         }
         case 'progress.reported': {
@@ -488,6 +541,19 @@ export class ProjectionService {
       projection.participants.push(participant);
       projection.graph.nodes.push({ id: participantId, kind: 'participant', status: 'idle' });
     }
+
+    // If the run already reached a terminal state, do not re-activate a
+    // participant that's been swept to a terminal status. Late-arriving
+    // envelopes (e.g. Commitment events normalized after run.completed) would
+    // otherwise flip risk-agent back to 'active' even though the run is done.
+    const runTerminal = projection.run.status === 'completed' || projection.run.status === 'failed' || projection.run.status === 'cancelled';
+    const participantTerminal = participant.status === 'completed' || participant.status === 'failed' || participant.status === 'skipped';
+    if (runTerminal && participantTerminal) {
+      participant.latestActivityAt = ts;
+      if (summary) participant.latestSummary = summary;
+      return;
+    }
+
     participant.status = status;
     participant.latestActivityAt = ts;
     if (summary) participant.latestSummary = summary;
