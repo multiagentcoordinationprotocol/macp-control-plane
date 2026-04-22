@@ -26,10 +26,17 @@ function extractTokenUsage(event: CanonicalEvent): {
 } | null {
   const data = event.data as Record<string, unknown>;
 
-  // Check multiple possible locations
+  // Check multiple possible locations. The synthesized llm.call.completed
+  // event has tokens at the top level (extractLlmCall returns {promptTokens,
+  // completionTokens, totalTokens, ...}); other event types may carry them
+  // under tokenUsage, metadata.tokenUsage, etc.
   const candidates = [
+    data,
     data.tokenUsage,
     (data.metadata as Record<string, unknown> | undefined)?.tokenUsage,
+    // Synthesized llm.call.completed events carry the call shape directly
+    // under data.decodedPayload (extractLlmCall return value).
+    data.decodedPayload as Record<string, unknown> | undefined,
     (data.decodedPayload as Record<string, unknown> | undefined)?.tokenUsage,
     (data.payloadDescriptor as Record<string, unknown> | undefined)?.tokenUsage
   ];
@@ -100,11 +107,20 @@ export class MetricsService {
     let totalTokens = safeNumber(current.totalTokens);
     let estimatedCostUsd = safeNumber(current.estimatedCostUsd);
     let sessionState = current.sessionState as string | undefined;
+    // Once the run reaches terminal state, freeze lastEventAt so post-completion
+    // cleanup events (e.g. session.state.changed at TTL boundary) don't inflate
+    // durationMs.
+    let runTerminal =
+      sessionState === 'SESSION_STATE_RESOLVED' || sessionState === 'SESSION_STATE_EXPIRED';
 
     for (const event of events) {
       eventCount += 1;
       firstEventAt ??= event.ts;
-      lastEventAt = event.ts;
+      if (!runTerminal) lastEventAt = event.ts;
+      if (event.type === 'run.completed' || event.type === 'run.failed' || event.type === 'run.cancelled') {
+        lastEventAt = event.ts;
+        runTerminal = true;
+      }
       if (event.type.startsWith('message.')) messageCount += 1;
       if (event.type === 'signal.emitted') signalCount += 1;
       if (event.type.startsWith('proposal.')) proposalCount += 1;

@@ -213,6 +213,17 @@ export interface RuntimeProvider {
   listSessions(): Promise<RuntimeSessionSnapshot[]>;
   watchSessions(): AsyncIterable<SessionLifecycleEvent>;
 
+  /**
+   * Subscribe to the runtime's ambient Signal/Progress envelopes.
+   *
+   * The runtime broadcasts Signal and Progress envelopes on a dedicated bus
+   * (signal_bus, separate from per-session stream_bus). Yields RawRuntimeEvent
+   * stream-envelope items so the same normalizer that handles per-session
+   * envelopes can ingest these. Caller correlates the envelope to a run via
+   * `envelope.sessionId`.
+   */
+  watchSignals(): AsyncIterable<RawRuntimeEvent>;
+
   // Governance policy lifecycle (RFC-MACP-0012)
   registerPolicy(req: RuntimeRegisterPolicyRequest): Promise<RuntimeRegisterPolicyResult>;
   unregisterPolicy(req: RuntimeUnregisterPolicyRequest): Promise<RuntimeUnregisterPolicyResult>;

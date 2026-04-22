@@ -50,6 +50,7 @@ import { RunManagerService } from './runs/run-manager.service';
 import { RunRecoveryService } from './runs/run-recovery.service';
 import { StreamConsumerService } from './runs/stream-consumer.service';
 import { SessionDiscoveryService } from './runs/session-discovery.service';
+import { SignalConsumerService } from './runs/signal-consumer.service';
 import { WebhookController } from './controllers/webhook.controller';
 import { WebhookDeliveryRepository } from './webhooks/webhook-delivery.repository';
 import { WebhookRepository } from './webhooks/webhook.repository';
@@ -123,6 +124,7 @@ import { WebhookService } from './webhooks/webhook.service';
     RunManagerService,
     StreamConsumerService,
     SessionDiscoveryService,
+    SignalConsumerService,
     RunExecutorService,
     RunRecoveryService,
     RunInsightsService,

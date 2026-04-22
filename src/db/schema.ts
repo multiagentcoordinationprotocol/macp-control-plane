@@ -150,6 +150,10 @@ export const runProjections = pgTable(
       .notNull()
       .default({ spanCount: 0, linkedArtifacts: [] }),
     progress: jsonb('progress').$type<Record<string, unknown>>().notNull().default({ entries: [] }),
+    policy: jsonb('policy')
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({ policyVersion: '', commitmentEvaluations: [] }),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
   },
   (table) => ({

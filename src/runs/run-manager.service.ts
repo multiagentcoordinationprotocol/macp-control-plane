@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { RunDescriptor, RunStateProjection } from '../contracts/control-plane';
 import { AuditService } from '../audit/audit.service';
@@ -129,7 +129,25 @@ export class RunManagerService {
     session: { runtimeSessionId: string; initiator: string; ack: { sessionState: string } },
     capabilities?: Record<string, unknown>
   ) {
-    const run = await this.runRepository.markBindingSession(runId, session.runtimeSessionId);
+    let run: Awaited<ReturnType<RunRepository['markBindingSession']>>;
+    try {
+      run = await this.runRepository.markBindingSession(runId, session.runtimeSessionId);
+    } catch (err) {
+      // Run may have already advanced past binding_session (e.g., SessionDiscovery
+      // racing with RunExecutor, or a re-emitted session.created event). Swallow
+      // the ConflictException so the caller — often an unawaited void — doesn't
+      // become an unhandled rejection and crash the process. Side-effects below
+      // are skipped because they already fired on the first successful bind.
+      if (err instanceof ConflictException) {
+        const current = await this.runRepository.findById(runId);
+        this.logger.warn(
+          `bindSession no-op for run ${runId}: ${err.message} (current status=${current?.status ?? 'missing'})`
+        );
+        if (!current) throw new NotFoundException(`run ${runId} not found`);
+        return current;
+      }
+      throw err;
+    }
     await this.runtimeSessionRepository.upsert({
       runId,
       runtimeKind: request.runtime.kind,

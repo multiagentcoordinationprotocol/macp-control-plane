@@ -515,12 +515,40 @@ export class EventNormalizerService implements EventNormalizer {
 function extractLlmCall(payload?: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!payload) return null;
   const meta = payload.metadata as Record<string, unknown> | undefined;
+  // SignalPayload carries arbitrary JSON in its `data` bytes field. When the
+  // signal_type is `llm.call.completed`, agents stash the full LLM call info
+  // there. The envelope-level proto decoder leaves `data` as a base64 string
+  // (or Buffer); decode it to JSON here so token extraction below can find
+  // tokenUsage / model / latency.
+  let signalData: Record<string, unknown> | undefined;
+  const sigType = payload.signalType ?? payload.signal_type;
+  if (sigType === 'llm.call.completed' && payload.data != null) {
+    try {
+      const raw = payload.data as unknown;
+      let jsonStr: string | undefined;
+      if (typeof raw === 'string') {
+        // base64-encoded bytes → JSON
+        jsonStr = Buffer.from(raw, 'base64').toString('utf-8');
+      } else if (Buffer.isBuffer(raw)) {
+        jsonStr = raw.toString('utf-8');
+      }
+      if (jsonStr) {
+        const parsed = JSON.parse(jsonStr);
+        if (parsed && typeof parsed === 'object') signalData = parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* ignore decode failures */
+    }
+  }
   const candidates: Array<Record<string, unknown> | undefined> = [
     payload.llmCall as Record<string, unknown> | undefined,
     meta?.llmCall as Record<string, unknown> | undefined,
     // `tokenUsage` is the minimal form — upgrade it to an llmCall shape.
     payload.tokenUsage as Record<string, unknown> | undefined,
-    meta?.tokenUsage as Record<string, unknown> | undefined
+    meta?.tokenUsage as Record<string, unknown> | undefined,
+    // Signal-carried llm.call.completed data
+    signalData,
+    signalData?.tokenUsage as Record<string, unknown> | undefined
   ];
   for (const c of candidates) {
     if (!c || typeof c !== 'object') continue;

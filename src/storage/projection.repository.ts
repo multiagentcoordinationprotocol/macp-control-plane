@@ -29,6 +29,7 @@ export class ProjectionRepository {
       timeline: projection.timeline as unknown as Record<string, unknown>,
       traceSummary: projection.trace as unknown as Record<string, unknown>,
       progress: projection.progress as unknown as Record<string, unknown>,
+      policy: projection.policy as unknown as Record<string, unknown>,
       updatedAt: new Date().toISOString()
     };
 

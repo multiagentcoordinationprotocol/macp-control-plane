@@ -94,13 +94,24 @@ export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
       `Auto-discovered session ${session.sessionId} → run ${run.id} (mode=${session.mode}, initiator=${session.initiator})`
     );
 
-    void this.runManager.markStarted(run.id, descriptor);
-    void this.runManager.bindSession(run.id, descriptor, {
-      runtimeSessionId: session.sessionId,
-      initiator: session.initiator ?? '',
-      ack: { sessionState: session.state }
-    });
-    void this.runManager.markRunning(run.id, session.sessionId);
+    try {
+      await this.runManager.markStarted(run.id, descriptor);
+      await this.runManager.bindSession(run.id, descriptor, {
+        runtimeSessionId: session.sessionId,
+        initiator: session.initiator ?? '',
+        ack: { sessionState: session.state }
+      });
+      await this.runManager.markRunning(run.id, session.sessionId);
+    } catch (err) {
+      // Keep the WatchSessions loop alive. Subscribing and consuming the stream
+      // below is the point of session discovery — state-machine drift for a
+      // single run must not abort discovery for every other session.
+      this.logger.warn(
+        `Failed to sync run state for discovered session ${session.sessionId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
 
     const handle = provider.subscribeSession({
       runId: run.id,
