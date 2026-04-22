@@ -80,13 +80,13 @@ describe('RustRuntimeProvider.subscribeSession — passive-subscribe frame (RFC-
     runtimeSessionId: 'sess-abc'
   };
 
-  it('writes a single passive-subscribe frame with afterSequence=0 (default) then half-closes', async () => {
+  it('writes a single passive-subscribe frame with afterSequence=0 (default) and keeps the write side open', async () => {
     const stream = makeFakeStream();
     const { provider } = makeProvider(() => stream);
 
     const handle = provider.subscribeSession(baseReq);
 
-    // Allow the launch microtask (credentials resolve + write/end) to settle.
+    // Allow the launch microtask (credentials resolve + write) to settle.
     await new Promise((r) => setImmediate(r));
 
     expect(stream.write).toHaveBeenCalledTimes(1);
@@ -94,13 +94,10 @@ describe('RustRuntimeProvider.subscribeSession — passive-subscribe frame (RFC-
       subscribeSessionId: 'sess-abc',
       afterSequence: 0
     });
-    expect(stream.end).toHaveBeenCalledTimes(1);
-
-    // Verify call order: write must precede end so the runtime sees the
-    // subscription metadata before the half-close.
-    const writeOrder = stream.write.mock.invocationCallOrder[0];
-    const endOrder = stream.end.mock.invocationCallOrder[0];
-    expect(writeOrder).toBeLessThan(endOrder);
+    // Observer must not half-close: the runtime's StreamSession loop treats
+    // client half-close as "done with the stream" and stops forwarding
+    // envelopes. The bidi stream stays open for the session's lifetime.
+    expect(stream.end).not.toHaveBeenCalled();
 
     handle.abort();
   });
@@ -152,22 +149,6 @@ describe('RustRuntimeProvider.subscribeSession — passive-subscribe frame (RFC-
 
     await expect(it.next()).rejects.toThrow(/write failed/);
     expect(stream.end).not.toHaveBeenCalled();
-  });
-
-  it('tolerates end() throwing after a successful subscribe-frame write', async () => {
-    const stream = makeFakeStream();
-    stream.end.mockImplementation(() => {
-      throw new Error('end failed: half-closed');
-    });
-    const { provider } = makeProvider(() => stream);
-
-    const handle = provider.subscribeSession(baseReq);
-    await new Promise((r) => setImmediate(r));
-
-    // The provider swallows end() failures (some gRPC impls no-op on
-    // half-closed streams). The write must still have happened.
-    expect(stream.write).toHaveBeenCalledTimes(1);
-    handle.abort();
   });
 
   it('emits a synthetic stream-status "opened" event before any data frames', async () => {
