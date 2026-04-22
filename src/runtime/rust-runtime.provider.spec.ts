@@ -1,6 +1,7 @@
 import { RustRuntimeProvider } from './rust-runtime.provider';
 import { AppConfigService } from '../config/app-config.service';
 import { RuntimeCredentialResolverService } from './runtime-credential-resolver.service';
+import { RuntimeJwtMinterService } from './runtime-jwt-minter.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { RawRuntimeEvent, RuntimeSubscribeSessionRequest } from '../contracts/runtime';
 
@@ -49,7 +50,11 @@ function makeProvider(streamFactory: () => unknown): {
     runtimeCircuitBreakerResetMs: 30_000
   } as unknown as AppConfigService;
 
-  const resolver = new RuntimeCredentialResolverService(config);
+  const jwtMinter = {
+    isEnabled: () => false,
+    getToken: () => Promise.reject(new Error('jwt disabled in unit test'))
+  } as unknown as RuntimeJwtMinterService;
+  const resolver = new RuntimeCredentialResolverService(config, jwtMinter);
   const instrumentation = {} as InstrumentationService;
   const provider = new RustRuntimeProvider(config, resolver, instrumentation);
 

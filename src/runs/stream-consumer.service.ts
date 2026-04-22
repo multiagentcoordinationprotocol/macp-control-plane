@@ -17,6 +17,8 @@ interface ActiveStream {
   connected: boolean;
   lastProcessedSeq: number;
   finalizingPromise?: Promise<void>;
+  /** Tracks the consumeLoop so shutdown can await in-flight persistence. */
+  loopPromise?: Promise<void>;
 }
 
 @Injectable()
@@ -37,10 +39,20 @@ export class StreamConsumerService implements OnModuleDestroy {
   ) {}
 
   async onModuleDestroy(): Promise<void> {
+    const pending: Promise<void>[] = [];
     for (const [runId, marker] of this.active) {
       marker.aborted = true;
       this.logger.log(`aborting stream for run ${runId} on shutdown`);
+      if (marker.loopPromise) pending.push(marker.loopPromise);
     }
+    // Bounded drain: wait for consumeLoops to observe abort and finish any
+    // in-flight persistRawAndCanonical before returning, so the DB pool
+    // isn't closed under them. Capped to avoid blocking shutdown on stuck
+    // gRPC calls.
+    await Promise.race([
+      Promise.allSettled(pending),
+      new Promise<void>((resolve) => setTimeout(resolve, 2000))
+    ]);
   }
 
   async start(params: {
@@ -62,7 +74,7 @@ export class StreamConsumerService implements OnModuleDestroy {
     };
     this.active.set(params.runId, marker);
     this.instrumentation.activeStreams.inc();
-    void this.consumeLoop(marker, params).finally(() => {
+    marker.loopPromise = this.consumeLoop(marker, params).finally(() => {
       this.instrumentation.activeStreams.dec();
       this.active.delete(params.runId);
     });

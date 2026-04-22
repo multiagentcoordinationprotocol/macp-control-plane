@@ -61,6 +61,18 @@ export class AppConfigService implements OnModuleInit {
   readonly runtimeUseDevHeader = readBoolean('RUNTIME_USE_DEV_HEADER', process.env.NODE_ENV === 'development');
   readonly runtimeRequestTimeoutMs = readNumber('RUNTIME_REQUEST_TIMEOUT_MS', 30000);
   readonly runtimeDevAgentId = process.env.RUNTIME_DEV_AGENT_ID ?? 'control-plane';
+
+  /**
+   * When `MACP_AUTH_SERVICE_URL` is set, the credential resolver mints a
+   * short-lived JWT for the `control-plane` sender via the auth-service
+   * instead of using the static `RUNTIME_BEARER_TOKEN`. The minted token is
+   * cached and refreshed on a TTL boundary. Falls back to the static bearer
+   * if the URL isn't set, so deploys can switch incrementally.
+   */
+  readonly authServiceUrl = process.env.MACP_AUTH_SERVICE_URL ?? '';
+  readonly authServiceTimeoutMs = readNumber('MACP_AUTH_SERVICE_TIMEOUT_MS', 5000);
+  readonly authTokenTtlSeconds = readNumber('MACP_AUTH_TOKEN_TTL_SECONDS', 3600);
+  readonly authTokenSender = process.env.MACP_AUTH_TOKEN_SENDER ?? 'control-plane';
   /**
    * Observer-mode poll cadence. Control-plane polls GetSession after POST /runs
    * until the initiator agent opens the session. See direct-agent-auth §End-to-end target flow.

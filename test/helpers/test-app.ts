@@ -8,6 +8,8 @@ import { GlobalExceptionFilter } from '../../src/errors/exception.filter';
 import { RustRuntimeProvider } from '../../src/runtime/rust-runtime.provider';
 import { RuntimeProviderRegistry } from '../../src/runtime/runtime-provider.registry';
 import { StreamConsumerService } from '../../src/runs/stream-consumer.service';
+import { SessionDiscoveryService } from '../../src/runs/session-discovery.service';
+import { SignalConsumerService } from '../../src/runs/signal-consumer.service';
 import { runMigrations } from '../../src/db/migrate';
 import {
   RuntimeScript,
@@ -131,35 +133,22 @@ export async function createTestApp(
   await app.listen(0);
   const url = await app.getUrl();
 
+  // Wrap app.close() so tests that only call `ctx.app.close()` still get a
+  // clean drain: force-terminate active runs via a short-lived connection,
+  // await the three background lifecycle services, then delegate to Nest's
+  // close() (which runs onModuleDestroy in reverse dependency order —
+  // DatabaseService closes the pool last).
+  const originalClose = app.close.bind(app);
+  (app as { close: typeof app.close }).close = async () => {
+    await drainBackgroundWork(moduleRef, runtimeMode);
+    return originalClose();
+  };
+
   const client = new TestClient(url, 'test-key-integration');
 
   const cleanup = async () => {
-    // Stop all active stream consumers before truncating to prevent
-    // race conditions where async events reference deleted runs
-    const streamConsumer = moduleRef.get(StreamConsumerService);
-    await streamConsumer.onModuleDestroy();
-
+    await drainBackgroundWork(moduleRef, runtimeMode);
     const dbService = moduleRef.get(DatabaseService);
-
-    // Use a dedicated short-lived connection (not the app pool, which may be
-    // exhausted by background executor operations) to force-terminate active runs,
-    // then truncate. This prevents cleanup from hanging.
-    const { Client } = require('pg');
-    const client = new Client({ connectionString: TEST_DB_URL });
-    try {
-      await client.connect();
-      // Force all in-progress runs to 'failed' so background operations stop
-      await client.query(
-        `UPDATE runs SET status = 'failed', error_code = 'TEST_CLEANUP', error_message = 'force-terminated by test cleanup', ended_at = now() WHERE status NOT IN ('completed','failed','cancelled','queued')`
-      );
-      // Brief pause for background operations to notice the state change
-      await new Promise((r) => setTimeout(r, runtimeMode === 'mock' ? 300 : 1000));
-    } catch {
-      // Best-effort; proceed to truncate
-    } finally {
-      await client.end().catch(() => {});
-    }
-
     await truncateAll(dbService.pool);
   };
 
@@ -172,4 +161,53 @@ export async function createTestApp(
     cleanup,
     runtimeMode
   };
+}
+
+/**
+ * Drain order matters: flip runs to terminal first (so stream/signal consumers
+ * stop enqueuing new projection work), then explicitly destroy the three
+ * background lifecycle services. Each one awaits its own in-flight loops,
+ * including any outstanding `persistRawAndCanonical` chain entries. Only after
+ * this does it become safe for Nest to close the DB pool.
+ */
+async function drainBackgroundWork(
+  moduleRef: TestingModule,
+  runtimeMode: 'mock' | 'docker' | 'remote'
+): Promise<void> {
+  // Force in-progress runs to terminal via a dedicated short-lived connection
+  // so the stream consumer's finalize loops short-circuit.
+  const { Client } = require('pg');
+  const term = new Client({ connectionString: TEST_DB_URL });
+  try {
+    await term.connect();
+    await term.query(
+      `UPDATE runs SET status = 'failed', error_code = 'TEST_CLEANUP', error_message = 'force-terminated by test cleanup', ended_at = now() WHERE status NOT IN ('completed','failed','cancelled','queued')`
+    );
+    // Brief grace so background operations notice the state change before drain.
+    await new Promise((r) => setTimeout(r, runtimeMode === 'mock' ? 100 : 500));
+  } catch {
+    // Best-effort.
+  } finally {
+    await term.end().catch(() => {});
+  }
+
+  // Await each lifecycle service's bounded drain. Order doesn't matter for
+  // correctness — each service waits on its own loop — but destroying them
+  // before Nest's own onModuleDestroy sweep guarantees the pool is alive
+  // while they finish any in-flight persistRawAndCanonical.
+  const services = [
+    safeGet(moduleRef, SessionDiscoveryService),
+    safeGet(moduleRef, SignalConsumerService),
+    safeGet(moduleRef, StreamConsumerService)
+  ].filter((svc): svc is NonNullable<typeof svc> => svc !== undefined);
+
+  await Promise.allSettled(services.map((svc) => svc.onModuleDestroy()));
+}
+
+function safeGet<T>(moduleRef: TestingModule, token: new (...args: never[]) => T): T | undefined {
+  try {
+    return moduleRef.get<T>(token, { strict: false });
+  } catch {
+    return undefined;
+  }
 }

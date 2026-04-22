@@ -32,6 +32,7 @@ import { ProjectionService } from './projection/projection.service';
 import { ReplayService } from './replay/replay.service';
 import { ProtoRegistryService } from './runtime/proto-registry.service';
 import { RuntimeCredentialResolverService } from './runtime/runtime-credential-resolver.service';
+import { RuntimeJwtMinterService } from './runtime/runtime-jwt-minter.service';
 import { RuntimeProviderRegistry } from './runtime/runtime-provider.registry';
 import { RustRuntimeProvider } from './runtime/rust-runtime.provider';
 import { EventRepository } from './storage/event.repository';
@@ -93,6 +94,7 @@ import { WebhookService } from './webhooks/webhook.service';
     TraceService,
     RedactionService,
     ProtoRegistryService,
+    RuntimeJwtMinterService,
     RuntimeCredentialResolverService,
     RustRuntimeProvider,
     RuntimeProviderRegistry,

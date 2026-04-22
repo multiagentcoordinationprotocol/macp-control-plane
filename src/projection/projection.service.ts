@@ -221,15 +221,55 @@ export class ProjectionService {
         }
         case 'message.received': {
           const sender = String(event.data.sender ?? event.data.from ?? '');
-          const recipients = (event.data.to as string[] | undefined) ?? [];
-          this.touchParticipant(next, sender, event.ts, 'active', String(event.data.messageType ?? event.type));
+          const messageType = String(event.data.messageType ?? '');
+          const explicitRecipients = (event.data.to as string[] | undefined) ?? [];
+          const decoded = (event.data.decodedPayload ?? event.data.payload ?? {}) as Record<string, unknown>;
+          this.touchParticipant(next, sender, event.ts, 'active', messageType || event.type);
+
+          // Build the recipient set from whatever signal we have:
+          //   - explicit `to` (if the event has it)
+          //   - SessionStart payload's `participants` list (broadcast)
+          //   - declared participants in projection (fan-out for Proposal)
+          const declaredParticipants = next.participants.map((p) => p.participantId);
+          let recipients = explicitRecipients;
+          if (recipients.length === 0 && messageType === 'SessionStart') {
+            const sessionParticipants = (decoded.participants ?? decoded.participantIds ?? []) as unknown[];
+            if (Array.isArray(sessionParticipants)) {
+              recipients = sessionParticipants
+                .filter((p): p is string => typeof p === 'string' && p !== sender);
+            }
+          } else if (recipients.length === 0 && messageType === 'Proposal') {
+            recipients = declaredParticipants.filter((p) => p !== sender);
+          }
+
           recipients.forEach((recipient) => this.touchParticipant(next, recipient, event.ts, 'waiting', undefined));
+
+          // Lifecycle nodes synthesized so the graph shows the canonical flow
+          // (start → proposal → decision → outcome) on top of the agent layer.
+          this.upsertNode(next, { id: '__start', kind: 'start', status: 'completed' });
+          if (messageType === 'SessionStart') {
+            this.upsertEdge(next, '__start', sender, 'session.bound', event.ts);
+            recipients.forEach((r) => this.upsertEdge(next, sender, r, 'fanout', event.ts));
+          } else if (messageType === 'Proposal') {
+            this.upsertNode(next, { id: '__proposal', kind: 'proposal', status: 'completed' });
+            this.upsertEdge(next, sender, '__proposal', 'proposes', event.ts);
+            recipients.forEach((r) => this.upsertEdge(next, '__proposal', r, 'review', event.ts));
+          } else if (messageType === 'Vote' || messageType === 'Evaluation' || messageType === 'Objection') {
+            this.upsertNode(next, { id: '__decision', kind: 'decision', status: 'active' });
+            this.upsertEdge(next, sender, '__decision', messageType.toLowerCase(), event.ts);
+          } else if (messageType === 'Commitment') {
+            this.upsertNode(next, { id: '__decision', kind: 'decision', status: 'completed' });
+            this.upsertNode(next, { id: '__outcome', kind: 'output', status: 'completed' });
+            this.upsertEdge(next, '__decision', '__outcome', 'commits', event.ts);
+          }
+
+          // Direct sender→recipient edges (only when we actually inferred them).
           recipients.forEach((recipient) => {
             if (sender && recipient) {
-              next.graph.edges.push({ from: sender, to: recipient, kind: event.type, ts: event.ts });
+              this.upsertEdge(next, sender, recipient, messageType || event.type, event.ts);
             }
           });
-          next.graph.edges = next.graph.edges.slice(-200);
+          next.graph.edges = next.graph.edges.slice(-300);
           break;
         }
         case 'signal.emitted': {
@@ -525,6 +565,41 @@ export class ProjectionService {
       const node = projection.graph.nodes.find((n) => n.id === p.participantId);
       if (node) node.status = newStatus;
     }
+  }
+
+  private upsertNode(
+    projection: RunStateProjection,
+    node: { id: string; kind: string; status: string }
+  ) {
+    const existing = projection.graph.nodes.find((n) => n.id === node.id);
+    if (existing) {
+      // Promote status: completed > active > waiting > idle. Don't downgrade
+      // a finished lifecycle node back to "active".
+      const order = ['idle', 'waiting', 'active', 'completed', 'failed'];
+      const oldRank = order.indexOf(existing.status);
+      const newRank = order.indexOf(node.status);
+      if (newRank > oldRank) existing.status = node.status;
+      return;
+    }
+    projection.graph.nodes.push(node);
+  }
+
+  private upsertEdge(
+    projection: RunStateProjection,
+    from: string,
+    to: string,
+    kind: string,
+    ts: string
+  ) {
+    if (!from || !to || from === to) return;
+    const exists = projection.graph.edges.find(
+      (e) => e.from === from && e.to === to && e.kind === kind
+    );
+    if (exists) {
+      exists.ts = ts;
+      return;
+    }
+    projection.graph.edges.push({ from, to, kind, ts });
   }
 
   private touchParticipant(

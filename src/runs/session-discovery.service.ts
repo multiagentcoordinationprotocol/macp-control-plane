@@ -16,6 +16,9 @@ import { AppConfigService } from '../config/app-config.service';
 export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SessionDiscoveryService.name);
   private aborted = false;
+  private loopPromise?: Promise<void>;
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private reconnectResolve?: () => void;
   private readonly knownSessions = new Set<string>();
 
   constructor(
@@ -31,11 +34,17 @@ export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Session discovery disabled (SESSION_DISCOVERY_ENABLED=false)');
       return;
     }
-    void this.startDiscoveryLoop();
+    this.loopPromise = this.startDiscoveryLoop();
   }
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     this.aborted = true;
+    // Cancel any in-flight reconnect sleep so shutdown doesn't block for 5s.
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.reconnectResolve) this.reconnectResolve();
+    // Await the discovery loop — including any in-flight handleSessionCreated
+    // DB writes — before returning so the pool isn't closed under them.
+    if (this.loopPromise) await this.loopPromise.catch(() => undefined);
   }
 
   private async startDiscoveryLoop(): Promise<void> {
@@ -48,7 +57,12 @@ export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
         if (this.aborted) return;
         const message = error instanceof Error ? error.message : String(error);
         this.logger.warn(`WatchSessions stream ended: ${message}. Reconnecting in 5s...`);
-        await new Promise((r) => setTimeout(r, 5000));
+        await new Promise<void>((resolve) => {
+          this.reconnectResolve = resolve;
+          this.reconnectTimer = setTimeout(resolve, 5000);
+        });
+        this.reconnectTimer = undefined;
+        this.reconnectResolve = undefined;
       }
     }
   }

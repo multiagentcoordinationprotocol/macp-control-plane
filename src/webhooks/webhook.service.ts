@@ -39,18 +39,29 @@ export class WebhookService {
   }
 
   async fireEvent(payload: WebhookPayload): Promise<void> {
-    const activeWebhooks = await this.webhookRepository.listActive();
-    const matching = activeWebhooks.filter((wh) => wh.events.length === 0 || wh.events.includes(payload.event));
+    // Callers fire-and-forget via `void webhookService.fireEvent(...)`. Any
+    // rejection here (e.g., pool closed during shutdown, transient DB error)
+    // would surface as an unhandled rejection and crash the process or fail
+    // a test suite. Swallow and log; webhook delivery has its own outbox
+    // semantics for durability.
+    try {
+      const activeWebhooks = await this.webhookRepository.listActive();
+      const matching = activeWebhooks.filter((wh) => wh.events.length === 0 || wh.events.includes(payload.event));
 
-    for (const webhook of matching) {
-      // Outbox pattern: insert delivery record first, then attempt delivery
-      const delivery = await this.deliveryRepository.create({
-        webhookId: webhook.id,
-        event: payload.event,
-        runId: payload.runId,
-        payload: payload as unknown as Record<string, unknown>
-      });
-      void this.deliverWithTracking(delivery.id, webhook.url, webhook.secret, payload);
+      for (const webhook of matching) {
+        // Outbox pattern: insert delivery record first, then attempt delivery
+        const delivery = await this.deliveryRepository.create({
+          webhookId: webhook.id,
+          event: payload.event,
+          runId: payload.runId,
+          payload: payload as unknown as Record<string, unknown>
+        });
+        void this.deliverWithTracking(delivery.id, webhook.url, webhook.secret, payload);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `fireEvent(${payload.event}) failed: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }
 
