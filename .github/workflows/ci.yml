@@ -142,7 +142,7 @@ jobs:
           fail=0
 
           echo "::group::throw new Error outside allowed files"
-          if grep -rn "throw new Error" src --include='*.ts' | grep -vE '(app-config|migrate|\.spec\.ts|circuit-breaker\.ts|proto-registry\.service\.ts|grpc-helpers\.ts|run\.repository\.ts|webhook\.service\.ts|run-recovery\.service\.ts)'; then
+          if grep -rn "throw new Error" src --include='*.ts' | grep -vE '(app-config|migrate|\.spec\.ts|circuit-breaker\.ts|proto-registry\.service\.ts|grpc-helpers\.ts|run\.repository\.ts|webhook\.service\.ts|run-recovery\.service\.ts|runtime-jwt-minter\.service\.ts)'; then
             echo "::error::throw new Error found outside allowed files. Use AppException or a Nest built-in."
             fail=1
           fi

@@ -21,6 +21,9 @@ import type { NormalizeContext } from '../contracts/runtime';
 export class SignalConsumerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SignalConsumerService.name);
   private aborted = false;
+  private loopPromise?: Promise<void>;
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private reconnectResolve?: () => void;
 
   constructor(
     private readonly providerRegistry: RuntimeProviderRegistry,
@@ -36,11 +39,16 @@ export class SignalConsumerService implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Signal consumer disabled (gated on SESSION_DISCOVERY_ENABLED)');
       return;
     }
-    void this.startConsumeLoop();
+    this.loopPromise = this.startConsumeLoop();
   }
 
-  onModuleDestroy(): void {
+  async onModuleDestroy(): Promise<void> {
     this.aborted = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.reconnectResolve) this.reconnectResolve();
+    // Await the consume loop so in-flight persistRawAndCanonical calls finish
+    // before the DB pool closes.
+    if (this.loopPromise) await this.loopPromise.catch(() => undefined);
   }
 
   private async startConsumeLoop(): Promise<void> {
@@ -53,7 +61,12 @@ export class SignalConsumerService implements OnModuleInit, OnModuleDestroy {
         if (this.aborted) return;
         const message = error instanceof Error ? error.message : String(error);
         this.logger.warn(`WatchSignals stream ended: ${message}. Reconnecting in 5s...`);
-        await new Promise((r) => setTimeout(r, 5000));
+        await new Promise<void>((resolve) => {
+          this.reconnectResolve = resolve;
+          this.reconnectTimer = setTimeout(resolve, 5000);
+        });
+        this.reconnectTimer = undefined;
+        this.reconnectResolve = undefined;
       }
     }
   }

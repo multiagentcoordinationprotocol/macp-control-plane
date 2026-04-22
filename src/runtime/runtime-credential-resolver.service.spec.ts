@@ -1,4 +1,5 @@
 import { RuntimeCredentialResolverService } from './runtime-credential-resolver.service';
+import { RuntimeJwtMinterService } from './runtime-jwt-minter.service';
 import { AppConfigService } from '../config/app-config.service';
 
 describe('RuntimeCredentialResolverService (single-bearer, CP-9)', () => {
@@ -9,7 +10,13 @@ describe('RuntimeCredentialResolverService (single-bearer, CP-9)', () => {
       runtimeUseDevHeader: false,
       ...config
     } as AppConfigService;
-    return new RuntimeCredentialResolverService(merged);
+    // JWT minter disabled in these tests — auth-service URL is unset, so the
+    // resolver exercises the static-bearer / dev-header paths.
+    const jwtMinter = {
+      isEnabled: () => false,
+      getToken: () => Promise.reject(new Error('jwt disabled in unit test'))
+    } as unknown as RuntimeJwtMinterService;
+    return new RuntimeCredentialResolverService(merged, jwtMinter);
   }
 
   describe('sender identity', () => {
@@ -61,6 +68,40 @@ describe('RuntimeCredentialResolverService (single-bearer, CP-9)', () => {
       const service = makeService({});
       const result = await service.resolve({ runtimeKind: 'rust' });
       expect(result.metadata).toEqual({});
+    });
+  });
+
+  describe('JWT mint path', () => {
+    it('uses the minted JWT as Authorization when the minter is enabled', async () => {
+      const merged = {
+        runtimeDevAgentId: 'control-plane',
+        runtimeBearerToken: '',
+        runtimeUseDevHeader: false
+      } as AppConfigService;
+      const jwtMinter = {
+        isEnabled: () => true,
+        getToken: jest.fn().mockResolvedValue('minted-jwt-token')
+      } as unknown as RuntimeJwtMinterService;
+      const service = new RuntimeCredentialResolverService(merged, jwtMinter);
+
+      const result = await service.resolve({ runtimeKind: 'rust' });
+      expect(result.metadata.authorization).toBe('Bearer minted-jwt-token');
+    });
+
+    it('falls back to static bearer when the mint rejects', async () => {
+      const merged = {
+        runtimeDevAgentId: 'control-plane',
+        runtimeBearerToken: 'fallback-bearer',
+        runtimeUseDevHeader: false
+      } as AppConfigService;
+      const jwtMinter = {
+        isEnabled: () => true,
+        getToken: jest.fn().mockRejectedValue(new Error('auth-service down'))
+      } as unknown as RuntimeJwtMinterService;
+      const service = new RuntimeCredentialResolverService(merged, jwtMinter);
+
+      const result = await service.resolve({ runtimeKind: 'rust' });
+      expect(result.metadata.authorization).toBe('Bearer fallback-bearer');
     });
   });
 
