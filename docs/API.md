@@ -17,18 +17,11 @@ Rate limit: 100 requests per 60 seconds per client. Payload limit: 1MB.
 
 ### Upstream runtime auth (observer identity)
 
-The control-plane has **exactly one** runtime identity — its own least-privilege
-Bearer token. It never calls `Send`; agents authenticate to the runtime directly
-(RFC-MACP-0004 §4). Its entry in the runtime's `MACP_AUTH_TOKENS_JSON` must have
-`can_start_sessions: false`.
+The control-plane has **exactly one** runtime identity. It never calls `Send`; agents authenticate to the runtime directly (RFC-MACP-0004 §4). The scope is fixed: `is_observer: true, can_start_sessions: false`.
 
-| Env var | Purpose |
-| --- | --- |
-| `RUNTIME_BEARER_TOKEN` | Control-plane's own observer Bearer token. Used for every runtime call (`Initialize`, `GetSession`, `StreamSession`, `ListPolicies`, etc.). |
-| `RUNTIME_USE_DEV_HEADER` | Local dev fallback — sends `x-macp-agent-id: <RUNTIME_DEV_AGENT_ID>` when no Bearer token is configured. Requires `MACP_ALLOW_DEV_SENDER_HEADER=1` on the runtime. |
+Configuration, env vars, and the three-step fallback chain (JWT mint → static Bearer → dev header) are documented in [ARCHITECTURE.md § Runtime Credential Resolution](./ARCHITECTURE.md#runtime-credential-resolution). For the runtime-side token configuration (`MACP_AUTH_TOKENS_JSON` shape, JWT claim expectations, TLS/mTLS), see [runtime/docs/getting-started.md#authentication](../../runtime/docs/getting-started.md#authentication) and [runtime/docs/deployment.md#authentication](../../runtime/docs/deployment.md#authentication).
 
-Per-agent tokens are **not** held by the control-plane. They live in the scenario
-layer (examples-service) and flow to agents via their bootstrap.
+Per-agent tokens are **not** held by the control-plane — they live in the scenario layer (examples-service) and flow to agents via their bootstrap.
 
 ---
 
@@ -542,15 +535,7 @@ Policy events are produced when:
 
 ### Policy Rule Schemas (RFC-MACP-0012)
 
-Rules are opaque to the control plane (passed through as JSON to the runtime), but must conform to the RFC's per-mode schemas:
-
-| Mode | Rule Sections |
-|------|---------------|
-| **Decision** | `voting` (algorithm, threshold, quorum, weights), `objection_handling` (block_severity_vetoes, `veto_threshold`), `evaluation` (required_before_voting, `minimum_confidence`), `commitment` (authority, `designated_roles`, require_vote_quorum) |
-| **Quorum** | `threshold` (type: `n_of_m`/`percentage`/`weighted`, value), `abstention` (`counts_toward_quorum`, `interpretation`), `commitment` |
-| **Proposal** | `acceptance` (`criterion`), `counter_proposal` (`max_rounds`), `rejection` (`terminal_on_any_reject`), `commitment` |
-| **Task** | `assignment` (`allow_reassignment_on_reject`), `completion` (`require_output`), `commitment` |
-| **Handoff** | `acceptance` (`implicit_accept_timeout_ms`), `commitment` |
+Rules are opaque to the control-plane — the request body is passed through as JSON to `runtime.RegisterPolicy`. Per-mode rule schemas (Decision / Proposal / Task / Handoff / Quorum), worked examples, and evaluation semantics are documented canonically in [runtime/docs/policy.md](../../runtime/docs/policy.md) — see *Rule examples by mode*, *How evaluation works*, and *Commitment authority*.
 
 ---
 
