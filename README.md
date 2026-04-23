@@ -16,11 +16,12 @@ The control plane is an observer. **It never calls `Send`** on the runtime.
 
 ## Invariants (see `../ui-console/plans/direct-agent-auth.md` §Invariants)
 
-1. The control-plane runtime identity is least-privilege: `can_start_sessions: false` in runtime's `MACP_AUTH_TOKENS_JSON`.
+1. The control-plane runtime identity is least-privilege: `can_start_sessions: false, is_observer: true` — either encoded in a minted short-lived JWT (preferred) or in a static entry in the runtime's `MACP_AUTH_TOKENS_JSON`.
 2. The control-plane never calls `Send` — enforced by an invariant lint test (`src/runtime/observer-invariant.spec.ts`).
 3. `POST /runs` accepts only a scenario-agnostic `RunDescriptor`. Fields like `kickoff[]`, `participants[].role`, `policyHints`, `commitments[]`, `initiatorParticipantId` are rejected (`forbidNonWhitelisted: true`).
 4. `sessionId` ownership: allocated by the control-plane (UUID v4) at `POST /runs` and returned to the caller, which distributes it to agents via bootstrap.
 5. Cancellation authority stays with the initiator agent unless the scenario's policy explicitly delegates to the control-plane (see `metadata.cancellationDelegated`).
+6. The observer `StreamSession` writes exactly one passive-subscribe frame (`{subscribeSessionId, afterSequence}`) per RFC-MACP-0006 §3.2 and then **keeps the write side open** — half-closing would signal "client is done" and stop live-envelope broadcast.
 
 ## Endpoints
 
@@ -97,15 +98,7 @@ npm run drizzle:migrate
 npm run start:dev
 ```
 
-Make sure the runtime is running at `RUNTIME_ADDRESS`. For dev auth against the reference runtime profile:
-
-```bash
-export MACP_ALLOW_INSECURE=1
-export MACP_ALLOW_DEV_SENDER_HEADER=1
-cargo run
-```
-
-Then:
+Make sure the runtime is running at `RUNTIME_ADDRESS`. For dev auth against the reference runtime profile, start the runtime with `MACP_ALLOW_INSECURE=1 MACP_ALLOW_DEV_SENDER_HEADER=1` (see [runtime/docs/getting-started.md#authentication](../runtime/docs/getting-started.md#authentication) → *Development mode*) and set on the control-plane:
 
 ```bash
 RUNTIME_ALLOW_INSECURE=true
@@ -113,26 +106,23 @@ RUNTIME_USE_DEV_HEADER=true
 RUNTIME_DEV_AGENT_ID=control-plane
 ```
 
-## Production runtime auth
+## Runtime auth (observer identity)
 
-Add one entry to the runtime's `MACP_AUTH_TOKENS_JSON` for the control-plane. It is a **read-only observer** and must not have session-start authority:
+The control-plane has **exactly one** runtime identity with fixed scope `is_observer: true, can_start_sessions: false`. `RuntimeCredentialResolverService` resolves credentials per gRPC call using a three-step fallback chain:
 
-```json
-{
-  "token": "obs-control-plane-token",
-  "sender": "control-plane",
-  "can_start_sessions": false
-}
-```
+| Mode | Trigger | Control-plane env |
+| --- | --- | --- |
+| JWT mint (preferred) | `MACP_AUTH_SERVICE_URL` set | `MACP_AUTH_SERVICE_URL`, `MACP_AUTH_SERVICE_TIMEOUT_MS`, `MACP_AUTH_TOKEN_TTL_SECONDS`, `MACP_AUTH_TOKEN_SENDER` |
+| Static Bearer | JWT disabled or mint fails | `RUNTIME_BEARER_TOKEN` (must match an entry in the runtime's `MACP_AUTH_TOKENS_JSON` with `can_start_sessions: false`) |
+| Dev header | `RUNTIME_USE_DEV_HEADER=true`, local only | `RUNTIME_DEV_AGENT_ID` |
 
-If your deployment makes the control-plane the policy admin (optional), set `can_manage_mode_registry: true`.
+For the runtime-side token configuration, TLS, and the full production auth story, see:
 
-Then in the control-plane environment:
-```bash
-RUNTIME_BEARER_TOKEN=obs-control-plane-token
-```
+- [runtime/docs/getting-started.md#authentication](../runtime/docs/getting-started.md#authentication) — dev / production / JWT modes and resolver order
+- [runtime/docs/deployment.md#authentication](../runtime/docs/deployment.md#authentication) — production resolver chain (JWT → static bearer → dev fallback); TLS env vars live in [§ Production checklist](../runtime/docs/deployment.md#production-checklist) and [§ Environment variables](../runtime/docs/deployment.md#environment-variables)
+- [python-sdk/docs/auth.md#observer-identities](../python-sdk/docs/auth.md#observer-identities) — observer-identity pattern (the shape the control-plane uses) and `expected_sender` guardrail
 
-Each agent additionally gets its own entry (with `can_start_sessions: true` for the initiator). Per-agent tokens are **not** shared with the control-plane — the scenario layer distributes them to agents via bootstrap. See `../ui-console/plans/direct-agent-auth.md` for the full onboarding flow.
+Per-agent tokens are **not** held by the control-plane — the scenario layer distributes them to agents via bootstrap. See `../ui-console/plans/direct-agent-auth.md` for the onboarding flow.
 
 ## Migration from pre-2026-04 control-plane
 

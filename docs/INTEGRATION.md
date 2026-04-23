@@ -8,45 +8,35 @@
 
 Key methods to implement (observer-only surface, post direct-agent-auth):
 - `initialize()` — protocol version negotiation.
-- `subscribeSession({runId, runtimeSessionId, afterSequence?})` — read-only `StreamSession` observer; returns `{events, abort}`. **Never writes envelopes.** Per RFC-MACP-0006 §3.2 the provider writes a single passive-subscribe frame (`{subscribeSessionId, afterSequence}`) and immediately half-closes the write side; the runtime then replays accepted history from `afterSequence` (default 0 = full replay) before switching to live broadcast.
+- `subscribeSession({runId, runtimeSessionId, afterSequence?})` — read-only `StreamSession` observer; returns `{events, abort}`. **Never writes envelopes.** Per RFC-MACP-0006 §3.2 the provider writes exactly one passive-subscribe frame (`{subscribeSessionId, afterSequence}`) and **keeps the write side open** for the session's lifetime. Half-closing would signal "client is done" and cause the runtime to drop every envelope broadcast afterwards. The runtime replays accepted history from `afterSequence` (default 0 = full replay) then switches to live broadcast. See [runtime/docs/sdk-guide.md#streaming](../../runtime/docs/sdk-guide.md#streaming) and [runtime/docs/API.md#message-transport](../../runtime/docs/API.md#message-transport) for the canonical stream lifecycle.
+- `watchSessions()` — returns an `AsyncIterable<SessionLifecycleEvent>` for `created` / `resolved` / `expired` events. Backs `SessionDiscoveryService`. Canonical RPC: [runtime/docs/API.md#session-lifecycle](../../runtime/docs/API.md#session-lifecycle); SDK-side discovery patterns: [python-sdk/docs/guides/session-discovery.md](../../python-sdk/docs/guides/session-discovery.md).
+- `watchSignals()` — returns an `AsyncIterable<RawRuntimeEvent>` of ambient Signal/Progress envelopes off the runtime's `signal_bus`. Backs `SignalConsumerService` — token-usage signals (`llm.call.completed`) arrive here, not on per-session streams. See [runtime/docs/API.md#streaming-watches](../../runtime/docs/API.md#streaming-watches).
 - `getSession()` — poll for session state (used by the observer's `pollForOpenSession` loop).
 - `cancelSession()` — only called when `run.metadata.cancellationDelegated === true` (Option B in direct-agent-auth §Cancellation design).
 - `getManifest()` / `listModes()` / `listRoots()` / `health()` — metadata.
-- `registerPolicy()` / `unregisterPolicy()` / `getPolicy()` / `listPolicies()` — governance (RFC-MACP-0012).
+- `registerPolicy()` / `unregisterPolicy()` / `getPolicy()` / `listPolicies()` — governance. Rule schemas and evaluation semantics: [runtime/docs/policy.md](../../runtime/docs/policy.md) (RFC-MACP-0012).
 
 ## Agents emit envelopes directly
 
-Agents authenticate to the runtime with their own Bearer tokens (RFC-MACP-0004 §4) and emit envelopes via `macp-sdk-python` / `macp-sdk-typescript`:
+Agents authenticate to the runtime with their own Bearer tokens (RFC-MACP-0004 §4) and emit envelopes via `macp-sdk-python` / `macp-sdk-typescript`. The control-plane never brokers agent envelopes — the old HTTP escalation endpoints (`POST /runs/:id/{messages,signal,context}`) now return **410 Gone**.
 
-```python
-# Python example (direct-agent-auth)
-from macp_sdk import MacpClient, AuthConfig, DecisionSession, new_session_id
+For the agent-side bootstrap and how `sessionId` flows from `POST /runs` to the initiator and non-initiator agents, see:
 
-auth = AuthConfig.for_bearer(os.environ["MACP_BEARER_TOKEN"], expected_sender="evaluator")
-client = MacpClient(target="runtime.internal:50051", secure=True, auth=auth)
-await client.initialize()
-session = DecisionSession(client, session_id=bootstrap.run.sessionId, auth=auth)
-stream = session.open_stream()
-await session.evaluate(proposal_id="prop-1", recommendation="APPROVE", confidence=0.95)
-```
+- **Python SDK** — [guides/direct-agent-auth.md](../../python-sdk/docs/guides/direct-agent-auth.md) (bootstrap shape, initiator vs non-initiator, `expected_sender`, cancellation) and [guides/agent-framework.md](../../python-sdk/docs/guides/agent-framework.md) (`from_bootstrap` factory + handler context)
+- **TypeScript SDK** — [README.md § Agent Framework](../../typescript-sdk/README.md#agent-framework) and [docs/guides/agent-framework.md](../../typescript-sdk/docs/guides/agent-framework.md) (`fromBootstrap()` + strategies)
+- **Migration** — `../../ui-console/plans/direct-agent-auth.md` (end-to-end story of the 2026-04-15 refactor)
 
-```typescript
-// TypeScript example
-import { MacpClient, Auth, DecisionSession } from 'macp-sdk-typescript';
+## Authenticating to the runtime
 
-const client = new MacpClient({
-  address: 'runtime.internal:50051',
-  secure: true,
-  auth: Auth.bearer(process.env.MACP_BEARER_TOKEN!, { expectedSender: 'evaluator' }),
-});
-await client.initialize();
-const session = new DecisionSession(client, { sessionId: bootstrap.run.sessionId });
-const stream = session.openStream();
-await session.evaluate({ proposalId: 'prop-1', recommendation: 'APPROVE', confidence: 0.95 });
-```
+Per-gRPC-call credential resolution uses a three-step fallback chain:
 
-The control-plane's old HTTP escalation endpoints (`POST /runs/:id/{messages,signal,context}`)
-now return **410 Gone**. See `../plans/../../ui-console/plans/direct-agent-auth.md` for the full migration story.
+| Mode | Trigger | Control-plane env vars |
+| --- | --- | --- |
+| **JWT mint (preferred)** | `MACP_AUTH_SERVICE_URL` set | `MACP_AUTH_SERVICE_URL`, `MACP_AUTH_SERVICE_TIMEOUT_MS` (5000), `MACP_AUTH_TOKEN_TTL_SECONDS` (3600), `MACP_AUTH_TOKEN_SENDER` (`control-plane`) |
+| **Static Bearer** | JWT disabled or mint failed | `RUNTIME_BEARER_TOKEN` |
+| **Dev header** (local only) | `RUNTIME_USE_DEV_HEADER=true` | `RUNTIME_DEV_AGENT_ID` (`control-plane`) |
+
+Mint behaviour: token cached until expiry minus 30s refresh buffer minus 10s clock-skew, concurrent refreshes deduped, mint failures log `auth_mint_failure` and fall through to the static Bearer. For the runtime-side token shape (`MACP_AUTH_TOKENS_JSON`), TLS/mTLS, and the JWT claim expectations, see [runtime/docs/getting-started.md#authentication](../../runtime/docs/getting-started.md#authentication) and [runtime/docs/deployment.md#authentication](../../runtime/docs/deployment.md#authentication).
 
 ## Consuming SSE Streams
 
@@ -112,17 +102,26 @@ Webhook deliveries include `X-MACP-Signature` (HMAC-SHA256) and `X-MACP-Event` h
 ## Running Integration Tests
 
 ```bash
+# Start the test Postgres (port 5433 — separate from the dev DB on 5432)
+docker compose -f docker-compose.test.yml up -d postgres-test
+
 # Mock runtime (fast, no external dependencies)
 npm run test:integration
 
 # Real Rust runtime (needs runtime on port 50051)
 INTEGRATION_RUNTIME=remote RUNTIME_ADDRESS=127.0.0.1:50051 npm run test:integration
-
-# Python agent E2E tests (LangChain + CrewAI)
-./scripts/run-e2e.sh decision
 ```
 
-See `test/integration/` for TypeScript integration tests. Python agent harnesses now live in the `examples-service` repo (not `test-agents/`).
+See `test/integration/` for the suites and `test/helpers/test-app.ts` for the NestJS boot
+harness. The harness wraps `app.close()` so every `afterAll` hook runs
+`drainBackgroundWork()` first — force-terminating in-progress runs, then awaiting
+`StreamConsumerService`, `SessionDiscoveryService`, and `SignalConsumerService` drains
+before the DB pool closes. Without this, pending `persistRawAndCanonical` chain entries
+would race the pool teardown and surface as "Test suite failed to run" even when every
+assertion passed.
+
+Python agent E2E tests live in the `examples-service` repo and run against the runtime
+directly via `macp-sdk-python` — see `examples-service/README.md`.
 
 ## Environment Variables
 
