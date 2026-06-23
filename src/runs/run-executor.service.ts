@@ -224,6 +224,45 @@ export class RunExecutorService {
     }
   }
 
+  /**
+   * Suspend a running session (macp-proto 0.1.3, RFC-MACP-0001 §7.5). SuspendSession
+   * is a Core control-plane RPC (not `Send`), so it is permitted under the observer
+   * invariant. The stream stays subscribed — suspension is non-terminal.
+   */
+  async suspend(runId: string, reason?: string) {
+    const run = await this.runManager.getRun(runId);
+    if (!run.runtimeSessionId) {
+      throw new BadRequestException('run has no bound runtime session');
+    }
+    if (run.status !== 'running') {
+      throw new BadRequestException(`only running runs can be suspended (current status: ${run.status})`);
+    }
+
+    const provider = this.runtimeRegistry.get(run.runtimeKind);
+    await provider.suspendSession({ runId, runtimeSessionId: run.runtimeSessionId, reason });
+
+    return this.runManager.markSuspended(runId);
+  }
+
+  /**
+   * Resume a suspended session (macp-proto 0.1.3). The banked TTL is restored
+   * runtime-side; the run returns to `running`.
+   */
+  async resume(runId: string, reason?: string) {
+    const run = await this.runManager.getRun(runId);
+    if (!run.runtimeSessionId) {
+      throw new BadRequestException('run has no bound runtime session');
+    }
+    if (run.status !== 'suspended') {
+      throw new BadRequestException(`only suspended runs can be resumed (current status: ${run.status})`);
+    }
+
+    const provider = this.runtimeRegistry.get(run.runtimeKind);
+    await provider.resumeSession({ runId, runtimeSessionId: run.runtimeSessionId, reason });
+
+    return this.runManager.markResumed(runId);
+  }
+
   async clone(
     runId: string,
     overrides?: { tags?: string[] }

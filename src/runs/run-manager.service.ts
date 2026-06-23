@@ -287,6 +287,72 @@ export class RunManagerService {
     return run;
   }
 
+  /**
+   * Pause a run (macp-proto 0.1.3 SUSPENDED — non-terminal). Emits `run.suspended`
+   * and fires a webhook. No metadata enrichment / trace-end: the run is not terminal.
+   */
+  async markSuspended(runId: string) {
+    const current = await this.getRun(runId);
+    const terminalStatuses = ['completed', 'failed', 'cancelled'];
+    if (terminalStatuses.includes(current.status)) return current;
+    if (current.status === 'suspended') return current;
+    this.instrumentation.runStateTotal.inc({ status: 'suspended' });
+    const run = await this.runRepository.markSuspended(runId);
+    await this.runEventService.emitControlPlaneEvents(runId, [
+      {
+        ts: new Date().toISOString(),
+        type: 'run.suspended',
+        source: { kind: 'control-plane', name: 'run-manager' },
+        subject: { kind: 'run', id: runId },
+        trace: run.traceId ? { traceId: run.traceId } : undefined,
+        data: {
+          status: 'suspended',
+          runtimeSessionId: run.runtimeSessionId,
+          traceId: run.traceId
+        }
+      }
+    ]);
+    void this.webhookService.fireEvent({
+      event: 'run.suspended',
+      runId,
+      status: 'suspended',
+      timestamp: new Date().toISOString()
+    });
+    return run;
+  }
+
+  /**
+   * Resume a suspended run back to running (macp-proto 0.1.3 RESUMED). Emits
+   * `run.resumed`. No-op if the run is not currently suspended.
+   */
+  async markResumed(runId: string) {
+    const current = await this.getRun(runId);
+    if (current.status !== 'suspended') return current;
+    this.instrumentation.runStateTotal.inc({ status: 'running' });
+    const run = await this.runRepository.markResumed(runId);
+    await this.runEventService.emitControlPlaneEvents(runId, [
+      {
+        ts: new Date().toISOString(),
+        type: 'run.resumed',
+        source: { kind: 'control-plane', name: 'run-manager' },
+        subject: { kind: 'run', id: runId },
+        trace: run.traceId ? { traceId: run.traceId } : undefined,
+        data: {
+          status: 'running',
+          runtimeSessionId: run.runtimeSessionId,
+          traceId: run.traceId
+        }
+      }
+    ]);
+    void this.webhookService.fireEvent({
+      event: 'run.resumed',
+      runId,
+      status: 'running',
+      timestamp: new Date().toISOString()
+    });
+    return run;
+  }
+
   async markFailed(runId: string, error: unknown) {
     const current = await this.getRun(runId);
     const terminalStatuses = ['completed', 'failed', 'cancelled'];

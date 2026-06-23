@@ -8,6 +8,8 @@ describe('CANONICAL_EVENT_TYPES (§3 contract stability)', () => {
       'run.completed',
       'run.failed',
       'run.cancelled',
+      'run.suspended',
+      'run.resumed',
       'session.bound',
       'session.stream.opened',
       'session.state.changed',

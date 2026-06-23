@@ -111,7 +111,9 @@ export class MetricsService {
     // cleanup events (e.g. session.state.changed at TTL boundary) don't inflate
     // durationMs.
     let runTerminal =
-      sessionState === 'SESSION_STATE_RESOLVED' || sessionState === 'SESSION_STATE_EXPIRED';
+      sessionState === 'SESSION_STATE_RESOLVED' ||
+      sessionState === 'SESSION_STATE_EXPIRED' ||
+      sessionState === 'SESSION_STATE_CANCELLED';
 
     for (const event of events) {
       eventCount += 1;

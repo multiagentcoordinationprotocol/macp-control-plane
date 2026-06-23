@@ -5,10 +5,10 @@ import { RunStatus } from '../contracts/control-plane';
 
 export class ListRunsQueryDto {
   @ApiPropertyOptional({
-    enum: ['queued', 'starting', 'binding_session', 'running', 'completed', 'failed', 'cancelled']
+    enum: ['queued', 'starting', 'binding_session', 'running', 'suspended', 'completed', 'failed', 'cancelled']
   })
   @IsOptional()
-  @IsIn(['queued', 'starting', 'binding_session', 'running', 'completed', 'failed', 'cancelled'])
+  @IsIn(['queued', 'starting', 'binding_session', 'running', 'suspended', 'completed', 'failed', 'cancelled'])
   status?: RunStatus;
 
   @ApiPropertyOptional({ type: [String], description: 'Filter by tags (comma-separated)' })

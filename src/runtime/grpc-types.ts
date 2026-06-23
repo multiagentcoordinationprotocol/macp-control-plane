@@ -88,6 +88,14 @@ export interface GrpcCancelSessionResponse {
   ack: GrpcAck;
 }
 
+export interface GrpcSuspendSessionResponse {
+  ack: GrpcAck;
+}
+
+export interface GrpcResumeSessionResponse {
+  ack: GrpcAck;
+}
+
 export interface GrpcManifest {
   agentId?: string;
   title?: string;

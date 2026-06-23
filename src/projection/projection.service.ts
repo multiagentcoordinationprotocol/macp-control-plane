@@ -156,6 +156,20 @@ export class ProjectionService {
           }
           break;
         }
+        case 'run.suspended':
+        case 'run.resumed': {
+          // Non-terminal pause / resume (macp-proto 0.1.3). Reflect status only —
+          // participants and policy state are left intact so a resumed run resumes
+          // exactly where it paused.
+          next.run = {
+            ...next.run,
+            runId: current.run.runId || event.runId,
+            status: (event.data.status as RunSummaryProjection['status']) ?? next.run.status,
+            runtimeSessionId: (event.data.runtimeSessionId as string | undefined) ?? next.run.runtimeSessionId,
+            traceId: (event.data.traceId as string | undefined) ?? next.run.traceId
+          };
+          break;
+        }
         case 'session.bound':
         case 'session.state.changed': {
           next.run.runtimeSessionId = (event.data.sessionId as string | undefined) ?? next.run.runtimeSessionId;
@@ -180,6 +194,23 @@ export class ProjectionService {
             if (event.data.state === 'SESSION_STATE_EXPIRED') {
               next.run.status = 'failed';
               this.sweepTerminal(next, 'failed');
+            }
+            // macp-proto 0.1.3: cancellation is now its own terminal state.
+            if (event.data.state === 'SESSION_STATE_CANCELLED') {
+              next.run.status = 'cancelled';
+              this.sweepTerminal(next, 'cancelled');
+            }
+            // SUSPENDED is non-terminal: reflect the paused status but do NOT
+            // sweep participants — the run can resume.
+            if (
+              event.data.state === 'SESSION_STATE_SUSPENDED' &&
+              !['completed', 'failed', 'cancelled'].includes(next.run.status)
+            ) {
+              next.run.status = 'suspended';
+            }
+            // Re-opening after a suspend returns the run to running.
+            if (event.data.state === 'SESSION_STATE_OPEN' && next.run.status === 'suspended') {
+              next.run.status = 'running';
             }
           }
           break;
@@ -366,6 +397,7 @@ export class ProjectionService {
           const priorVotes = priorProposals.filter((p) => p.vote === 'allow' || p.vote === 'deny');
           const priorApprove = priorVotes.filter((p) => p.vote === 'allow').length;
           const computedAggregate = priorVotes.length > 0 ? priorApprove / priorVotes.length : undefined;
+          const supersedes = extractSupersedes(payload?.supersedes);
           next.decision.current = {
             ...(next.decision.current ?? { finalized: false }),
             action,
@@ -376,7 +408,8 @@ export class ProjectionService {
             proposalId: String(payload?.commitmentId ?? next.decision.current?.proposalId ?? ''),
             outcomePositive,
             resolvedAt: event.ts,
-            resolvedBy: sender
+            resolvedBy: sender,
+            ...(supersedes ? { supersedes } : {})
           };
           next.run.status = 'completed';
           // Propagate outcomePositive to policy projection
@@ -642,6 +675,20 @@ function safeOptionalNumber(val: unknown): number | undefined {
   if (val === undefined || val === null) return undefined;
   const n = Number(val);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * Normalize a decoded `CommitmentPayload.supersedes` (CommitmentRef) into the
+ * projection shape. Tolerates both camelCase (proto-loader) and snake_case forms.
+ * Returns undefined when absent or structurally empty (RFC-MACP-0001 §7.3).
+ */
+function extractSupersedes(raw: unknown): { sessionId: string; commitmentHash: string } | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const ref = raw as Record<string, unknown>;
+  const sessionId = String(ref.sessionId ?? ref.session_id ?? '');
+  const commitmentHash = String(ref.commitmentHash ?? ref.commitment_hash ?? '');
+  if (!sessionId && !commitmentHash) return undefined;
+  return { sessionId, commitmentHash };
 }
 
 function inferContributionAction(messageType: string, payload?: Record<string, unknown>): string {

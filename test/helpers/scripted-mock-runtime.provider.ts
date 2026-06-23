@@ -17,10 +17,14 @@ import {
   RuntimeProvider,
   RuntimeRegisterPolicyRequest,
   RuntimeRegisterPolicyResult,
+  RuntimeResumeResult,
+  RuntimeResumeSessionRequest,
   RuntimeRootDescriptor,
   RuntimeSessionHandle,
   RuntimeSessionSnapshot,
   RuntimeSubscribeSessionRequest,
+  RuntimeSuspendResult,
+  RuntimeSuspendSessionRequest,
   RuntimeUnregisterPolicyRequest,
   RuntimeUnregisterPolicyResult,
   SessionLifecycleEvent,
@@ -181,7 +185,19 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
   }
 
   async cancelSession(req: RuntimeCancelSessionRequest): Promise<RuntimeCancelResult> {
-    this.sessionState = 'SESSION_STATE_RESOLVED';
+    // macp-proto 0.1.3: CancelSession now terminates the session as CANCELLED
+    // (previously surfaced as EXPIRED/RESOLVED).
+    this.sessionState = 'SESSION_STATE_CANCELLED';
+    return { ack: this.makeAck(req.runtimeSessionId) };
+  }
+
+  async suspendSession(req: RuntimeSuspendSessionRequest): Promise<RuntimeSuspendResult> {
+    this.sessionState = 'SESSION_STATE_SUSPENDED';
+    return { ack: this.makeAck(req.runtimeSessionId) };
+  }
+
+  async resumeSession(req: RuntimeResumeSessionRequest): Promise<RuntimeResumeResult> {
+    this.sessionState = 'SESSION_STATE_OPEN';
     return { ack: this.makeAck(req.runtimeSessionId) };
   }
 

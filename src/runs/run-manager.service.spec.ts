@@ -85,6 +85,8 @@ describe('RunManagerService', () => {
             markRunning: jest.fn(),
             markCompleted: jest.fn(),
             markCancelled: jest.fn(),
+            markSuspended: jest.fn(),
+            markResumed: jest.fn(),
             markFailed: jest.fn()
           }
         },
@@ -326,6 +328,72 @@ describe('RunManagerService', () => {
 
       expect(result).toEqual(cancelledRun);
       expect(runRepository.markCancelled).not.toHaveBeenCalled();
+      expect(runEventService.emitControlPlaneEvents).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('markSuspended', () => {
+    it('transitions a running run to suspended and emits run.suspended', async () => {
+      runRepository.findById.mockResolvedValue(makeRunRecord({ status: 'running' }) as any);
+      const suspendedRun = makeRunRecord({ status: 'suspended', traceId: 'trace-abc', runtimeSessionId: 'sess-1' });
+      runRepository.markSuspended.mockResolvedValue(suspendedRun as any);
+
+      const result = await service.markSuspended('run-1');
+
+      expect(result).toEqual(suspendedRun);
+      expect(runRepository.markSuspended).toHaveBeenCalledWith('run-1');
+      expect(runEventService.emitControlPlaneEvents).toHaveBeenCalledWith(
+        'run-1',
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'run.suspended',
+            data: expect.objectContaining({ status: 'suspended' })
+          })
+        ])
+      );
+    });
+
+    it('is a no-op for an already-terminal run', async () => {
+      const cancelledRun = makeRunRecord({ status: 'cancelled' });
+      runRepository.findById.mockResolvedValue(cancelledRun as any);
+
+      const result = await service.markSuspended('run-1');
+
+      expect(result).toEqual(cancelledRun);
+      expect(runRepository.markSuspended).not.toHaveBeenCalled();
+      expect(runEventService.emitControlPlaneEvents).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('markResumed', () => {
+    it('transitions a suspended run back to running and emits run.resumed', async () => {
+      runRepository.findById.mockResolvedValue(makeRunRecord({ status: 'suspended' }) as any);
+      const runningRun = makeRunRecord({ status: 'running', traceId: 'trace-abc', runtimeSessionId: 'sess-1' });
+      runRepository.markResumed.mockResolvedValue(runningRun as any);
+
+      const result = await service.markResumed('run-1');
+
+      expect(result).toEqual(runningRun);
+      expect(runRepository.markResumed).toHaveBeenCalledWith('run-1');
+      expect(runEventService.emitControlPlaneEvents).toHaveBeenCalledWith(
+        'run-1',
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'run.resumed',
+            data: expect.objectContaining({ status: 'running' })
+          })
+        ])
+      );
+    });
+
+    it('is a no-op when the run is not suspended', async () => {
+      const runningRun = makeRunRecord({ status: 'running' });
+      runRepository.findById.mockResolvedValue(runningRun as any);
+
+      const result = await service.markResumed('run-1');
+
+      expect(result).toEqual(runningRun);
+      expect(runRepository.markResumed).not.toHaveBeenCalled();
       expect(runEventService.emitControlPlaneEvents).not.toHaveBeenCalled();
     });
   });

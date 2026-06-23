@@ -7,7 +7,7 @@ import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { SessionLifecycleEvent } from '../contracts/runtime';
 
 function makeLifecycleEvent(
-  type: 'created' | 'resolved' | 'expired',
+  type: SessionLifecycleEvent['eventType'],
   sessionId: string,
   overrides: Partial<SessionLifecycleEvent['session']> = {}
 ): SessionLifecycleEvent {
@@ -45,6 +45,9 @@ describe('SessionDiscoveryService', () => {
     markRunning: jest.Mock;
     markCompleted: jest.Mock;
     markFailed: jest.Mock;
+    markCancelled: jest.Mock;
+    markSuspended: jest.Mock;
+    markResumed: jest.Mock;
   };
   let mockStreamConsumer: { start: jest.Mock };
   let mockProvider: { watchSessions: jest.Mock; subscribeSession: jest.Mock };
@@ -64,7 +67,10 @@ describe('SessionDiscoveryService', () => {
       bindSession: jest.fn().mockResolvedValue({}),
       markRunning: jest.fn().mockResolvedValue({}),
       markCompleted: jest.fn().mockResolvedValue({}),
-      markFailed: jest.fn().mockResolvedValue({})
+      markFailed: jest.fn().mockResolvedValue({}),
+      markCancelled: jest.fn().mockResolvedValue({}),
+      markSuspended: jest.fn().mockResolvedValue({}),
+      markResumed: jest.fn().mockResolvedValue({})
     };
     mockStreamConsumer = { start: jest.fn().mockResolvedValue(undefined) };
     mockInstrumentation = {};
@@ -181,6 +187,59 @@ describe('SessionDiscoveryService', () => {
 
     expect(mockRunManager.markFailed).toHaveBeenCalledWith('run-expire', expect.any(Error));
     expect(mockRunManager.markCompleted).not.toHaveBeenCalled();
+  });
+
+  it('marks the run cancelled on a cancelled event (macp-proto 0.1.3)', async () => {
+    mockRunManager.findBySessionId.mockResolvedValue({ id: 'run-cancel', status: 'running' });
+    mockProvider.watchSessions.mockReturnValue(
+      scriptedStream([makeLifecycleEvent('cancelled', 'session-c')])
+    );
+
+    await service.onModuleInit();
+    await flushAsync();
+
+    expect(mockRunManager.markCancelled).toHaveBeenCalledWith('run-cancel');
+    expect(mockRunManager.markFailed).not.toHaveBeenCalled();
+    expect(mockRunManager.markCompleted).not.toHaveBeenCalled();
+  });
+
+  it('marks the run suspended on a suspended event without finalizing', async () => {
+    mockRunManager.findBySessionId.mockResolvedValue({ id: 'run-suspend', status: 'running' });
+    mockProvider.watchSessions.mockReturnValue(
+      scriptedStream([makeLifecycleEvent('suspended', 'session-s')])
+    );
+
+    await service.onModuleInit();
+    await flushAsync();
+
+    expect(mockRunManager.markSuspended).toHaveBeenCalledWith('run-suspend');
+    expect(mockRunManager.markCompleted).not.toHaveBeenCalled();
+    expect(mockRunManager.markFailed).not.toHaveBeenCalled();
+    expect(mockRunManager.markCancelled).not.toHaveBeenCalled();
+  });
+
+  it('marks the run resumed on a resumed event', async () => {
+    mockRunManager.findBySessionId.mockResolvedValue({ id: 'run-resume', status: 'suspended' });
+    mockProvider.watchSessions.mockReturnValue(
+      scriptedStream([makeLifecycleEvent('resumed', 'session-rs')])
+    );
+
+    await service.onModuleInit();
+    await flushAsync();
+
+    expect(mockRunManager.markResumed).toHaveBeenCalledWith('run-resume');
+  });
+
+  it('does not suspend a run that is already in a terminal state', async () => {
+    mockRunManager.findBySessionId.mockResolvedValue({ id: 'run-done2', status: 'completed' });
+    mockProvider.watchSessions.mockReturnValue(
+      scriptedStream([makeLifecycleEvent('suspended', 'session-done2')])
+    );
+
+    await service.onModuleInit();
+    await flushAsync();
+
+    expect(mockRunManager.markSuspended).not.toHaveBeenCalled();
   });
 
   it('ignores terminal lifecycle events when the run is already in a terminal state', async () => {

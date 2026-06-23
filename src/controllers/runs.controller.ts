@@ -282,6 +282,32 @@ export class RunsController {
     return this.runExecutor.cancel(id, body?.reason);
   }
 
+  @Post(':id/suspend')
+  @ApiOperation({
+    summary:
+      'Suspend (pause) a running session (macp-proto 0.1.3, RFC-MACP-0001 §7.5). ' +
+      'Calls runtime.SuspendSession; the run enters the non-terminal `suspended` state with its TTL banked.'
+  })
+  async suspendRun(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: { reason?: string }
+  ) {
+    return this.runExecutor.suspend(id, body?.reason);
+  }
+
+  @Post(':id/resume')
+  @ApiOperation({
+    summary:
+      'Resume a suspended session (macp-proto 0.1.3). Calls runtime.ResumeSession; ' +
+      'the banked TTL is restored and the run returns to `running`.'
+  })
+  async resumeRun(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: { reason?: string }
+  ) {
+    return this.runExecutor.resume(id, body?.reason);
+  }
+
   @Post(':id/replay')
   @ApiOperation({ summary: 'Create a replay descriptor for a prior run.' })
   @ApiAcceptedResponse({ type: ReplayDescriptorDto })

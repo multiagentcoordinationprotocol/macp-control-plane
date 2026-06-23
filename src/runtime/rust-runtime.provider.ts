@@ -15,10 +15,14 @@ import {
   RuntimeManifestResult,
   RuntimeModeDescriptor,
   RuntimeProvider,
+  RuntimeResumeResult,
+  RuntimeResumeSessionRequest,
   RuntimeRootDescriptor,
   RuntimeSessionHandle,
   RuntimeSessionSnapshot,
   RuntimeSubscribeSessionRequest,
+  RuntimeSuspendResult,
+  RuntimeSuspendSessionRequest,
   RuntimeRegisterPolicyRequest,
   RuntimeRegisterPolicyResult,
   RuntimeUnregisterPolicyRequest,
@@ -353,6 +357,26 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     return { ack: fromAck(response.ack) };
   }
 
+  async suspendSession(req: RuntimeSuspendSessionRequest): Promise<RuntimeSuspendResult> {
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+    const response = await this.unary(
+      'SuspendSession',
+      { sessionId: req.runtimeSessionId, reason: req.reason ?? 'suspended by control plane' },
+      buildMetadata(creds.metadata)
+    );
+    return { ack: fromAck(response.ack) };
+  }
+
+  async resumeSession(req: RuntimeResumeSessionRequest): Promise<RuntimeResumeResult> {
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+    const response = await this.unary(
+      'ResumeSession',
+      { sessionId: req.runtimeSessionId, reason: req.reason ?? 'resumed by control plane' },
+      buildMetadata(creds.metadata)
+    );
+    return { ack: fromAck(response.ack) };
+  }
+
   async getManifest(): Promise<RuntimeManifestResult> {
     const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
     const response = await this.unary('GetManifest', { agentId: '' }, buildMetadata(creds.metadata));
@@ -445,11 +469,18 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
             grpcCall.on('data', (chunk: any) => {
               const event = chunk.event;
               if (!event) return;
+              // proto-loader is configured with `enums: String`, so eventType arrives
+              // as the enum name; the numeric fallbacks mirror the macp-proto 0.1.3
+              // EventType ordinals (CREATED=1, RESOLVED=2, EXPIRED=3, SUSPENDED=4,
+              // RESUMED=5, CANCELLED=6).
               const eventTypeRaw = event.eventType ?? event.event_type ?? '';
-              let eventType: 'created' | 'resolved' | 'expired' = 'created';
-              if (eventTypeRaw === 'EVENT_TYPE_RESOLVED' || eventTypeRaw === 1) eventType = 'resolved';
-              else if (eventTypeRaw === 'EVENT_TYPE_EXPIRED' || eventTypeRaw === 2) eventType = 'expired';
-              else if (eventTypeRaw === 'EVENT_TYPE_CREATED' || eventTypeRaw === 0) eventType = 'created';
+              let eventType: SessionLifecycleEvent['eventType'] = 'created';
+              if (eventTypeRaw === 'EVENT_TYPE_RESOLVED' || eventTypeRaw === 2) eventType = 'resolved';
+              else if (eventTypeRaw === 'EVENT_TYPE_EXPIRED' || eventTypeRaw === 3) eventType = 'expired';
+              else if (eventTypeRaw === 'EVENT_TYPE_SUSPENDED' || eventTypeRaw === 4) eventType = 'suspended';
+              else if (eventTypeRaw === 'EVENT_TYPE_RESUMED' || eventTypeRaw === 5) eventType = 'resumed';
+              else if (eventTypeRaw === 'EVENT_TYPE_CANCELLED' || eventTypeRaw === 6) eventType = 'cancelled';
+              else if (eventTypeRaw === 'EVENT_TYPE_CREATED' || eventTypeRaw === 1) eventType = 'created';
 
               buffer.push({
                 eventType,

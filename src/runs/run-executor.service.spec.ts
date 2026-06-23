@@ -66,6 +66,8 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
     markStarted: jest.Mock;
     markFailed: jest.Mock;
     markCancelled: jest.Mock;
+    markSuspended: jest.Mock;
+    markResumed: jest.Mock;
     markRunning: jest.Mock;
     getRun: jest.Mock;
     bindSession: jest.Mock;
@@ -107,6 +109,8 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
     subscribeSession: jest.Mock;
     getSession: jest.Mock;
     cancelSession: jest.Mock;
+    suspendSession: jest.Mock;
+    resumeSession: jest.Mock;
     getManifest: jest.Mock;
     listModes: jest.Mock;
     listRoots: jest.Mock;
@@ -135,7 +139,13 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
         initiator: 'agent-1'
       }),
       cancelSession: jest.fn().mockResolvedValue({
-        ack: { ok: true, sessionState: 'SESSION_STATE_RESOLVED' }
+        ack: { ok: true, sessionState: 'SESSION_STATE_CANCELLED' }
+      }),
+      suspendSession: jest.fn().mockResolvedValue({
+        ack: { ok: true, sessionState: 'SESSION_STATE_SUSPENDED' }
+      }),
+      resumeSession: jest.fn().mockResolvedValue({
+        ack: { ok: true, sessionState: 'SESSION_STATE_OPEN' }
       }),
       getManifest: jest.fn(),
       listModes: jest.fn(),
@@ -152,6 +162,8 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       markStarted: jest.fn().mockResolvedValue(makeRun({ status: 'starting' })),
       markFailed: jest.fn().mockResolvedValue(makeRun({ status: 'failed' })),
       markCancelled: jest.fn().mockResolvedValue(makeRun({ status: 'cancelled' })),
+      markSuspended: jest.fn().mockResolvedValue(makeRun({ status: 'suspended' })),
+      markResumed: jest.fn().mockResolvedValue(makeRun({ status: 'running' })),
       markRunning: jest.fn().mockResolvedValue(makeRun({ status: 'running' })),
       getRun: jest.fn().mockResolvedValue(makeRun()),
       bindSession: jest.fn().mockResolvedValue(makeRun({ status: 'binding_session' }))
@@ -465,6 +477,61 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
 
       await expect(service.cancel('run-1')).rejects.toThrow(AppException);
       fetchSpy.mockRestore();
+    });
+  });
+
+  // =========================================================================
+  // suspend() / resume() — macp-proto 0.1.3 control-plane RPCs
+  // =========================================================================
+  describe('suspend', () => {
+    it('calls provider.suspendSession and marks the run suspended', async () => {
+      const run = makeRun({
+        status: 'running',
+        runtimeSessionId: 'sess-1',
+        metadata: { executionRequest: makeRunDescriptor() }
+      });
+      mockRunManager.getRun.mockResolvedValue(run);
+
+      await service.suspend('run-1', 'pausing');
+
+      expect(mockProvider.suspendSession).toHaveBeenCalledWith({
+        runId: 'run-1',
+        runtimeSessionId: 'sess-1',
+        reason: 'pausing'
+      });
+      expect(mockRunManager.markSuspended).toHaveBeenCalledWith('run-1');
+    });
+
+    it('rejects when the run is not running', async () => {
+      mockRunManager.getRun.mockResolvedValue(makeRun({ status: 'suspended', runtimeSessionId: 'sess-1' }));
+      await expect(service.suspend('run-1')).rejects.toThrow(BadRequestException);
+      expect(mockProvider.suspendSession).not.toHaveBeenCalled();
+    });
+
+    it('throws when run has no runtime session', async () => {
+      mockRunManager.getRun.mockResolvedValue(makeRun({ runtimeSessionId: undefined }));
+      await expect(service.suspend('run-1')).rejects.toThrow(/no bound runtime session/);
+    });
+  });
+
+  describe('resume', () => {
+    it('calls provider.resumeSession and marks the run resumed', async () => {
+      mockRunManager.getRun.mockResolvedValue(makeRun({ status: 'suspended', runtimeSessionId: 'sess-1' }));
+
+      await service.resume('run-1', 'continuing');
+
+      expect(mockProvider.resumeSession).toHaveBeenCalledWith({
+        runId: 'run-1',
+        runtimeSessionId: 'sess-1',
+        reason: 'continuing'
+      });
+      expect(mockRunManager.markResumed).toHaveBeenCalledWith('run-1');
+    });
+
+    it('rejects when the run is not suspended', async () => {
+      mockRunManager.getRun.mockResolvedValue(makeRun({ status: 'running', runtimeSessionId: 'sess-1' }));
+      await expect(service.resume('run-1')).rejects.toThrow(BadRequestException);
+      expect(mockProvider.resumeSession).not.toHaveBeenCalled();
     });
   });
 
