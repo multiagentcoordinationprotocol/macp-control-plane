@@ -9,7 +9,10 @@ const VALID_TRANSITIONS: Record<RunStatus, RunStatus[]> = {
   queued: ['starting', 'failed', 'cancelled'],
   starting: ['binding_session', 'failed', 'cancelled'],
   binding_session: ['running', 'failed', 'cancelled'],
-  running: ['completed', 'failed', 'cancelled'],
+  running: ['suspended', 'completed', 'failed', 'cancelled'],
+  // `suspended` is non-terminal (macp-proto 0.1.3): a session can be resumed back
+  // to running, or terminate directly while paused.
+  suspended: ['running', 'completed', 'failed', 'cancelled'],
   completed: [],
   failed: [],
   cancelled: []
@@ -154,6 +157,16 @@ export class RunRepository {
     });
   }
 
+  /** Non-terminal pause — no `endedAt` is set so the run can be resumed. */
+  async markSuspended(id: string) {
+    return this.transitionTo(id, 'suspended', {});
+  }
+
+  /** Resume a suspended run back to running. */
+  async markResumed(id: string) {
+    return this.transitionTo(id, 'running', {});
+  }
+
   async markFailed(id: string, errorCode?: string, errorMessage?: string) {
     return this.transitionTo(id, 'failed', {
       errorCode,
@@ -166,7 +179,7 @@ export class RunRepository {
     return this.database.db
       .select()
       .from(runs)
-      .where(and(sql`${runs.status} in ('starting', 'binding_session', 'running')`));
+      .where(and(sql`${runs.status} in ('starting', 'binding_session', 'running', 'suspended')`));
   }
 
   async list(filters: {

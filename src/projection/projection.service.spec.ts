@@ -404,6 +404,41 @@ describe('ProjectionService', () => {
       expect(result.policy.outcomePositive).toBe(false);
     });
 
+    it('decision.finalized surfaces cross-session supersedes (macp-proto 0.1.3)', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'decision.finalized',
+        subject: { kind: 'decision', id: 'dec-1' },
+        data: {
+          decodedPayload: {
+            action: 'approve',
+            commitmentId: 'commit-2',
+            supersedes: { sessionId: 'prior-session', commitmentHash: 'sha256:abc' }
+          }
+        }
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.decision.current!.supersedes).toEqual({
+        sessionId: 'prior-session',
+        commitmentHash: 'sha256:abc'
+      });
+    });
+
+    it('decision.finalized omits supersedes when absent', () => {
+      const base = service.empty('run-1');
+      const event = makeEvent({
+        type: 'decision.finalized',
+        subject: { kind: 'decision', id: 'dec-1' },
+        data: { decodedPayload: { action: 'approve', commitmentId: 'commit-1' } }
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.decision.current!.supersedes).toBeUndefined();
+    });
+
     it('decision.finalized infers true from approve-like actions (§1.3)', () => {
       const base = service.empty('run-1');
       const event = makeEvent({

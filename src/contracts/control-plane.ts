@@ -78,13 +78,25 @@ export interface RunDescriptor {
   };
 }
 
-export type RunStatus = 'queued' | 'starting' | 'binding_session' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type RunStatus =
+  | 'queued'
+  | 'starting'
+  | 'binding_session'
+  | 'running'
+  | 'suspended'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 
 export type SessionState =
   | 'SESSION_STATE_UNSPECIFIED'
   | 'SESSION_STATE_OPEN'
   | 'SESSION_STATE_RESOLVED'
-  | 'SESSION_STATE_EXPIRED';
+  | 'SESSION_STATE_EXPIRED'
+  /** Non-terminal pause introduced in macp-proto 0.1.3 (RFC-MACP-0001 §7.5). */
+  | 'SESSION_STATE_SUSPENDED'
+  /** Terminal state for a session ended by an accepted CancelSession RPC (macp-proto 0.1.3). */
+  | 'SESSION_STATE_CANCELLED';
 
 export interface Run {
   id: string;
@@ -116,6 +128,8 @@ export const CANONICAL_EVENT_TYPES = [
   'run.completed',
   'run.failed',
   'run.cancelled',
+  'run.suspended',
+  'run.resumed',
   'session.bound',
   'session.stream.opened',
   'session.state.changed',
@@ -221,6 +235,16 @@ export interface DecisionProposalContribution {
   messageType?: string;
 }
 
+/**
+ * Cross-session commitment supersession (RFC-MACP-0001 §7.3, macp-proto 0.1.3).
+ * Points at the prior commitment this one replaces. Observed-only — the
+ * control-plane surfaces it for insight UIs; it does not resolve the chain.
+ */
+export interface CommitmentSupersedes {
+  sessionId: string;
+  commitmentHash: string;
+}
+
 export interface DecisionProjection {
   current?: {
     action: string;
@@ -233,6 +257,8 @@ export interface DecisionProjection {
     proposals?: DecisionProposalContribution[];
     resolvedAt?: string;
     resolvedBy?: string;
+    /** Set when the finalized commitment supersedes a prior one (cross-session). */
+    supersedes?: CommitmentSupersedes;
   };
 }
 

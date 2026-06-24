@@ -157,7 +157,7 @@ export class DashboardService {
       this.database.db.execute(sql`
         SELECT
           count(*)::int AS "totalRuns",
-          count(*) FILTER (WHERE status IN ('queued','starting','binding_session','running'))::int AS "activeRuns",
+          count(*) FILTER (WHERE status IN ('queued','starting','binding_session','running','suspended'))::int AS "activeRuns",
           count(*) FILTER (WHERE status = 'completed')::int AS "completedRuns",
           count(*) FILTER (WHERE status = 'failed')::int AS "failedRuns",
           count(*) FILTER (WHERE status = 'cancelled')::int AS "cancelledRuns"

@@ -105,6 +105,33 @@ export interface RuntimeCancelResult {
   ack: RuntimeAck;
 }
 
+/**
+ * Session suspend / resume (RFC-MACP-0001 §7.5, macp-proto 0.1.3). Symmetric with
+ * CancelSession: Core control-plane RPCs (not `Send`), permitted under the observer
+ * invariant. Suspend banks the session TTL; resume restores it.
+ */
+export interface RuntimeSuspendSessionRequest {
+  runId: string;
+  runtimeSessionId: string;
+  reason?: string;
+  requesterId?: string;
+}
+
+export interface RuntimeSuspendResult {
+  ack: RuntimeAck;
+}
+
+export interface RuntimeResumeSessionRequest {
+  runId: string;
+  runtimeSessionId: string;
+  reason?: string;
+  requesterId?: string;
+}
+
+export interface RuntimeResumeResult {
+  ack: RuntimeAck;
+}
+
 export interface RuntimeManifestResult {
   agentId: string;
   title?: string;
@@ -184,7 +211,14 @@ export interface RuntimeCapabilities {
  * the runtime (RFC-MACP-0004 §4). The provider's job is to initialize, observe, inspect,
  * and (conditionally) cancel sessions. See direct-agent-auth.md §Invariants.
  */
-export type SessionLifecycleEventType = 'created' | 'resolved' | 'expired';
+export type SessionLifecycleEventType =
+  | 'created'
+  | 'resolved'
+  | 'expired'
+  /** macp-proto 0.1.3 lifecycle transitions (RFC-MACP-0001 §7.5). */
+  | 'suspended'
+  | 'resumed'
+  | 'cancelled';
 
 export interface SessionLifecycleEvent {
   eventType: SessionLifecycleEventType;
@@ -203,6 +237,12 @@ export interface RuntimeProvider {
   getSession(req: RuntimeGetSessionRequest): Promise<RuntimeSessionSnapshot>;
 
   cancelSession(req: RuntimeCancelSessionRequest): Promise<RuntimeCancelResult>;
+
+  /** Pause a session (non-terminal). Control-plane RPC, not `Send` (RFC-MACP-0001 §7.5). */
+  suspendSession(req: RuntimeSuspendSessionRequest): Promise<RuntimeSuspendResult>;
+
+  /** Resume a previously suspended session. Control-plane RPC, not `Send`. */
+  resumeSession(req: RuntimeResumeSessionRequest): Promise<RuntimeResumeResult>;
 
   getManifest(): Promise<RuntimeManifestResult>;
   listModes(): Promise<RuntimeModeDescriptor[]>;

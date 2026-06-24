@@ -83,6 +83,14 @@ export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
         await this.handleSessionTerminal(sessionId, 'completed');
       } else if (event.eventType === 'expired') {
         await this.handleSessionTerminal(sessionId, 'failed');
+      } else if (event.eventType === 'cancelled') {
+        // macp-proto 0.1.3: cancellation now arrives as its own lifecycle event
+        // (previously surfaced as `expired`). Map to the run's `cancelled` status.
+        await this.handleSessionTerminal(sessionId, 'cancelled');
+      } else if (event.eventType === 'suspended') {
+        await this.handleSessionPaused(sessionId, 'suspended');
+      } else if (event.eventType === 'resumed') {
+        await this.handleSessionPaused(sessionId, 'resumed');
       }
     }
   }
@@ -142,7 +150,10 @@ export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  private async handleSessionTerminal(sessionId: string, status: 'completed' | 'failed'): Promise<void> {
+  private async handleSessionTerminal(
+    sessionId: string,
+    status: 'completed' | 'failed' | 'cancelled'
+  ): Promise<void> {
     const run = await this.runManager.findBySessionId(sessionId);
     if (!run) return;
 
@@ -150,10 +161,31 @@ export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
 
     if (status === 'completed') {
       await this.runManager.markCompleted(run.id);
+    } else if (status === 'cancelled') {
+      await this.runManager.markCancelled(run.id);
     } else {
       await this.runManager.markFailed(run.id, new Error('session expired'));
     }
     this.logger.log(`Session ${sessionId} → run ${run.id} marked ${status}`);
+  }
+
+  /**
+   * macp-proto 0.1.3: SUSPENDED/RESUMED are non-terminal. Reflect the paused
+   * state on the run without finalizing it.
+   */
+  private async handleSessionPaused(sessionId: string, transition: 'suspended' | 'resumed'): Promise<void> {
+    const run = await this.runManager.findBySessionId(sessionId);
+    if (!run) return;
+
+    // A terminal run never re-enters a paused state.
+    if (['completed', 'failed', 'cancelled'].includes(run.status)) return;
+
+    if (transition === 'suspended') {
+      await this.runManager.markSuspended(run.id);
+    } else {
+      await this.runManager.markResumed(run.id);
+    }
+    this.logger.log(`Session ${sessionId} → run ${run.id} ${transition}`);
   }
 
   private buildRunDescriptor(session: RuntimeSessionSnapshot): RunDescriptor {
