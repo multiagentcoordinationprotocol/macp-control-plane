@@ -85,10 +85,10 @@ describe('Observer mode — end-to-end projection (integration)', () => {
 
         // Invariant: the control-plane never emitted a send-ack (it doesn't call Send).
         // Normalized events from Send acks come out as `message.sent` with subject
-        // kind 'message' AND source.kind === 'control-plane'. Observer mode only ever
+        // kind 'message' AND source.kind === 'macp-control-plane'. Observer mode only ever
         // emits 'message.sent' from received runtime envelopes (source.kind === 'runtime').
         const controlPlaneSends = events.filter(
-          (e: any) => e.type === 'message.sent' && e.source?.kind === 'control-plane',
+          (e: any) => e.type === 'message.sent' && e.source?.kind === 'macp-control-plane',
         );
         expect(controlPlaneSends).toHaveLength(0);
       });

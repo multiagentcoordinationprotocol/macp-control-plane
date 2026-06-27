@@ -62,7 +62,7 @@ export class ObservabilityController {
       {
         ts: new Date().toISOString(),
         type: 'artifact.created',
-        source: { kind: 'control-plane', name: 'observability-controller' },
+        source: { kind: 'macp-control-plane', name: 'observability-controller' },
         subject: { kind: 'artifact', id: artifact.id },
         data: {
           kind: artifact.kind,

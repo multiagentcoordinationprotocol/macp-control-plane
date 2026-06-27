@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { Observable } from 'rxjs';
-import { CanonicalEvent, ReplayRequest, RunStateProjection } from '../contracts/control-plane';
+import {
+  CanonicalEvent,
+  ReplayRequest,
+  RunStateProjection,
+  normalizeEventSourceKind
+} from '../contracts/control-plane';
 import { AppConfigService } from '../config/app-config.service';
 import { EventRepository } from '../storage/event.repository';
 import { ProjectionService } from '../projection/projection.service';
@@ -113,7 +118,7 @@ export class ReplayService {
             }
           : undefined,
       source: {
-        kind: row.sourceKind as 'runtime' | 'control-plane' | 'replay',
+        kind: normalizeEventSourceKind(row.sourceKind),
         name: row.sourceName,
         rawType: row.rawType ?? undefined
       },

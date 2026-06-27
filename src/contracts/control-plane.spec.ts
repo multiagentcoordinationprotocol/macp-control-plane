@@ -1,4 +1,9 @@
-import { CANONICAL_EVENT_TYPES, CanonicalEventType } from './control-plane';
+import {
+  CANONICAL_EVENT_TYPES,
+  CanonicalEventType,
+  LEGACY_CONTROL_PLANE_SOURCE_KIND,
+  normalizeEventSourceKind
+} from './control-plane';
 
 describe('CANONICAL_EVENT_TYPES (§3 contract stability)', () => {
   it('contains all lifecycle, message, signal, decision and policy events', () => {
@@ -46,5 +51,18 @@ describe('CANONICAL_EVENT_TYPES (§3 contract stability)', () => {
     // we only assert the `as const` tuple form via type narrowing.
     const first: CanonicalEventType = CANONICAL_EVENT_TYPES[0];
     expect(typeof first).toBe('string');
+  });
+});
+
+describe('normalizeEventSourceKind (legacy source.kind read shim)', () => {
+  it('folds the legacy control-plane value onto macp-control-plane', () => {
+    expect(normalizeEventSourceKind(LEGACY_CONTROL_PLANE_SOURCE_KIND)).toBe('macp-control-plane');
+    expect(normalizeEventSourceKind('control-plane')).toBe('macp-control-plane');
+  });
+
+  it('passes through canonical values unchanged', () => {
+    expect(normalizeEventSourceKind('macp-control-plane')).toBe('macp-control-plane');
+    expect(normalizeEventSourceKind('runtime')).toBe('runtime');
+    expect(normalizeEventSourceKind('replay')).toBe('replay');
   });
 });

@@ -80,7 +80,7 @@ export class RunManagerService {
       {
         ts: new Date().toISOString(),
         type: 'run.created',
-        source: { kind: 'control-plane', name: 'run-manager' },
+        source: { kind: 'macp-control-plane', name: 'run-manager' },
         subject: { kind: 'run', id: record.id },
         trace: { traceId },
         data: {
@@ -104,7 +104,7 @@ export class RunManagerService {
       {
         ts: new Date().toISOString(),
         type: 'run.started',
-        source: { kind: 'control-plane', name: 'run-manager' },
+        source: { kind: 'macp-control-plane', name: 'run-manager' },
         subject: { kind: 'run', id: runId },
         trace: run.traceId ? { traceId: run.traceId } : undefined,
         data: {
@@ -168,7 +168,7 @@ export class RunManagerService {
     const participantEvents = request.session.participants.map((participant) => ({
       ts: new Date().toISOString(),
       type: 'participant.seen' as const,
-      source: { kind: 'control-plane' as const, name: 'run-manager' },
+      source: { kind: 'macp-control-plane' as const, name: 'run-manager' },
       subject: { kind: 'participant' as const, id: participant.id },
       data: {
         participantId: participant.id,
@@ -180,7 +180,7 @@ export class RunManagerService {
       {
         ts: new Date().toISOString(),
         type: 'session.bound',
-        source: { kind: 'control-plane', name: 'run-manager' },
+        source: { kind: 'macp-control-plane', name: 'run-manager' },
         subject: { kind: 'session', id: session.runtimeSessionId },
         data: {
           sessionId: session.runtimeSessionId,
@@ -206,7 +206,7 @@ export class RunManagerService {
       {
         ts: new Date().toISOString(),
         type: 'session.state.changed',
-        source: { kind: 'control-plane', name: 'run-manager' },
+        source: { kind: 'macp-control-plane', name: 'run-manager' },
         subject: { kind: 'session', id: runtimeSessionId },
         trace: run.traceId ? { traceId: run.traceId } : undefined,
         data: {
@@ -235,7 +235,7 @@ export class RunManagerService {
       {
         ts: new Date().toISOString(),
         type: 'run.completed',
-        source: { kind: 'control-plane', name: 'run-manager' },
+        source: { kind: 'macp-control-plane', name: 'run-manager' },
         subject: { kind: 'run', id: runId },
         trace: run.traceId ? { traceId: run.traceId } : undefined,
         data: {
@@ -267,7 +267,7 @@ export class RunManagerService {
       {
         ts: new Date().toISOString(),
         type: 'run.cancelled',
-        source: { kind: 'control-plane', name: 'run-manager' },
+        source: { kind: 'macp-control-plane', name: 'run-manager' },
         subject: { kind: 'run', id: runId },
         trace: run.traceId ? { traceId: run.traceId } : undefined,
         data: {
@@ -302,7 +302,7 @@ export class RunManagerService {
       {
         ts: new Date().toISOString(),
         type: 'run.suspended',
-        source: { kind: 'control-plane', name: 'run-manager' },
+        source: { kind: 'macp-control-plane', name: 'run-manager' },
         subject: { kind: 'run', id: runId },
         trace: run.traceId ? { traceId: run.traceId } : undefined,
         data: {
@@ -334,7 +334,7 @@ export class RunManagerService {
       {
         ts: new Date().toISOString(),
         type: 'run.resumed',
-        source: { kind: 'control-plane', name: 'run-manager' },
+        source: { kind: 'macp-control-plane', name: 'run-manager' },
         subject: { kind: 'run', id: runId },
         trace: run.traceId ? { traceId: run.traceId } : undefined,
         data: {
@@ -365,7 +365,7 @@ export class RunManagerService {
       {
         ts: new Date().toISOString(),
         type: 'run.failed',
-        source: { kind: 'control-plane', name: 'run-manager' },
+        source: { kind: 'macp-control-plane', name: 'run-manager' },
         subject: { kind: 'run', id: runId },
         trace: run.traceId ? { traceId: run.traceId } : undefined,
         data: {

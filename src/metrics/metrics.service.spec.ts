@@ -9,7 +9,7 @@ function makeEvent(overrides: Partial<CanonicalEvent> = {}): CanonicalEvent {
     seq: 1,
     ts: '2026-01-01T00:00:00.000Z',
     type: 'message.sent',
-    source: { kind: 'control-plane', name: 'test' },
+    source: { kind: 'macp-control-plane', name: 'test' },
     data: {},
     ...overrides
   };

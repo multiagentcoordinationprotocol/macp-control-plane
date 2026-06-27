@@ -111,7 +111,7 @@ export class RunRecoveryService implements OnApplicationBootstrap {
       {
         ts: new Date().toISOString(),
         type: 'session.stream.opened',
-        source: { kind: 'control-plane', name: 'run-recovery' },
+        source: { kind: 'macp-control-plane', name: 'run-recovery' },
         subject: { kind: 'session', id: runtimeSessionId },
         data: { status: 'recovered', detail: 'stream resumed after restart' }
       }

@@ -367,7 +367,7 @@ export class RunExecutorService {
           {
             ts: new Date().toISOString(),
             type: 'artifact.created',
-            source: { kind: 'control-plane', name: 'run-executor' },
+            source: { kind: 'macp-control-plane', name: 'run-executor' },
             subject: { kind: 'artifact', id: artifact.id },
             trace: { traceId: run.traceId },
             data: {

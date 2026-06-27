@@ -158,7 +158,7 @@ describe('ObservabilityController', () => {
       expect(mockEventService.emitControlPlaneEvents).toHaveBeenCalledWith(runId, [
         expect.objectContaining({
           type: 'artifact.created',
-          source: { kind: 'control-plane', name: 'observability-controller' },
+          source: { kind: 'macp-control-plane', name: 'observability-controller' },
           subject: { kind: 'artifact', id: 'art-new' },
           data: expect.objectContaining({
             kind: 'json',

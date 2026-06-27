@@ -155,6 +155,30 @@ export const CANONICAL_EVENT_TYPES = [
 
 export type CanonicalEventType = (typeof CANONICAL_EVENT_TYPES)[number];
 
+/**
+ * Origin plane of a canonical event. `macp-control-plane` denotes events
+ * synthesized by this service (run lifecycle, recovery, observability) as
+ * opposed to `runtime` (forwarded from the Rust runtime) or `replay`.
+ *
+ * The value was historically `'control-plane'`; it was renamed to the
+ * fully-qualified `'macp-control-plane'` on the wire. Use
+ * {@link normalizeEventSourceKind} when reading values that may predate the
+ * rename so legacy rows project under the canonical value.
+ */
+export type EventSourceKind = 'runtime' | 'macp-control-plane' | 'replay';
+
+/** Legacy value of {@link EventSourceKind} emitted before the macp-* rename. */
+export const LEGACY_CONTROL_PLANE_SOURCE_KIND = 'control-plane';
+
+/**
+ * Maps a persisted/inbound `source.kind` to the canonical {@link EventSourceKind},
+ * folding the legacy `'control-plane'` value onto `'macp-control-plane'`.
+ * Backward-compatible read shim for events written before the rename.
+ */
+export function normalizeEventSourceKind(value: string): EventSourceKind {
+  return value === LEGACY_CONTROL_PLANE_SOURCE_KIND ? 'macp-control-plane' : (value as EventSourceKind);
+}
+
 export interface CanonicalEvent {
   id: string;
   runId: string;
@@ -178,7 +202,7 @@ export interface CanonicalEvent {
     id: string;
   };
   source: {
-    kind: 'runtime' | 'control-plane' | 'replay';
+    kind: EventSourceKind;
     name: string;
     rawType?: string;
   };
