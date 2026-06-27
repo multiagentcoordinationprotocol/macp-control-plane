@@ -54,7 +54,7 @@
 2. Is `RUNTIME_BEARER_TOKEN` set as a fallback? Without it the call eventually proceeds with no `Authorization` header (dev-header mode) or fails auth on the runtime side.
 3. If the auth-service is healthy but calls still fail, check `MACP_AUTH_SERVICE_TIMEOUT_MS` (default 5000 ms) — slow auth-services can time out under load.
 
-**See also:** [runtime/docs/getting-started.md#authentication](../../runtime/docs/getting-started.md#authentication) → *Resolver order* for how the runtime evaluates inbound credentials, and [ARCHITECTURE.md § Runtime Credential Resolution](./ARCHITECTURE.md#runtime-credential-resolution) for the control-plane side of the chain.
+**See also:** [runtime/docs/getting-started.md#authentication](../../macp-runtime/docs/getting-started.md#authentication) → *Resolver order* for how the runtime evaluates inbound credentials, and [ARCHITECTURE.md § Runtime Credential Resolution](./ARCHITECTURE.md#runtime-credential-resolution) for the control-plane side of the chain.
 
 ## bindSession ConflictException in logs
 
@@ -77,7 +77,7 @@
 **Checks:**
 1. Confirm the run's `runtimeSessionId` matches the `session_id` the agent is writing to (`GET /runs/:id`).
 2. Check stream consumer logs for `StreamSession` reconnection loops — the observer subscribes read-only and must be connected.
-3. Confirm the runtime echoes envelopes back on the stream (some runtimes only echo certain message types). `signal.emitted` and `message.sent` canonical events require `stream-envelope` entries on the observer stream. See [runtime/docs/API.md#message-transport](../../runtime/docs/API.md#message-transport) for StreamSession semantics and [runtime/docs/sdk-guide.md#streaming](../../runtime/docs/sdk-guide.md#streaming) for the observer lifecycle.
+3. Confirm the runtime echoes envelopes back on the stream (some runtimes only echo certain message types). `signal.emitted` and `message.sent` canonical events require `stream-envelope` entries on the observer stream. See [runtime/docs/API.md#message-transport](../../macp-runtime/docs/API.md#message-transport) for StreamSession semantics and [runtime/docs/sdk-guide.md#streaming](../../macp-runtime/docs/sdk-guide.md#streaming) for the observer lifecycle.
 4. For session discovery, verify `SESSION_DISCOVERY_ENABLED=true` so externally-launched sessions auto-create runs. Concepts: [python-sdk/docs/guides/session-discovery.md](../../python-sdk/docs/guides/session-discovery.md).
 
 ## SSE Stream Drops

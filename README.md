@@ -98,12 +98,12 @@ npm run drizzle:migrate
 npm run start:dev
 ```
 
-Make sure the runtime is running at `RUNTIME_ADDRESS`. For dev auth against the reference runtime profile, start the runtime with `MACP_ALLOW_INSECURE=1 MACP_ALLOW_DEV_SENDER_HEADER=1` (see [runtime/docs/getting-started.md#authentication](../runtime/docs/getting-started.md#authentication) → *Development mode*) and set on the control-plane:
+Make sure the runtime is running at `RUNTIME_ADDRESS`. For dev auth against the reference runtime profile, start the runtime with `MACP_ALLOW_INSECURE=1 MACP_ALLOW_DEV_SENDER_HEADER=1` (see [runtime/docs/getting-started.md#authentication](../macp-runtime/docs/getting-started.md#authentication) → *Development mode*) and set on the control-plane:
 
 ```bash
 RUNTIME_ALLOW_INSECURE=true
 RUNTIME_USE_DEV_HEADER=true
-RUNTIME_DEV_AGENT_ID=control-plane
+RUNTIME_DEV_AGENT_ID=macp-control-plane
 ```
 
 ## Runtime auth (observer identity)
@@ -118,8 +118,8 @@ The control-plane has **exactly one** runtime identity with fixed scope `is_obse
 
 For the runtime-side token configuration, TLS, and the full production auth story, see:
 
-- [runtime/docs/getting-started.md#authentication](../runtime/docs/getting-started.md#authentication) — dev / production / JWT modes and resolver order
-- [runtime/docs/deployment.md#authentication](../runtime/docs/deployment.md#authentication) — production resolver chain (JWT → static bearer → dev fallback); TLS env vars live in [§ Production checklist](../runtime/docs/deployment.md#production-checklist) and [§ Environment variables](../runtime/docs/deployment.md#environment-variables)
+- [runtime/docs/getting-started.md#authentication](../macp-runtime/docs/getting-started.md#authentication) — dev / production / JWT modes and resolver order
+- [runtime/docs/deployment.md#authentication](../macp-runtime/docs/deployment.md#authentication) — production resolver chain (JWT → static bearer → dev fallback); TLS env vars live in [§ Production checklist](../macp-runtime/docs/deployment.md#production-checklist) and [§ Environment variables](../macp-runtime/docs/deployment.md#environment-variables)
 - [python-sdk/docs/auth.md#observer-identities](../python-sdk/docs/auth.md#observer-identities) — observer-identity pattern (the shape the control-plane uses) and `expected_sender` guardrail
 
 Per-agent tokens are **not** held by the control-plane — the scenario layer distributes them to agents via bootstrap. See `../ui-console/plans/direct-agent-auth.md` for the onboarding flow.
