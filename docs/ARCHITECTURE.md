@@ -40,7 +40,7 @@ MACP distinguishes between two communication planes:
 └─────────────────────────────────────┘    └───────────────────────────────────┘
 ```
 
-Deeper explainers: [python-sdk/docs/protocol.md#two-planes-of-communication](../../python-sdk/docs/protocol.md#two-planes-of-communication) (the plane-split invariant), [python-sdk/docs/protocol.md#envelopes](../../python-sdk/docs/protocol.md#envelopes) (envelope shape + session binding), and [runtime/docs/API.md#streaming-watches](../../runtime/docs/API.md#streaming-watches) (`WatchSignals` semantics on the ambient plane).
+Deeper explainers: [python-sdk/docs/protocol.md#two-planes-of-communication](../../python-sdk/docs/protocol.md#two-planes-of-communication) (the plane-split invariant), [python-sdk/docs/protocol.md#envelopes](../../python-sdk/docs/protocol.md#envelopes) (envelope shape + session binding), and [runtime/docs/API.md#streaming-watches](../../macp-runtime/docs/API.md#streaming-watches) (`WatchSignals` semantics on the ambient plane).
 
 ## Request Flow (observer mode — direct-agent-auth 2026-04-15)
 
@@ -78,7 +78,7 @@ control-plane's observer identity using a **three-step fallback chain**:
 2. **Static Bearer** — attaches `RUNTIME_BEARER_TOKEN` verbatim. Must match an entry in the runtime's `MACP_AUTH_TOKENS_JSON` with `can_start_sessions: false`.
 3. **Dev header** — attaches `x-macp-agent-id: <RUNTIME_DEV_AGENT_ID>` instead of `Authorization`. Requires the runtime to enable `MACP_ALLOW_DEV_SENDER_HEADER=1`.
 
-For token configuration on the runtime side and the resolver order as the runtime sees it, see [runtime/docs/getting-started.md#authentication](../../runtime/docs/getting-started.md#authentication) and [runtime/docs/deployment.md#authentication](../../runtime/docs/deployment.md#authentication). The minter is covered by `src/runtime/runtime-jwt-minter.service.spec.ts` (TTL refresh, concurrent-refresh dedupe, 4xx / missing-token / network failure modes).
+For token configuration on the runtime side and the resolver order as the runtime sees it, see [runtime/docs/getting-started.md#authentication](../../macp-runtime/docs/getting-started.md#authentication) and [runtime/docs/deployment.md#authentication](../../macp-runtime/docs/deployment.md#authentication). The minter is covered by `src/runtime/runtime-jwt-minter.service.spec.ts` (TTL refresh, concurrent-refresh dedupe, 4xx / missing-token / network failure modes).
 
 ## Event Pipeline
 
@@ -186,8 +186,8 @@ Key relationships:
 
 The control-plane is mode-agnostic — it forwards mode URIs to the runtime, observes the resulting envelopes, and projects them for the UI. The canonical mode specifications (message flow, terminal conditions, payload shapes) live in the runtime docs:
 
-- [runtime/docs/modes.md](../../runtime/docs/modes.md) — Decision, Proposal, Task, Handoff, Quorum, plus Multi-Round and extension modes
-- [runtime/docs/examples.md](../../runtime/docs/examples.md) — end-to-end walkthroughs per mode
+- [runtime/docs/modes.md](../../macp-runtime/docs/modes.md) — Decision, Proposal, Task, Handoff, Quorum, plus Multi-Round and extension modes
+- [runtime/docs/examples.md](../../macp-runtime/docs/examples.md) — end-to-end walkthroughs per mode
 
 All modes terminate with `Commitment` (`macp.v1.CommitmentPayload`). The control-plane normalises the per-mode message types into two canonical events — `proposal.created` / `proposal.updated` — preserving `messageType` in `data.messageType` for discrimination. See the [Canonical Event Types](./API.md#canonical-event-types) table in API.md for the mapping.
 

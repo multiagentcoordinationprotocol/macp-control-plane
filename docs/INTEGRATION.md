@@ -8,13 +8,13 @@
 
 Key methods to implement (observer-only surface, post direct-agent-auth):
 - `initialize()` — protocol version negotiation.
-- `subscribeSession({runId, runtimeSessionId, afterSequence?})` — read-only `StreamSession` observer; returns `{events, abort}`. **Never writes envelopes.** Per RFC-MACP-0006 §3.2 the provider writes exactly one passive-subscribe frame (`{subscribeSessionId, afterSequence}`) and **keeps the write side open** for the session's lifetime. Half-closing would signal "client is done" and cause the runtime to drop every envelope broadcast afterwards. The runtime replays accepted history from `afterSequence` (default 0 = full replay) then switches to live broadcast. See [runtime/docs/sdk-guide.md#streaming](../../runtime/docs/sdk-guide.md#streaming) and [runtime/docs/API.md#message-transport](../../runtime/docs/API.md#message-transport) for the canonical stream lifecycle.
-- `watchSessions()` — returns an `AsyncIterable<SessionLifecycleEvent>` for `created` / `resolved` / `expired` events. Backs `SessionDiscoveryService`. Canonical RPC: [runtime/docs/API.md#session-lifecycle](../../runtime/docs/API.md#session-lifecycle); SDK-side discovery patterns: [python-sdk/docs/guides/session-discovery.md](../../python-sdk/docs/guides/session-discovery.md).
-- `watchSignals()` — returns an `AsyncIterable<RawRuntimeEvent>` of ambient Signal/Progress envelopes off the runtime's `signal_bus`. Backs `SignalConsumerService` — token-usage signals (`llm.call.completed`) arrive here, not on per-session streams. See [runtime/docs/API.md#streaming-watches](../../runtime/docs/API.md#streaming-watches).
+- `subscribeSession({runId, runtimeSessionId, afterSequence?})` — read-only `StreamSession` observer; returns `{events, abort}`. **Never writes envelopes.** Per RFC-MACP-0006 §3.2 the provider writes exactly one passive-subscribe frame (`{subscribeSessionId, afterSequence}`) and **keeps the write side open** for the session's lifetime. Half-closing would signal "client is done" and cause the runtime to drop every envelope broadcast afterwards. The runtime replays accepted history from `afterSequence` (default 0 = full replay) then switches to live broadcast. See [runtime/docs/sdk-guide.md#streaming](../../macp-runtime/docs/sdk-guide.md#streaming) and [runtime/docs/API.md#message-transport](../../macp-runtime/docs/API.md#message-transport) for the canonical stream lifecycle.
+- `watchSessions()` — returns an `AsyncIterable<SessionLifecycleEvent>` for `created` / `resolved` / `expired` events. Backs `SessionDiscoveryService`. Canonical RPC: [runtime/docs/API.md#session-lifecycle](../../macp-runtime/docs/API.md#session-lifecycle); SDK-side discovery patterns: [python-sdk/docs/guides/session-discovery.md](../../python-sdk/docs/guides/session-discovery.md).
+- `watchSignals()` — returns an `AsyncIterable<RawRuntimeEvent>` of ambient Signal/Progress envelopes off the runtime's `signal_bus`. Backs `SignalConsumerService` — token-usage signals (`llm.call.completed`) arrive here, not on per-session streams. See [runtime/docs/API.md#streaming-watches](../../macp-runtime/docs/API.md#streaming-watches).
 - `getSession()` — poll for session state (used by the observer's `pollForOpenSession` loop).
 - `cancelSession()` — only called when `run.metadata.cancellationDelegated === true` (Option B in direct-agent-auth §Cancellation design).
 - `getManifest()` / `listModes()` / `listRoots()` / `health()` — metadata.
-- `registerPolicy()` / `unregisterPolicy()` / `getPolicy()` / `listPolicies()` — governance. Rule schemas and evaluation semantics: [runtime/docs/policy.md](../../runtime/docs/policy.md) (RFC-MACP-0012).
+- `registerPolicy()` / `unregisterPolicy()` / `getPolicy()` / `listPolicies()` — governance. Rule schemas and evaluation semantics: [runtime/docs/policy.md](../../macp-runtime/docs/policy.md) (RFC-MACP-0012).
 
 ## Agents emit envelopes directly
 
@@ -36,7 +36,7 @@ Per-gRPC-call credential resolution uses a three-step fallback chain:
 | **Static Bearer** | JWT disabled or mint failed | `RUNTIME_BEARER_TOKEN` |
 | **Dev header** (local only) | `RUNTIME_USE_DEV_HEADER=true` | `RUNTIME_DEV_AGENT_ID` (`control-plane`) |
 
-Mint behaviour: token cached until expiry minus 30s refresh buffer minus 10s clock-skew, concurrent refreshes deduped, mint failures log `auth_mint_failure` and fall through to the static Bearer. For the runtime-side token shape (`MACP_AUTH_TOKENS_JSON`), TLS/mTLS, and the JWT claim expectations, see [runtime/docs/getting-started.md#authentication](../../runtime/docs/getting-started.md#authentication) and [runtime/docs/deployment.md#authentication](../../runtime/docs/deployment.md#authentication).
+Mint behaviour: token cached until expiry minus 30s refresh buffer minus 10s clock-skew, concurrent refreshes deduped, mint failures log `auth_mint_failure` and fall through to the static Bearer. For the runtime-side token shape (`MACP_AUTH_TOKENS_JSON`), TLS/mTLS, and the JWT claim expectations, see [runtime/docs/getting-started.md#authentication](../../macp-runtime/docs/getting-started.md#authentication) and [runtime/docs/deployment.md#authentication](../../macp-runtime/docs/deployment.md#authentication).
 
 ## Consuming SSE Streams
 
