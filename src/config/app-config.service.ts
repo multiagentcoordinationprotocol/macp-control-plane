@@ -74,6 +74,15 @@ export class AppConfigService implements OnModuleInit {
   readonly authTokenTtlSeconds = readNumber('MACP_AUTH_TOKEN_TTL_SECONDS', 3600);
   readonly authTokenSender = process.env.MACP_AUTH_TOKEN_SENDER ?? 'macp-control-plane';
   /**
+   * Opt-in: include `can_manage_mode_registry` in the minted runtime JWT so the
+   * control-plane can register/unregister policies and modes on behalf of the
+   * console's admin UI. Defaults to **false** to preserve the strict observer
+   * posture — only enable in deployments where the control-plane is the trusted
+   * admin plane for the runtime registry. The runtime gates RegisterPolicy /
+   * UnregisterPolicy on this capability (see macp-auth `authorize_mode_registry`).
+   */
+  readonly authTokenCanManageRegistry = readBoolean('MACP_AUTH_TOKEN_CAN_MANAGE_REGISTRY', false);
+  /**
    * Observer-mode poll cadence. Control-plane polls GetSession after POST /runs
    * until the initiator agent opens the session. See direct-agent-auth §End-to-end target flow.
    */

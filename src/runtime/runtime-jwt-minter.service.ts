@@ -16,7 +16,8 @@ interface MintResponse {
  * Mints and caches the control-plane's runtime JWT. Mirrors the
  * `AuthTokenMinterService` pattern in macp-playground but is
  * single-tenant — only ever mints for the `control-plane` sender with
- * `is_observer: true`.
+ * `is_observer: true` (and, when opted in via
+ * `MACP_AUTH_TOKEN_CAN_MANAGE_REGISTRY`, `can_manage_mode_registry: true`).
  *
  * The credential resolver calls `getToken()` on every gRPC call; the
  * minter returns a cached token until TTL minus a clock-skew buffer, then
@@ -68,14 +69,19 @@ export class RuntimeJwtMinterService {
       sender: this.config.authTokenSender,
       ttl_seconds: this.config.authTokenTtlSeconds,
       scopes: {
-        // Control-plane is strictly an observer. It must not be able to start
-        // sessions or mutate the mode/policy registry via this credential.
+        // Control-plane is an observer by default. It cannot start sessions.
         can_start_sessions: false,
         is_observer: true,
         // allowed_modes intentionally omitted → the runtime treats it as
         // "all modes allowed" for read operations. The is_observer flag is
         // what authorizes `Stream`/`GetSession`/etc.
-      },
+        //
+        // Registry management (RegisterPolicy/UnregisterPolicy) is gated by the
+        // runtime on `can_manage_mode_registry`. It stays off unless the
+        // operator opts in via MACP_AUTH_TOKEN_CAN_MANAGE_REGISTRY, so the
+        // default posture remains strictly read-only.
+        ...(this.config.authTokenCanManageRegistry ? { can_manage_mode_registry: true } : {})
+      }
     };
 
     let response: Response;
@@ -84,7 +90,7 @@ export class RuntimeJwtMinterService {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.config.authServiceTimeoutMs),
+        signal: AbortSignal.timeout(this.config.authServiceTimeoutMs)
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'unknown network error';
