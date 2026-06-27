@@ -9,12 +9,12 @@ This service is the backend that a Next.js UI talks to for run lifecycle, live s
 The control plane is an observer. **It never calls `Send`** on the runtime.
 
 - **UI**: browse runs, launch, render graphs and traces.
-- **Scenario layer** (e.g. `examples-service`): compile scenarios → produce a generic `RunDescriptor` for this service + per-agent bootstrap for the initiator + participant agents.
+- **Scenario layer** (e.g. `macp-playground`): compile scenarios → produce a generic `RunDescriptor` for this service + per-agent bootstrap for the initiator + participant agents.
 - **Agents**: authenticate to the runtime directly with their own Bearer tokens and emit their own envelopes (SessionStart, kickoff, Proposal / Evaluation / Vote / etc.) via `macp-sdk-python` or `macp-sdk-typescript`.
 - **Control plane**: allocates `sessionId`, polls `GetSession(sessionId)` until the initiator agent opens it, then subscribes read-only to `StreamSession(sessionId)`. Projects canonical events for the UI.
 - **Runtime**: authoritative orchestrator of MACP envelopes and modes.
 
-## Invariants (see `../ui-console/plans/direct-agent-auth.md` §Invariants)
+## Invariants (see `../macp-ui-console/plans/direct-agent-auth.md` §Invariants)
 
 1. The control-plane runtime identity is least-privilege: `can_start_sessions: false, is_observer: true` — either encoded in a minted short-lived JWT (preferred) or in a static entry in the runtime's `MACP_AUTH_TOKENS_JSON`.
 2. The control-plane never calls `Send` — enforced by an invariant lint test (`src/runtime/observer-invariant.spec.ts`).
@@ -70,7 +70,7 @@ These endpoints return **410 Gone**. Agents emit envelopes via the SDKs directly
       { "id": "growth-agent" }
     ],
     "metadata": {
-      "source": "examples-service",
+      "source": "macp-playground",
       "sourceRef": "fraud/high-value-new-device@1.0.0",
       "environment": "production",
       "cancelCallback": {
@@ -98,7 +98,7 @@ npm run drizzle:migrate
 npm run start:dev
 ```
 
-Make sure the runtime is running at `RUNTIME_ADDRESS`. For dev auth against the reference runtime profile, start the runtime with `MACP_ALLOW_INSECURE=1 MACP_ALLOW_DEV_SENDER_HEADER=1` (see [runtime/docs/getting-started.md#authentication](../macp-runtime/docs/getting-started.md#authentication) → *Development mode*) and set on the control-plane:
+Make sure the runtime is running at `RUNTIME_ADDRESS`. For dev auth against the reference runtime profile, start the runtime with `MACP_ALLOW_INSECURE=1 MACP_ALLOW_DEV_SENDER_HEADER=1` (see [macp-runtime/docs/getting-started.md#authentication](../macp-runtime/docs/getting-started.md#authentication) → *Development mode*) and set on the control-plane:
 
 ```bash
 RUNTIME_ALLOW_INSECURE=true
@@ -118,11 +118,11 @@ The control-plane has **exactly one** runtime identity with fixed scope `is_obse
 
 For the runtime-side token configuration, TLS, and the full production auth story, see:
 
-- [runtime/docs/getting-started.md#authentication](../macp-runtime/docs/getting-started.md#authentication) — dev / production / JWT modes and resolver order
-- [runtime/docs/deployment.md#authentication](../macp-runtime/docs/deployment.md#authentication) — production resolver chain (JWT → static bearer → dev fallback); TLS env vars live in [§ Production checklist](../macp-runtime/docs/deployment.md#production-checklist) and [§ Environment variables](../macp-runtime/docs/deployment.md#environment-variables)
-- [python-sdk/docs/auth.md#observer-identities](../python-sdk/docs/auth.md#observer-identities) — observer-identity pattern (the shape the control-plane uses) and `expected_sender` guardrail
+- [macp-runtime/docs/getting-started.md#authentication](../macp-runtime/docs/getting-started.md#authentication) — dev / production / JWT modes and resolver order
+- [macp-runtime/docs/deployment.md#authentication](../macp-runtime/docs/deployment.md#authentication) — production resolver chain (JWT → static bearer → dev fallback); TLS env vars live in [§ Production checklist](../macp-runtime/docs/deployment.md#production-checklist) and [§ Environment variables](../macp-runtime/docs/deployment.md#environment-variables)
+- [macp-sdk-python/docs/auth.md#observer-identities](../macp-sdk-python/docs/auth.md#observer-identities) — observer-identity pattern (the shape the control-plane uses) and `expected_sender` guardrail
 
-Per-agent tokens are **not** held by the control-plane — the scenario layer distributes them to agents via bootstrap. See `../ui-console/plans/direct-agent-auth.md` for the onboarding flow.
+Per-agent tokens are **not** held by the control-plane — the scenario layer distributes them to agents via bootstrap. See `../macp-ui-console/plans/direct-agent-auth.md` for the onboarding flow.
 
 ## Migration from pre-2026-04 control-plane
 

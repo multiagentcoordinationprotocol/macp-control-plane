@@ -54,7 +54,7 @@
 2. Is `RUNTIME_BEARER_TOKEN` set as a fallback? Without it the call eventually proceeds with no `Authorization` header (dev-header mode) or fails auth on the runtime side.
 3. If the auth-service is healthy but calls still fail, check `MACP_AUTH_SERVICE_TIMEOUT_MS` (default 5000 ms) — slow auth-services can time out under load.
 
-**See also:** [runtime/docs/getting-started.md#authentication](../../macp-runtime/docs/getting-started.md#authentication) → *Resolver order* for how the runtime evaluates inbound credentials, and [ARCHITECTURE.md § Runtime Credential Resolution](./ARCHITECTURE.md#runtime-credential-resolution) for the control-plane side of the chain.
+**See also:** [macp-runtime/docs/getting-started.md#authentication](../../macp-runtime/docs/getting-started.md#authentication) → *Resolver order* for how the runtime evaluates inbound credentials, and [ARCHITECTURE.md § Runtime Credential Resolution](./ARCHITECTURE.md#runtime-credential-resolution) for the control-plane side of the chain.
 
 ## bindSession ConflictException in logs
 
@@ -68,7 +68,7 @@
 
 **Symptom:** `POST /runs/:id/messages`, `/signal`, or `/context` returns `410 Gone` with `errorCode: ENDPOINT_REMOVED`.
 
-**Explanation:** The control-plane is observer-only as of the 2026-04-15 direct-agent-auth refactor. Agents authenticate to the runtime directly and emit their own envelopes via `macp-sdk-python` / `macp-sdk-typescript`. See `docs/API.md` § "Messages & Signals — emission is NOT via the control-plane" for the mapping, and the SDK guides for the new agent flow: [python-sdk direct-agent-auth](../../python-sdk/docs/guides/direct-agent-auth.md), [typescript-sdk agent-framework](../../typescript-sdk/docs/guides/agent-framework.md).
+**Explanation:** The control-plane is observer-only as of the 2026-04-15 direct-agent-auth refactor. Agents authenticate to the runtime directly and emit their own envelopes via `macp-sdk-python` / `macp-sdk-typescript`. See `docs/API.md` § "Messages & Signals — emission is NOT via the control-plane" for the mapping, and the SDK guides for the new agent flow: [macp-sdk-python direct-agent-auth](../../macp-sdk-python/docs/guides/direct-agent-auth.md), [macp-sdk-typescript agent-framework](../../macp-sdk-typescript/docs/guides/agent-framework.md).
 
 ## Agent Envelopes Not Appearing in Projection
 
@@ -77,8 +77,8 @@
 **Checks:**
 1. Confirm the run's `runtimeSessionId` matches the `session_id` the agent is writing to (`GET /runs/:id`).
 2. Check stream consumer logs for `StreamSession` reconnection loops — the observer subscribes read-only and must be connected.
-3. Confirm the runtime echoes envelopes back on the stream (some runtimes only echo certain message types). `signal.emitted` and `message.sent` canonical events require `stream-envelope` entries on the observer stream. See [runtime/docs/API.md#message-transport](../../macp-runtime/docs/API.md#message-transport) for StreamSession semantics and [runtime/docs/sdk-guide.md#streaming](../../macp-runtime/docs/sdk-guide.md#streaming) for the observer lifecycle.
-4. For session discovery, verify `SESSION_DISCOVERY_ENABLED=true` so externally-launched sessions auto-create runs. Concepts: [python-sdk/docs/guides/session-discovery.md](../../python-sdk/docs/guides/session-discovery.md).
+3. Confirm the runtime echoes envelopes back on the stream (some runtimes only echo certain message types). `signal.emitted` and `message.sent` canonical events require `stream-envelope` entries on the observer stream. See [macp-runtime/docs/API.md#message-transport](../../macp-runtime/docs/API.md#message-transport) for StreamSession semantics and [macp-runtime/docs/sdk-guide.md#streaming](../../macp-runtime/docs/sdk-guide.md#streaming) for the observer lifecycle.
+4. For session discovery, verify `SESSION_DISCOVERY_ENABLED=true` so externally-launched sessions auto-create runs. Concepts: [macp-sdk-python/docs/guides/session-discovery.md](../../macp-sdk-python/docs/guides/session-discovery.md).
 
 ## SSE Stream Drops
 
