@@ -214,7 +214,7 @@ export class StreamConsumerService implements OnModuleDestroy {
         {
           ts: new Date().toISOString(),
           type: 'session.stream.opened',
-          source: { kind: 'control-plane', name: 'stream-consumer' },
+          source: { kind: 'macp-control-plane', name: 'stream-consumer' },
           subject: { kind: 'session', id: params.runtimeSessionId },
           data: { status: 'reconnecting', detail: 'polling getSession for terminal state' }
         }

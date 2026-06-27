@@ -99,14 +99,14 @@ describe('RunEventService', () => {
         {
           ts: '2026-01-01T00:00:00.000Z',
           type: 'run.created' as const,
-          source: { kind: 'control-plane' as const, name: 'run-manager' },
+          source: { kind: 'macp-control-plane' as const, name: 'run-manager' },
           subject: { kind: 'run' as const, id: 'run-1' },
           data: { status: 'queued' }
         },
         {
           ts: '2026-01-01T00:00:01.000Z',
           type: 'run.started' as const,
-          source: { kind: 'control-plane' as const, name: 'run-manager' },
+          source: { kind: 'macp-control-plane' as const, name: 'run-manager' },
           subject: { kind: 'run' as const, id: 'run-1' },
           data: { status: 'starting' }
         }
@@ -145,7 +145,7 @@ describe('RunEventService', () => {
         {
           ts: '2026-01-01T00:00:00.000Z',
           type: 'session.stream.opened' as const,
-          source: { kind: 'control-plane' as const, name: 'stream-consumer' },
+          source: { kind: 'macp-control-plane' as const, name: 'stream-consumer' },
           subject: { kind: 'session' as const, id: 'session-1' },
           data: { status: 'reconnecting', detail: 'stream retry' }
         }
@@ -174,7 +174,7 @@ describe('RunEventService', () => {
         {
           ts: '2026-01-01T00:00:00.000Z',
           type: 'run.created' as const,
-          source: { kind: 'control-plane' as const, name: 'run-manager' },
+          source: { kind: 'macp-control-plane' as const, name: 'run-manager' },
           subject: { kind: 'run' as const, id: 'run-1' },
           data: { status: 'queued' }
         }

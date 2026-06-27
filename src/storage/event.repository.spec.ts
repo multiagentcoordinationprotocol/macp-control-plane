@@ -96,7 +96,7 @@ describe('EventRepository', () => {
           seq: 1,
           ts: '2026-01-01T00:00:00Z',
           type: 'run.created',
-          source: { kind: 'control-plane', name: 'macp-control-plane' },
+          source: { kind: 'macp-control-plane', name: 'macp-control-plane' },
           data: { foo: 'bar' }
         }
       ];
@@ -111,7 +111,7 @@ describe('EventRepository', () => {
             runId: 'run-1',
             seq: 1,
             type: 'run.created',
-            sourceKind: 'control-plane',
+            sourceKind: 'macp-control-plane',
             sourceName: 'macp-control-plane'
           })
         ])
@@ -126,7 +126,7 @@ describe('EventRepository', () => {
           seq: 1,
           ts: '2026-01-01T00:00:00Z',
           type: 'run.started',
-          source: { kind: 'control-plane', name: 'macp-control-plane' },
+          source: { kind: 'macp-control-plane', name: 'macp-control-plane' },
           data: {}
         }
       ];
