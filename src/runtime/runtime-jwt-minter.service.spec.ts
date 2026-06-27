@@ -74,12 +74,29 @@ describe('RuntimeJwtMinterService', () => {
       expect(body.sender).toBe('control-plane');
       expect(body.scopes.is_observer).toBe(true);
       expect(body.scopes.can_start_sessions).toBe(false);
+      // Registry management stays off unless explicitly opted in.
+      expect(body.scopes.can_manage_mode_registry).toBeUndefined();
+    });
+
+    it('requests can_manage_mode_registry when the operator opts in', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse({ token: 'jwt-admin', sender: 'control-plane' }));
+      const minter = new RuntimeJwtMinterService({
+        ...baseConfig,
+        authTokenCanManageRegistry: true
+      } as unknown as AppConfigService);
+
+      await minter.getToken();
+
+      const [, init] = fetchMock.mock.calls[0];
+      const body = JSON.parse((init?.body as string) ?? '{}');
+      expect(body.scopes.can_manage_mode_registry).toBe(true);
+      // Still not a session initiator.
+      expect(body.scopes.can_start_sessions).toBe(false);
+      expect(body.scopes.is_observer).toBe(true);
     });
 
     it('dedupes concurrent refreshes into a single inflight request', async () => {
-      fetchMock.mockResolvedValueOnce(
-        jsonResponse({ token: 'jwt-once', expires_in_seconds: 3600 })
-      );
+      fetchMock.mockResolvedValueOnce(jsonResponse({ token: 'jwt-once', expires_in_seconds: 3600 }));
       const minter = new RuntimeJwtMinterService(baseConfig);
 
       const [a, b, c] = await Promise.all([minter.getToken(), minter.getToken(), minter.getToken()]);
