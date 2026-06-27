@@ -34,7 +34,14 @@ import {
 } from '../contracts/runtime';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { CircuitBreaker } from './circuit-breaker';
-import { buildMetadata, fromAck, fromEnvelope, fromSessionMetadata, getClientMethod } from './grpc-helpers';
+import {
+  buildMetadata,
+  fromAck,
+  fromEnvelope,
+  fromSessionMetadata,
+  getClientMethod,
+  mapGrpcError
+} from './grpc-helpers';
 import { RuntimeCredentialResolverService } from './runtime-credential-resolver.service';
 
 export interface GrpcCallOptions {
@@ -709,7 +716,10 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       const grpcErr = error as grpc.ServiceError;
       this.logger.error(`gRPC ${method} failed: code=${grpcErr.code} details="${grpcErr.details ?? grpcErr.message}"`);
       this.instrumentation.grpcCallDuration.observe({ method, status: 'error' }, (Date.now() - start) / 1000);
-      throw error;
+      // Translate the gRPC status into a meaningful HTTP status (403/404/409/…)
+      // so REST clients see the real cause instead of an opaque 500. Non-gRPC
+      // errors (e.g. circuit-breaker-open) are rethrown unchanged.
+      throw mapGrpcError(error, method) ?? error;
     }
   }
 }

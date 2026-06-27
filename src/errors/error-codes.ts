@@ -13,5 +13,14 @@ export enum ErrorCode {
   UNKNOWN_POLICY_VERSION = 'UNKNOWN_POLICY_VERSION',
   POLICY_DENIED = 'POLICY_DENIED',
   INVALID_POLICY_DEFINITION = 'INVALID_POLICY_DEFINITION',
-  SESSION_ALREADY_EXISTS = 'SESSION_ALREADY_EXISTS'
+  SESSION_ALREADY_EXISTS = 'SESSION_ALREADY_EXISTS',
+  // Generic codes used when translating a downstream gRPC status into an HTTP
+  // response (see `mapGrpcError`). Kept distinct from the domain-specific codes
+  // above so clients can branch on the transport-level cause.
+  FORBIDDEN = 'FORBIDDEN',
+  NOT_FOUND = 'NOT_FOUND',
+  CONFLICT = 'CONFLICT',
+  UNAUTHENTICATED = 'UNAUTHENTICATED',
+  NOT_IMPLEMENTED = 'NOT_IMPLEMENTED',
+  RATE_LIMITED = 'RATE_LIMITED'
 }

@@ -1,5 +1,15 @@
+import { HttpStatus } from '@nestjs/common';
 import * as grpc from '@grpc/grpc-js';
-import { buildMetadata, fromAck, fromEnvelope, fromSessionMetadata, getClientMethod } from './grpc-helpers';
+import {
+  buildMetadata,
+  fromAck,
+  fromEnvelope,
+  fromSessionMetadata,
+  getClientMethod,
+  mapGrpcError
+} from './grpc-helpers';
+import { AppException } from '../errors/app-exception';
+import { ErrorCode } from '../errors/error-codes';
 
 describe('gRPC helpers (Q3-1)', () => {
   describe('fromEnvelope', () => {
@@ -132,6 +142,51 @@ describe('gRPC helpers (Q3-1)', () => {
 
     it('throws on unknown method', () => {
       expect(() => getClientMethod({}, 'Nope')).toThrow(/not available on client/);
+    });
+  });
+
+  describe('mapGrpcError', () => {
+    const grpcError = (code: grpc.status, details = 'boom'): grpc.ServiceError =>
+      ({ code, details, message: details, metadata: new grpc.Metadata(), name: 'Error' }) as grpc.ServiceError;
+
+    it.each([
+      [grpc.status.PERMISSION_DENIED, HttpStatus.FORBIDDEN, ErrorCode.FORBIDDEN],
+      [grpc.status.NOT_FOUND, HttpStatus.NOT_FOUND, ErrorCode.NOT_FOUND],
+      [grpc.status.INVALID_ARGUMENT, HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR],
+      [grpc.status.ALREADY_EXISTS, HttpStatus.CONFLICT, ErrorCode.CONFLICT],
+      [grpc.status.FAILED_PRECONDITION, HttpStatus.CONFLICT, ErrorCode.CONFLICT],
+      [grpc.status.UNAUTHENTICATED, HttpStatus.UNAUTHORIZED, ErrorCode.UNAUTHENTICATED],
+      [grpc.status.RESOURCE_EXHAUSTED, HttpStatus.TOO_MANY_REQUESTS, ErrorCode.RATE_LIMITED],
+      [grpc.status.UNIMPLEMENTED, HttpStatus.NOT_IMPLEMENTED, ErrorCode.NOT_IMPLEMENTED],
+      [grpc.status.UNAVAILABLE, HttpStatus.SERVICE_UNAVAILABLE, ErrorCode.RUNTIME_UNAVAILABLE],
+      [grpc.status.DEADLINE_EXCEEDED, HttpStatus.GATEWAY_TIMEOUT, ErrorCode.RUNTIME_TIMEOUT]
+    ])('maps gRPC code %i → HTTP %i', (code, http, errorCode) => {
+      const mapped = mapGrpcError(grpcError(code as grpc.status), 'RegisterPolicy');
+      expect(mapped).toBeInstanceOf(AppException);
+      expect(mapped!.getStatus()).toBe(http);
+      expect(mapped!.errorCode).toBe(errorCode);
+    });
+
+    it('preserves the runtime "details" string as the client-facing message', () => {
+      const mapped = mapGrpcError(
+        grpcError(grpc.status.PERMISSION_DENIED, 'only the session initiator or policy-delegated roles can suspend'),
+        'SuspendSession'
+      );
+      expect((mapped!.getResponse() as { message: string }).message).toBe(
+        'only the session initiator or policy-delegated roles can suspend'
+      );
+    });
+
+    it('maps unlisted gRPC codes (INTERNAL, UNKNOWN) to HTTP 500', () => {
+      const mapped = mapGrpcError(grpcError(grpc.status.INTERNAL), 'GetSession');
+      expect(mapped!.getStatus()).toBe(HttpStatus.INTERNAL_SERVER_ERROR);
+      expect(mapped!.errorCode).toBe(ErrorCode.INTERNAL_ERROR);
+    });
+
+    it('returns undefined for non-gRPC errors so callers rethrow unchanged', () => {
+      expect(mapGrpcError(new Error('plain'), 'GetSession')).toBeUndefined();
+      expect(mapGrpcError({ code: 'ECONNREFUSED' }, 'GetSession')).toBeUndefined();
+      expect(mapGrpcError(undefined, 'GetSession')).toBeUndefined();
     });
   });
 });
