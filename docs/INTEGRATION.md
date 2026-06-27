@@ -8,13 +8,13 @@
 
 Key methods to implement (observer-only surface, post direct-agent-auth):
 - `initialize()` — protocol version negotiation.
-- `subscribeSession({runId, runtimeSessionId, afterSequence?})` — read-only `StreamSession` observer; returns `{events, abort}`. **Never writes envelopes.** Per RFC-MACP-0006 §3.2 the provider writes exactly one passive-subscribe frame (`{subscribeSessionId, afterSequence}`) and **keeps the write side open** for the session's lifetime. Half-closing would signal "client is done" and cause the runtime to drop every envelope broadcast afterwards. The runtime replays accepted history from `afterSequence` (default 0 = full replay) then switches to live broadcast. See [runtime/docs/sdk-guide.md#streaming](../../macp-runtime/docs/sdk-guide.md#streaming) and [runtime/docs/API.md#message-transport](../../macp-runtime/docs/API.md#message-transport) for the canonical stream lifecycle.
-- `watchSessions()` — returns an `AsyncIterable<SessionLifecycleEvent>` for `created` / `resolved` / `expired` events. Backs `SessionDiscoveryService`. Canonical RPC: [runtime/docs/API.md#session-lifecycle](../../macp-runtime/docs/API.md#session-lifecycle); SDK-side discovery patterns: [python-sdk/docs/guides/session-discovery.md](../../python-sdk/docs/guides/session-discovery.md).
-- `watchSignals()` — returns an `AsyncIterable<RawRuntimeEvent>` of ambient Signal/Progress envelopes off the runtime's `signal_bus`. Backs `SignalConsumerService` — token-usage signals (`llm.call.completed`) arrive here, not on per-session streams. See [runtime/docs/API.md#streaming-watches](../../macp-runtime/docs/API.md#streaming-watches).
+- `subscribeSession({runId, runtimeSessionId, afterSequence?})` — read-only `StreamSession` observer; returns `{events, abort}`. **Never writes envelopes.** Per RFC-MACP-0006 §3.2 the provider writes exactly one passive-subscribe frame (`{subscribeSessionId, afterSequence}`) and **keeps the write side open** for the session's lifetime. Half-closing would signal "client is done" and cause the runtime to drop every envelope broadcast afterwards. The runtime replays accepted history from `afterSequence` (default 0 = full replay) then switches to live broadcast. See [macp-runtime/docs/sdk-guide.md#streaming](../../macp-runtime/docs/sdk-guide.md#streaming) and [macp-runtime/docs/API.md#message-transport](../../macp-runtime/docs/API.md#message-transport) for the canonical stream lifecycle.
+- `watchSessions()` — returns an `AsyncIterable<SessionLifecycleEvent>` for `created` / `resolved` / `expired` events. Backs `SessionDiscoveryService`. Canonical RPC: [macp-runtime/docs/API.md#session-lifecycle](../../macp-runtime/docs/API.md#session-lifecycle); SDK-side discovery patterns: [macp-sdk-python/docs/guides/session-discovery.md](../../macp-sdk-python/docs/guides/session-discovery.md).
+- `watchSignals()` — returns an `AsyncIterable<RawRuntimeEvent>` of ambient Signal/Progress envelopes off the runtime's `signal_bus`. Backs `SignalConsumerService` — token-usage signals (`llm.call.completed`) arrive here, not on per-session streams. See [macp-runtime/docs/API.md#streaming-watches](../../macp-runtime/docs/API.md#streaming-watches).
 - `getSession()` — poll for session state (used by the observer's `pollForOpenSession` loop).
 - `cancelSession()` — only called when `run.metadata.cancellationDelegated === true` (Option B in direct-agent-auth §Cancellation design).
 - `getManifest()` / `listModes()` / `listRoots()` / `health()` — metadata.
-- `registerPolicy()` / `unregisterPolicy()` / `getPolicy()` / `listPolicies()` — governance. Rule schemas and evaluation semantics: [runtime/docs/policy.md](../../macp-runtime/docs/policy.md) (RFC-MACP-0012).
+- `registerPolicy()` / `unregisterPolicy()` / `getPolicy()` / `listPolicies()` — governance. Rule schemas and evaluation semantics: [macp-runtime/docs/policy.md](../../macp-runtime/docs/policy.md) (RFC-MACP-0012).
 
 ## Agents emit envelopes directly
 
@@ -22,9 +22,9 @@ Agents authenticate to the runtime with their own Bearer tokens (RFC-MACP-0004 �
 
 For the agent-side bootstrap and how `sessionId` flows from `POST /runs` to the initiator and non-initiator agents, see:
 
-- **Python SDK** — [guides/direct-agent-auth.md](../../python-sdk/docs/guides/direct-agent-auth.md) (bootstrap shape, initiator vs non-initiator, `expected_sender`, cancellation) and [guides/agent-framework.md](../../python-sdk/docs/guides/agent-framework.md) (`from_bootstrap` factory + handler context)
-- **TypeScript SDK** — [README.md § Agent Framework](../../typescript-sdk/README.md#agent-framework) and [docs/guides/agent-framework.md](../../typescript-sdk/docs/guides/agent-framework.md) (`fromBootstrap()` + strategies)
-- **Migration** — `../../ui-console/plans/direct-agent-auth.md` (end-to-end story of the 2026-04-15 refactor)
+- **Python SDK** — [guides/direct-agent-auth.md](../../macp-sdk-python/docs/guides/direct-agent-auth.md) (bootstrap shape, initiator vs non-initiator, `expected_sender`, cancellation) and [guides/agent-framework.md](../../macp-sdk-python/docs/guides/agent-framework.md) (`from_bootstrap` factory + handler context)
+- **TypeScript SDK** — [README.md § Agent Framework](../../macp-sdk-typescript/README.md#agent-framework) and [docs/guides/agent-framework.md](../../macp-sdk-typescript/docs/guides/agent-framework.md) (`fromBootstrap()` + strategies)
+- **Migration** — `../../macp-ui-console/plans/direct-agent-auth.md` (end-to-end story of the 2026-04-15 refactor)
 
 ## Authenticating to the runtime
 
@@ -36,7 +36,7 @@ Per-gRPC-call credential resolution uses a three-step fallback chain:
 | **Static Bearer** | JWT disabled or mint failed | `RUNTIME_BEARER_TOKEN` |
 | **Dev header** (local only) | `RUNTIME_USE_DEV_HEADER=true` | `RUNTIME_DEV_AGENT_ID` (`control-plane`) |
 
-Mint behaviour: token cached until expiry minus 30s refresh buffer minus 10s clock-skew, concurrent refreshes deduped, mint failures log `auth_mint_failure` and fall through to the static Bearer. For the runtime-side token shape (`MACP_AUTH_TOKENS_JSON`), TLS/mTLS, and the JWT claim expectations, see [runtime/docs/getting-started.md#authentication](../../macp-runtime/docs/getting-started.md#authentication) and [runtime/docs/deployment.md#authentication](../../macp-runtime/docs/deployment.md#authentication).
+Mint behaviour: token cached until expiry minus 30s refresh buffer minus 10s clock-skew, concurrent refreshes deduped, mint failures log `auth_mint_failure` and fall through to the static Bearer. For the runtime-side token shape (`MACP_AUTH_TOKENS_JSON`), TLS/mTLS, and the JWT claim expectations, see [macp-runtime/docs/getting-started.md#authentication](../../macp-runtime/docs/getting-started.md#authentication) and [macp-runtime/docs/deployment.md#authentication](../../macp-runtime/docs/deployment.md#authentication).
 
 ## Consuming SSE Streams
 
@@ -120,8 +120,8 @@ before the DB pool closes. Without this, pending `persistRawAndCanonical` chain 
 would race the pool teardown and surface as "Test suite failed to run" even when every
 assertion passed.
 
-Python agent E2E tests live in the `examples-service` repo and run against the runtime
-directly via `macp-sdk-python` — see `examples-service/README.md`.
+Python agent E2E tests live in the `macp-playground` repo and run against the runtime
+directly via `macp-sdk-python` — see `macp-playground/README.md`.
 
 ## Environment Variables
 

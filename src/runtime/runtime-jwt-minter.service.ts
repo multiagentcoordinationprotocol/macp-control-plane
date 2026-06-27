@@ -14,7 +14,7 @@ interface MintResponse {
 
 /**
  * Mints and caches the control-plane's runtime JWT. Mirrors the
- * `AuthTokenMinterService` pattern in examples-service but is
+ * `AuthTokenMinterService` pattern in macp-playground but is
  * single-tenant — only ever mints for the `control-plane` sender with
  * `is_observer: true`.
  *
