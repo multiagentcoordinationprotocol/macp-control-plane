@@ -366,17 +366,32 @@ export class ProjectionService {
             voteContributions.length > 0
               ? approveCount / voteContributions.length
               : (explicitConfidence ?? next.decision.current?.confidence);
-          next.decision.current = {
-            ...(next.decision.current ?? { finalized: false }),
-            action: proposalId || String(event.subject?.id ?? 'proposal'),
-            confidence: aggregateConfidence,
-            reasons: [
-              String(proposalPayload?.reason ?? proposalPayload?.summary ?? proposalPayload?.rationale ?? event.type)
-            ].filter(Boolean),
-            finalized: false,
-            proposalId,
-            proposals: allContributions.slice(-50)
-          };
+          // A committed decision is terminal. Proposal/Vote/Evaluation envelopes
+          // can still arrive — or be replayed (stream reconnect) — AFTER the
+          // `decision.finalized` that committed the run, possibly out of seq
+          // order. They must NOT un-finalize the decision or relabel the
+          // committed action/outcome; otherwise a completed run shows
+          // `finalized: false` with the action stuck on a proposal id. Keep the
+          // terminal decision and only accumulate the contribution for the
+          // per-contributor table.
+          if (next.decision.current?.finalized === true) {
+            next.decision.current = {
+              ...next.decision.current,
+              proposals: allContributions.slice(-50)
+            };
+          } else {
+            next.decision.current = {
+              ...(next.decision.current ?? { finalized: false }),
+              action: proposalId || String(event.subject?.id ?? 'proposal'),
+              confidence: aggregateConfidence,
+              reasons: [
+                String(proposalPayload?.reason ?? proposalPayload?.summary ?? proposalPayload?.rationale ?? event.type)
+              ].filter(Boolean),
+              finalized: false,
+              proposalId,
+              proposals: allContributions.slice(-50)
+            };
+          }
 
           // Update voteTally if this is a vote-bearing contribution
           if (contribution.vote && proposalId) {
