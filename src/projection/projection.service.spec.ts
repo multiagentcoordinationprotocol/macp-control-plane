@@ -384,6 +384,35 @@ describe('ProjectionService', () => {
       expect(result.decision.current!.proposalId).toBe('prop-1');
     });
 
+    it('keeps the decision finalized when a Proposal/Vote arrives or replays AFTER decision.finalized', () => {
+      // Regression: with two-phase deliberation + stream reconnects, a
+      // proposal.updated (e.g. a late/replayed Vote) can be applied after the
+      // decision.finalized that committed the run. It must NOT un-finalize the
+      // decision or relabel the committed action — otherwise a completed run
+      // renders as `finalized: false` with the action stuck on a proposal id.
+      const base = service.empty('run-1');
+      const finalize = makeEvent({
+        seq: 10,
+        type: 'decision.finalized',
+        subject: { kind: 'decision', id: 'dec-1' },
+        data: { decodedPayload: { action: 'decline', outcome_positive: false, commitmentId: 'prop-1-final' } }
+      });
+      const lateVote = makeEvent({
+        seq: 11,
+        type: 'proposal.updated',
+        subject: { kind: 'proposal', id: 'prop-1' },
+        data: { messageType: 'Vote', sender: 'growth-agent', decodedPayload: { proposalId: 'prop-1', vote: 'APPROVE' } }
+      });
+
+      const result = service.applyEvents(base, [finalize, lateVote]);
+
+      expect(result.decision.current!.finalized).toBe(true);
+      expect(result.decision.current!.action).toBe('decline');
+      expect(result.decision.current!.outcomePositive).toBe(false);
+      // the late contribution is still recorded for the per-contributor table
+      expect(result.decision.current!.proposals?.some((p) => p.participantId === 'growth-agent')).toBe(true);
+    });
+
     it('decision.finalized with explicit outcome_positive honors the boolean (§1.3)', () => {
       const base = service.empty('run-1');
       const event = makeEvent({
