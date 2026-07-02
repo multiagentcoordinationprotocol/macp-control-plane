@@ -5,7 +5,8 @@ WORKDIR /app
 COPY package.json package-lock.json* .npmrc ./
 ARG NPM_TOKEN
 RUN echo "//npm.pkg.github.com/:_authToken=${NPM_TOKEN}" >> .npmrc && \
-    npm ci --ignore-scripts && \
+    npm ci --ignore-scripts \
+      --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 && \
     rm -f .npmrc
 
 COPY tsconfig.json tsconfig.build.json nest-cli.json ./
@@ -23,7 +24,8 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 COPY package.json package-lock.json* .npmrc ./
 ARG NPM_TOKEN
 RUN echo "//npm.pkg.github.com/:_authToken=${NPM_TOKEN}" >> .npmrc && \
-    npm ci --ignore-scripts --omit=dev && \
+    npm ci --ignore-scripts --omit=dev \
+      --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 && \
     npm cache clean --force && \
     rm -f .npmrc
 
