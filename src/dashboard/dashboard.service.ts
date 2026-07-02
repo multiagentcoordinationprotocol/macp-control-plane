@@ -364,17 +364,35 @@ export class DashboardService {
   }
 
   private async getSuccessRate(cutoff: SQL, bucket: string, filters: RunFilters) {
-    // completed / (completed + failed + cancelled), as percent (0-100) per bucket
+    // positive-outcome completions / (completed+failed+cancelled), as percent (0-100) per bucket.
+    // A completed run whose latest decision.finalized carries outcome_positive=false is a
+    // negative committed outcome (reject-majority resolved) — a valid resolution but not a
+    // "success", so it is excluded from the numerator while remaining in the denominator.
     const runWhere = runsWhereClause(filters);
     const result = await this.database.db.execute(sql`
       SELECT
         date_trunc(${sql.raw(`'${bucket}'`)}, r.created_at) AS bucket,
         CASE
           WHEN count(*) FILTER (WHERE r.status IN ('completed','failed','cancelled')) = 0 THEN 0
-          ELSE (count(*) FILTER (WHERE r.status = 'completed')::float
+          ELSE (
+            count(*) FILTER (
+              WHERE r.status = 'completed' AND COALESCE(d.negative, false) = false
+            )::float
             / count(*) FILTER (WHERE r.status IN ('completed','failed','cancelled'))::float * 100)
         END AS rate
       FROM runs r
+      LEFT JOIN LATERAL (
+        -- latest-wins: a supersede chain replaces the prior commitment, so the final
+        -- decision.finalized (highest seq) decides the run's outcome sign
+        SELECT (
+          (e.data->'decodedPayload'->>'outcome_positive')::boolean = false
+          OR (e.data->'decodedPayload'->>'outcomePositive')::boolean = false
+        ) AS negative
+        FROM run_events_canonical e
+        WHERE e.run_id = r.id AND e.type = 'decision.finalized'
+        ORDER BY e.seq DESC
+        LIMIT 1
+      ) d ON true
       WHERE r.created_at >= ${cutoff}
         AND ${runWhere}
       GROUP BY 1

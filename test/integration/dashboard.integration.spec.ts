@@ -1,7 +1,10 @@
+import { sql } from 'drizzle-orm';
 import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { decisionHappyScript } from '../fixtures/decision-mode';
 import { testRuntimeKind } from '../helpers/runtime-kind';
 import { waitFor } from '../helpers/wait-for';
+import { DatabaseService } from '../../src/db/database.service';
+import { truncateAll } from '../helpers/test-db';
 
 describe('Dashboard Overview (integration)', () => {
   let ctx: TestAppContext;
@@ -102,6 +105,113 @@ describe('Dashboard Overview (integration)', () => {
       expect(run).toHaveProperty('runtimeKind');
       expect(run).toHaveProperty('createdAt');
     }
+  });
+});
+
+describe('Dashboard Success Rate — negative committed outcomes (integration)', () => {
+  let ctx: TestAppContext;
+
+  beforeAll(async () => {
+    ctx = await createTestApp();
+  });
+
+  afterAll(async () => {
+    if (ctx) await ctx.app.close();
+  });
+
+  it('excludes negative committed decisions from the success numerator', async () => {
+    const db = ctx.module.get(DatabaseService);
+    // Clean slate so the aggregate reflects only the two seeded runs.
+    await truncateAll(db.pool);
+
+    const positiveRun = '11111111-1111-1111-1111-111111111111';
+    const negativeRun = '22222222-2222-2222-2222-222222222222';
+
+    // Two completed decision runs in the same window: one resolved positively,
+    // one a negative committed outcome (reject-majority resolved → still 'completed').
+    await db.db.execute(sql`
+      INSERT INTO runs (id, status, mode, runtime_kind, created_at)
+      VALUES
+        (${positiveRun}::uuid, 'completed', 'decision', 'rust', now()),
+        (${negativeRun}::uuid, 'completed', 'decision', 'rust', now())
+    `);
+
+    await db.db.execute(sql`
+      INSERT INTO run_events_canonical
+        (id, run_id, seq, ts, type, source_kind, source_name, data)
+      VALUES
+        (${'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'}::uuid, ${positiveRun}::uuid, 1, now(),
+         'decision.finalized', 'runtime', 'test',
+         ${JSON.stringify({ decodedPayload: { outcome_positive: true } })}::jsonb),
+        (${'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'}::uuid, ${negativeRun}::uuid, 1, now(),
+         'decision.finalized', 'runtime', 'test',
+         ${JSON.stringify({ decodedPayload: { outcome_positive: false } })}::jsonb)
+    `);
+
+    const result = (await ctx.client.request('GET', '/dashboard/overview')) as any;
+
+    // 1 positive completed + 1 declined completed, 0 failed/cancelled → 1/2 = 50%.
+    // (Without the outcome-awareness the declined run would inflate this to 100%.)
+    expect(result.charts.successRate.data).toEqual([50]);
+  });
+
+  it('treats a supersede chain by latest-wins (final negative → excluded)', async () => {
+    const db = ctx.module.get(DatabaseService);
+    await truncateAll(db.pool);
+
+    const run = '33333333-3333-3333-3333-333333333333';
+    await db.db.execute(sql`
+      INSERT INTO runs (id, status, mode, runtime_kind, created_at)
+      VALUES (${run}::uuid, 'completed', 'decision', 'rust', now())
+    `);
+    // First finalize positive, later superseded by a negative finalize (higher seq).
+    await db.db.execute(sql`
+      INSERT INTO run_events_canonical
+        (id, run_id, seq, ts, type, source_kind, source_name, data)
+      VALUES
+        (${'cccccccc-cccc-cccc-cccc-cccccccccccc'}::uuid, ${run}::uuid, 1, now(),
+         'decision.finalized', 'runtime', 'test',
+         ${JSON.stringify({ decodedPayload: { outcome_positive: true } })}::jsonb),
+        (${'dddddddd-dddd-dddd-dddd-dddddddddddd'}::uuid, ${run}::uuid, 2, now(),
+         'decision.finalized', 'runtime', 'test',
+         ${JSON.stringify({ decodedPayload: { outcome_positive: false } })}::jsonb)
+    `);
+
+    const result = (await ctx.client.request('GET', '/dashboard/overview')) as any;
+
+    // Latest finalize is negative → the run is declined → excluded from numerator.
+    // Sole terminal run → 0/1 = 0%.
+    expect(result.charts.successRate.data).toEqual([0]);
+  });
+
+  it('counts completed runs with no decision.finalized as successes (COALESCE guard)', async () => {
+    const db = ctx.module.get(DatabaseService);
+    await truncateAll(db.pool);
+
+    // Non-decision / never-finalized runs have no decision.finalized event, so the
+    // LATERAL yields d.negative = NULL. COALESCE(NULL,false)=false must keep them in
+    // the numerator — this guards the pre-existing behavior for task/handoff/etc. modes.
+    const taskRun = '44444444-4444-4444-4444-444444444444';
+    const declinedRun = '55555555-5555-5555-5555-555555555555';
+    await db.db.execute(sql`
+      INSERT INTO runs (id, status, mode, runtime_kind, created_at)
+      VALUES
+        (${taskRun}::uuid, 'completed', 'task', 'rust', now()),
+        (${declinedRun}::uuid, 'completed', 'decision', 'rust', now())
+    `);
+    await db.db.execute(sql`
+      INSERT INTO run_events_canonical
+        (id, run_id, seq, ts, type, source_kind, source_name, data)
+      VALUES
+        (${'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'}::uuid, ${declinedRun}::uuid, 1, now(),
+         'decision.finalized', 'runtime', 'test',
+         ${JSON.stringify({ decodedPayload: { outcome_positive: false } })}::jsonb)
+    `);
+
+    const result = (await ctx.client.request('GET', '/dashboard/overview')) as any;
+
+    // task run (no finalize → success) + declined decision (excluded) → 1/2 = 50%.
+    expect(result.charts.successRate.data).toEqual([50]);
   });
 });
 
