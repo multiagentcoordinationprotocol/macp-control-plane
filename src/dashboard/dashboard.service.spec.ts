@@ -227,6 +227,55 @@ describe('DashboardService', () => {
     });
   });
 
+  describe('getOverview success rate (outcome-aware)', () => {
+    // getSuccessRate is the 13th db.execute call within getOverview's Promise.all
+    // (3 KPI + runVolume + signalVolume + errorClasses + 2 latency + throughput +
+    //  queueDepth + latencyPercentiles + cost = 12, then successRate = 13).
+    function mockUpToSuccessRate(successRateRows: Record<string, unknown>[]) {
+      const dbExecute = mockDb.db.execute as jest.Mock;
+      dbExecute
+        // getKpis: runs / signals / tokens
+        .mockResolvedValueOnce({
+          rows: [{ totalRuns: 3, activeRuns: 0, completedRuns: 3, failedRuns: 0, cancelledRuns: 0 }]
+        })
+        .mockResolvedValueOnce({ rows: [{ totalSignals: 0 }] })
+        .mockResolvedValueOnce({ rows: [{ totalTokens: 0, totalCostUsd: 0 }] })
+        .mockResolvedValueOnce({ rows: [] }) // runVolume
+        .mockResolvedValueOnce({ rows: [] }) // signalVolume
+        .mockResolvedValueOnce({ rows: [] }) // errorClasses
+        .mockResolvedValueOnce({ rows: [{}] }) // latency avg
+        .mockResolvedValueOnce({ rows: [] }) // latency series
+        .mockResolvedValueOnce({ rows: [] }) // throughput
+        .mockResolvedValueOnce({ rows: [] }) // queueDepth
+        .mockResolvedValueOnce({ rows: [] }) // latencyPercentiles
+        .mockResolvedValueOnce({ rows: [] }) // cost
+        .mockResolvedValueOnce({ rows: successRateRows }); // successRate
+      // remaining calls (decisionOutcome, perScenario) fall through to the {rows:[]} default
+    }
+
+    it('maps the outcome-aware success rate through to charts.successRate', async () => {
+      // 2 positive-completed + 1 declined-completed + 0 failed → 2/3 → 66.67%.
+      // The SQL arithmetic runs in Postgres (validated by the integration test); here we
+      // assert the row → series pass-through mapping.
+      mockUpToSuccessRate([{ bucket: '2026-07-01T00:00:00Z', rate: 66.67 }]);
+
+      const result = await service.getOverview({ window: '24h' });
+
+      expect(result.charts.successRate).toEqual({
+        labels: ['2026-07-01T00:00:00Z'],
+        data: [66.67]
+      });
+    });
+
+    it('returns an empty success-rate series when no terminal runs exist', async () => {
+      mockUpToSuccessRate([]);
+
+      const result = await service.getOverview({ window: '24h' });
+
+      expect(result.charts.successRate).toEqual({ labels: [], data: [] });
+    });
+  });
+
   describe('getAgentMetrics', () => {
     it('returns per-agent metrics from canonical events', async () => {
       mockDb.db.execute.mockResolvedValue({
