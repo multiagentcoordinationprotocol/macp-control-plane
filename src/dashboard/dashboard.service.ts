@@ -160,8 +160,23 @@ export class DashboardService {
           count(*) FILTER (WHERE status IN ('queued','starting','binding_session','running','suspended'))::int AS "activeRuns",
           count(*) FILTER (WHERE status = 'completed')::int AS "completedRuns",
           count(*) FILTER (WHERE status = 'failed')::int AS "failedRuns",
-          count(*) FILTER (WHERE status = 'cancelled')::int AS "cancelledRuns"
+          count(*) FILTER (WHERE status = 'cancelled')::int AS "cancelledRuns",
+          -- Resolved-but-declined runs: completed runs whose latest decision.finalized
+          -- carries a negative committed outcome (reject-majority resolved). They are a
+          -- subset of completedRuns — a valid resolution, but not a "success".
+          count(*) FILTER (WHERE r.status = 'completed' AND COALESCE(d.negative, false) = true)::int AS "declinedRuns"
         FROM runs r
+        LEFT JOIN LATERAL (
+          -- latest-wins: the final decision.finalized (highest seq) decides the outcome sign
+          SELECT (
+            (e.data->'decodedPayload'->>'outcome_positive')::boolean = false
+            OR (e.data->'decodedPayload'->>'outcomePositive')::boolean = false
+          ) AS negative
+          FROM run_events_canonical e
+          WHERE e.run_id = r.id AND e.type = 'decision.finalized'
+          ORDER BY e.seq DESC
+          LIMIT 1
+        ) d ON true
         WHERE r.created_at >= ${cutoff}
           AND ${runWhere}
       `),
@@ -186,12 +201,24 @@ export class DashboardService {
     const row = runResult.rows[0] as Record<string, number>;
     const signalRow = signalResult.rows[0] as Record<string, number>;
     const tokenRow = tokenResult.rows[0] as Record<string, number>;
+    const completedRuns = row.completedRuns ?? 0;
+    const failedRuns = row.failedRuns ?? 0;
+    const cancelledRuns = row.cancelledRuns ?? 0;
+    const declinedRuns = row.declinedRuns ?? 0;
+    // Outcome-aware aggregate success rate (0–1), matching the `successRate` chart
+    // series (getSuccessRate): positive-outcome completions over terminal runs.
+    // Declines resolved the session but are not successes, so they stay in the
+    // denominator and are removed from the numerator.
+    const terminalRuns = completedRuns + failedRuns + cancelledRuns;
+    const successRate = terminalRuns === 0 ? 0 : (completedRuns - declinedRuns) / terminalRuns;
     return {
       totalRuns: row.totalRuns ?? 0,
       activeRuns: row.activeRuns ?? 0,
-      completedRuns: row.completedRuns ?? 0,
-      failedRuns: row.failedRuns ?? 0,
-      cancelledRuns: row.cancelledRuns ?? 0,
+      completedRuns,
+      declinedRuns,
+      failedRuns,
+      cancelledRuns,
+      successRate,
       totalSignals: signalRow.totalSignals ?? 0,
       totalTokens: tokenRow.totalTokens ?? 0,
       totalCostUsd: Math.round((tokenRow.totalCostUsd ?? 0) * 100) / 100
