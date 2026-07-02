@@ -92,6 +92,9 @@ describe('DashboardService', () => {
       expect(result.kpis.completedRuns).toBe(7);
       expect(result.kpis.failedRuns).toBe(1);
       expect(result.kpis.cancelledRuns).toBe(0);
+      expect(result.kpis.declinedRuns).toBe(0);
+      // outcome-aware aggregate: (completed - declined) / (completed+failed+cancelled) = 7/8
+      expect(result.kpis.successRate).toBeCloseTo(7 / 8);
       expect(result.kpis.totalSignals).toBe(5);
       expect(result.kpis.totalTokens).toBe(1500);
       expect(result.kpis.totalCostUsd).toBe(0.06); // rounded to 2 decimals
@@ -160,6 +163,38 @@ describe('DashboardService', () => {
     it('uses 1 day bucket for 7d range', async () => {
       await service.getOverview({ window: '7d' });
       expect(mockDb.db.execute).toHaveBeenCalled();
+    });
+  });
+
+  describe('getOverview outcome-aware KPIs', () => {
+    it('reports declinedRuns and excludes them from the aggregate successRate', async () => {
+      // getKpis issues 3 queries (runs, signals, tokens) first; charts default to { rows: [] }.
+      (mockDb.db.execute as jest.Mock)
+        .mockResolvedValueOnce({
+          rows: [{ totalRuns: 4, activeRuns: 0, completedRuns: 3, declinedRuns: 1, failedRuns: 0, cancelledRuns: 0 }]
+        })
+        .mockResolvedValueOnce({ rows: [{ totalSignals: 0 }] })
+        .mockResolvedValueOnce({ rows: [{ totalTokens: 0, totalCostUsd: 0 }] });
+
+      const result = await service.getOverview({ window: '24h' });
+
+      expect(result.kpis.completedRuns).toBe(3);
+      expect(result.kpis.declinedRuns).toBe(1);
+      // (completed - declined) / (completed + failed + cancelled) = (3-1)/3
+      expect(result.kpis.successRate).toBeCloseTo(2 / 3);
+    });
+
+    it('successRate is 0 when there are no terminal runs', async () => {
+      (mockDb.db.execute as jest.Mock)
+        .mockResolvedValueOnce({
+          rows: [{ totalRuns: 2, activeRuns: 2, completedRuns: 0, declinedRuns: 0, failedRuns: 0, cancelledRuns: 0 }]
+        })
+        .mockResolvedValueOnce({ rows: [{ totalSignals: 0 }] })
+        .mockResolvedValueOnce({ rows: [{ totalTokens: 0, totalCostUsd: 0 }] });
+
+      const result = await service.getOverview({ window: '24h' });
+
+      expect(result.kpis.successRate).toBe(0);
     });
   });
 
