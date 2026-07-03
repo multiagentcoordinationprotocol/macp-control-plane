@@ -100,7 +100,8 @@ describe('RunManagerService', () => {
           provide: ProjectionService,
           useValue: {
             get: jest.fn(),
-            empty: jest.fn()
+            empty: jest.fn(),
+            rebuild: jest.fn()
           }
         },
         {
@@ -137,7 +138,8 @@ describe('RunManagerService', () => {
         {
           provide: EventRepository,
           useValue: {
-            listCanonicalByRun: jest.fn().mockResolvedValue([])
+            listCanonicalByRun: jest.fn().mockResolvedValue([]),
+            listCanonicalUpTo: jest.fn().mockResolvedValue([])
           }
         },
         {
@@ -602,6 +604,66 @@ describe('RunManagerService', () => {
       runRepository.findById.mockResolvedValue(null as any);
 
       await expect(service.getState('nonexistent')).rejects.toThrow(NotFoundException);
+    });
+
+    describe('stale terminal-decision self-heal', () => {
+      function staleTerminalProjection(): RunStateProjection {
+        const p = makeEmptyProjection('run-1');
+        p.run.status = 'completed';
+        p.decision = { current: { finalized: false, action: 'CUST-initial-review' } } as any;
+        return p;
+      }
+
+      it('rebuilds and returns the repaired projection when a decision was finalized but the stored projection missed it', async () => {
+        runRepository.findById.mockResolvedValue(makeRunRecord() as any);
+        projectionService.get.mockResolvedValue(staleTerminalProjection());
+        (service as any).metricsService.get.mockResolvedValue({ decisionCount: 1 });
+        (service as any).eventRepository.listCanonicalUpTo.mockResolvedValue([{ seq: 121, type: 'decision.finalized' }]);
+        const repaired = makeEmptyProjection('run-1');
+        repaired.run.status = 'completed';
+        repaired.decision = { current: { finalized: true, action: 'decline', outcomePositive: false } } as any;
+        projectionService.rebuild.mockResolvedValue(repaired);
+
+        const result = await service.getState('run-1');
+
+        expect(projectionService.rebuild).toHaveBeenCalledWith('run-1', expect.any(Array));
+        expect(result.decision.current?.finalized).toBe(true);
+        expect(result.decision.current?.action).toBe('decline');
+      });
+
+      it('does NOT rebuild a terminal run with no finalized decision (genuinely undecided)', async () => {
+        runRepository.findById.mockResolvedValue(makeRunRecord() as any);
+        projectionService.get.mockResolvedValue(staleTerminalProjection());
+        (service as any).metricsService.get.mockResolvedValue({ decisionCount: 0 });
+
+        const result = await service.getState('run-1');
+
+        expect(projectionService.rebuild).not.toHaveBeenCalled();
+        expect(result.decision.current?.finalized).toBe(false);
+      });
+
+      it('does NOT rebuild a non-terminal run even with an unfinalized decision', async () => {
+        const p = staleTerminalProjection();
+        p.run.status = 'running';
+        runRepository.findById.mockResolvedValue(makeRunRecord() as any);
+        projectionService.get.mockResolvedValue(p);
+
+        await service.getState('run-1');
+
+        expect(projectionService.rebuild).not.toHaveBeenCalled();
+      });
+
+      it('does NOT rebuild when the decision is already finalized', async () => {
+        const p = makeEmptyProjection('run-1');
+        p.run.status = 'completed';
+        p.decision = { current: { finalized: true, action: 'decline' } } as any;
+        runRepository.findById.mockResolvedValue(makeRunRecord() as any);
+        projectionService.get.mockResolvedValue(p);
+
+        await service.getState('run-1');
+
+        expect(projectionService.rebuild).not.toHaveBeenCalled();
+      });
     });
   });
 });

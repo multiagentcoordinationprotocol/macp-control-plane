@@ -882,6 +882,26 @@ describe('ProjectionService', () => {
   });
 
   // -----------------------------------------------------------------------
+  // rebuild
+  // -----------------------------------------------------------------------
+
+  describe('rebuild()', () => {
+    it('force-persists the replayed projection so an authoritative rebuild always lands', async () => {
+      mockProjectionRepository.upsert.mockResolvedValue(undefined);
+      const events: CanonicalEvent[] = [
+        makeEvent({ type: 'run.created', seq: 1, data: { status: 'starting' } }),
+        makeEvent({ type: 'run.completed', id: 'evt-2', seq: 5, data: { status: 'completed' } })
+      ];
+
+      await service.rebuild('run-1', events);
+
+      // 6th arg (force) must be true — otherwise the optimistic version guard
+      // drops the write when the stale projection already carries this seq.
+      expect(mockProjectionRepository.upsert).toHaveBeenCalledWith('run-1', expect.any(Object), 5, 3, undefined, true);
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // replayStateAt
   // -----------------------------------------------------------------------
 

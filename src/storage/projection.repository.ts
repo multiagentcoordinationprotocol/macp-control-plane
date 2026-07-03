@@ -17,7 +17,21 @@ export class ProjectionRepository {
     return rows[0] ?? null;
   }
 
-  async upsert(runId: string, projection: RunStateProjection, version: number, schemaVersion?: number, tx?: Tx) {
+  /**
+   * @param force When true, bypass the optimistic `version < ${version}` guard
+   * and overwrite unconditionally. Used by authoritative full rebuilds, which
+   * must win even when the stored projection already carries the same (or a
+   * higher) version — e.g. repairing a stale terminal-run projection whose
+   * decision.finalized was dropped by a cross-stream write race.
+   */
+  async upsert(
+    runId: string,
+    projection: RunStateProjection,
+    version: number,
+    schemaVersion?: number,
+    tx?: Tx,
+    force = false
+  ) {
     const db = tx ?? this.database.db;
     const data = {
       schemaVersion: schemaVersion ?? 0,
@@ -39,7 +53,10 @@ export class ProjectionRepository {
       .onConflictDoUpdate({
         target: runProjections.runId,
         set: { version, ...data },
-        setWhere: sql`${runProjections.version} < ${version}`
+        // Normal writes are monotonic (a higher-version write wins, so an
+        // out-of-order lower-version write can't clobber). Forced rebuilds skip
+        // the guard so an authoritative replay always lands.
+        ...(force ? {} : { setWhere: sql`${runProjections.version} < ${version}` })
       });
   }
 }

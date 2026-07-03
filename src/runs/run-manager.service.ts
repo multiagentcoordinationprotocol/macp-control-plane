@@ -461,7 +461,42 @@ export class RunManagerService {
 
   async getState(runId: string): Promise<RunStateProjection> {
     await this.getRun(runId);
-    return (await this.projectionService.get(runId)) ?? this.projectionService.empty(runId);
+    const projection = (await this.projectionService.get(runId)) ?? this.projectionService.empty(runId);
+    return this.healStaleTerminalDecision(runId, projection);
+  }
+
+  /**
+   * Repair a terminal run whose stored decision projection is not finalized even
+   * though a `decision.finalized` was actually committed. This happens when the
+   * global session-discovery watcher marks the run completed (emitting
+   * `run.completed`) while the per-run stream applies the later
+   * `decision.finalized` — a cross-stream write race that can leave the stored
+   * projection stale. We rebuild from the full event log (force-persisted) so the
+   * fix sticks, and only when a decision was genuinely finalized (metrics count),
+   * so a legitimately-undecided terminal run (e.g. a no-consensus cancellation)
+   * is never needlessly rebuilt on every read.
+   */
+  private async healStaleTerminalDecision(
+    runId: string,
+    projection: RunStateProjection
+  ): Promise<RunStateProjection> {
+    const terminal = ['completed', 'failed', 'cancelled'].includes(projection.run.status);
+    const decisionUnfinalized = !!projection.decision.current && projection.decision.current.finalized !== true;
+    if (!terminal || !decisionUnfinalized) return projection;
+
+    const metrics = await this.metricsService.get(runId);
+    if (!metrics || (metrics.decisionCount ?? 0) <= 0) return projection;
+
+    const events = await this.eventRepository.listCanonicalUpTo(runId);
+    const rebuilt = await this.projectionService.rebuild(
+      runId,
+      events as unknown as Parameters<typeof this.projectionService.rebuild>[1]
+    );
+    if (rebuilt.decision.current?.finalized === true) {
+      this.logger.warn(`self-healed stale decision projection for terminal run ${runId}`);
+      return rebuilt;
+    }
+    return projection;
   }
 
   private async enrichRunMetadata(
