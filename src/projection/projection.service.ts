@@ -535,7 +535,12 @@ export class ProjectionService {
   async rebuild(runId: string, events: CanonicalEvent[]): Promise<RunStateProjection> {
     const projection = this.applyEvents(this.empty(runId), events);
     const version = events.at(-1)?.seq ?? 0;
-    await this.projectionRepository.upsert(runId, projection, version, PROJECTION_SCHEMA_VERSION);
+    // Force-write: a rebuild replays the full event log and is authoritative.
+    // Without force, the optimistic version guard drops the write when the
+    // stored (possibly stale) projection already carries this same latest seq —
+    // which is exactly the case when repairing a terminal run whose
+    // decision.finalized was lost to a cross-stream race.
+    await this.projectionRepository.upsert(runId, projection, version, PROJECTION_SCHEMA_VERSION, undefined, true);
     this.logger.log(`projection rebuilt for run ${runId} at schema version ${PROJECTION_SCHEMA_VERSION}`);
     return projection;
   }
