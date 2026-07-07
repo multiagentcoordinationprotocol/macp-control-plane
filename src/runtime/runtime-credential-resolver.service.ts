@@ -50,7 +50,13 @@ export class RuntimeCredentialResolverService implements RuntimeCredentialResolv
     if (this.config.runtimeBearerToken) {
       metadata.authorization = `Bearer ${this.config.runtimeBearerToken}`;
     } else if (this.config.runtimeUseDevHeader) {
-      metadata['x-macp-agent-id'] = sender;
+      // Runtime v0.5.0 removed the `x-macp-agent-id` dev-header path entirely
+      // (macp-auth `authenticate_metadata` is bearer-only). Its dev-mode auth
+      // (no auth configured + MACP_ALLOW_INSECURE=1) accepts *any* bearer and
+      // uses the token value as the sender identity, so we send the dev agent
+      // id as a bearer. This keeps the CP's `macp-control-plane` identity while
+      // being accepted by v0.5.0 dev-mode runtimes.
+      metadata.authorization = `Bearer ${sender}`;
     }
 
     return { metadata, sender };

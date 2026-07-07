@@ -210,3 +210,43 @@ describe('RustRuntimeProvider.subscribeSession — passive-subscribe frame (RFC-
     expect(envelopeEvents[0].envelope?.messageId).toBe('m2');
   });
 });
+
+describe('RustRuntimeProvider.listSessions — pagination (T6, 0.1.6)', () => {
+  it('follows next_page_token across pages and concatenates all sessions', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream);
+
+    const unary = jest
+      .spyOn(provider as unknown as { unary: (...a: unknown[]) => Promise<unknown> }, 'unary')
+      .mockImplementationOnce(async () => ({
+        sessions: [{ sessionId: 's1', state: 'SESSION_STATE_OPEN' }],
+        nextPageToken: 'page-2'
+      }))
+      .mockImplementationOnce(async () => ({
+        sessions: [{ sessionId: 's2', state: 'SESSION_STATE_OPEN' }],
+        nextPageToken: ''
+      }));
+
+    const result = await provider.listSessions();
+
+    expect(result.map((s) => s.sessionId)).toEqual(['s1', 's2']);
+    expect(unary).toHaveBeenCalledTimes(2);
+    // First call sends an empty page token, second echoes the server's token.
+    expect(unary.mock.calls[0][1]).toEqual({ pageToken: '' });
+    expect(unary.mock.calls[1][1]).toEqual({ pageToken: 'page-2' });
+  });
+
+  it('returns after a single call when next_page_token is empty (v0.5.0 behavior)', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream);
+
+    const unary = jest
+      .spyOn(provider as unknown as { unary: (...a: unknown[]) => Promise<unknown> }, 'unary')
+      .mockResolvedValue({ sessions: [{ sessionId: 's1', state: 'SESSION_STATE_OPEN' }] });
+
+    const result = await provider.listSessions();
+
+    expect(result).toHaveLength(1);
+    expect(unary).toHaveBeenCalledTimes(1);
+  });
+});

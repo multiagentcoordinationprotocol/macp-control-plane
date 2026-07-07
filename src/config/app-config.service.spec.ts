@@ -269,6 +269,25 @@ describe('AppConfigService', () => {
       expect(() => config.onModuleInit()).toThrow('DB_POOL_MAX must be >= 2');
     });
 
+    it('should throw if relying on the dev-bearer fallback in production (no bearer, no auth-service)', () => {
+      process.env.RUNTIME_BEARER_TOKEN = '';
+      process.env.RUNTIME_USE_DEV_HEADER = 'true';
+      delete process.env.MACP_AUTH_SERVICE_URL;
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow(
+        'RUNTIME_BEARER_TOKEN (or MACP_AUTH_SERVICE_URL) must be set in production'
+      );
+    });
+
+    it('should not throw in production when a JWT auth-service URL is configured without a static bearer', () => {
+      process.env.RUNTIME_BEARER_TOKEN = '';
+      process.env.RUNTIME_USE_DEV_HEADER = 'true';
+      process.env.MACP_AUTH_SERVICE_URL = 'https://auth.example.com';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).not.toThrow();
+      delete process.env.MACP_AUTH_SERVICE_URL;
+    });
+
     it('should not throw when all production config is valid', () => {
       const config = new AppConfigService();
       expect(() => config.onModuleInit()).not.toThrow();

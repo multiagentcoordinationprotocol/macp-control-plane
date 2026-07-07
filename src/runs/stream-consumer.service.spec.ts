@@ -33,12 +33,14 @@ describe('StreamConsumerService', () => {
     } as unknown as jest.Mocked<RunEventService>;
 
     runtimeSessionRepository = {
-      updateState: jest.fn().mockResolvedValue(null)
+      updateState: jest.fn().mockResolvedValue(null),
+      updateStreamCursor: jest.fn().mockResolvedValue(null)
     } as unknown as jest.Mocked<RuntimeSessionRepository>;
 
     runManager = {
       markCompleted: jest.fn().mockResolvedValue({}),
-      markFailed: jest.fn().mockResolvedValue({})
+      markFailed: jest.fn().mockResolvedValue({}),
+      markCancelled: jest.fn().mockResolvedValue({})
     } as unknown as jest.Mocked<RunManagerService>;
 
     streamHub = {
@@ -51,7 +53,8 @@ describe('StreamConsumerService', () => {
       streamBackoffBaseMs: 250,
       streamBackoffMaxMs: 30000,
       streamIdleTimeoutMs: 120000,
-      streamMaxRetries: 5
+      streamMaxRetries: 5,
+      streamResumeEnabled: true
     } as AppConfigService;
 
     service = new StreamConsumerService(
@@ -64,7 +67,8 @@ describe('StreamConsumerService', () => {
       config,
       {
         activeStreams: { inc: jest.fn(), dec: jest.fn() },
-        streamReconnectsTotal: { inc: jest.fn() }
+        streamReconnectsTotal: { inc: jest.fn() },
+        streamResumeGapTotal: { inc: jest.fn() }
       } as unknown as InstrumentationService,
       {
         withRunSpan: jest.fn(<T>(_runId: string, _name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
@@ -316,6 +320,193 @@ describe('StreamConsumerService', () => {
       expect(streamHub.complete).toHaveBeenCalledWith('run-fail-test');
       expect(marker.finalized).toBe(true);
       expect(marker.aborted).toBe(true);
+    });
+
+    it('should call markCancelled (not markFailed) for cancelled status (T10)', async () => {
+      const marker = { aborted: false, finalized: false, connected: true, lastProcessedSeq: 0 };
+      const finalizeRun = (service as any).finalizeRun.bind(service);
+
+      await finalizeRun('run-cancel-test', marker, 'cancelled');
+
+      expect(runManager.markCancelled).toHaveBeenCalledWith('run-cancel-test');
+      expect(runManager.markFailed).not.toHaveBeenCalled();
+      expect(streamHub.complete).toHaveBeenCalledWith('run-cancel-test');
+      expect(marker.finalized).toBe(true);
+    });
+  });
+
+  describe('envelope-ordinal tracking + stream resume (T7)', () => {
+    const baseParams = {
+      runId: 'run-1',
+      execution: {
+        mode: 'live' as const,
+        runtime: { kind: 'rust' },
+        session: {
+          modeName: 'decision',
+          modeVersion: '1.0',
+          configurationVersion: '1.0',
+          ttlMs: 60000,
+          participants: [{ id: 'agent-1' }]
+        }
+      },
+      runtimeKind: 'rust',
+      runtimeSessionId: 'session-1',
+      subscriberId: 'sub-1'
+    };
+
+    function envelope(id: string): any {
+      return {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope: {
+          messageId: id,
+          sessionId: 'session-1',
+          mode: 'macp.mode.decision.v1',
+          messageType: 'Vote',
+          sender: 'agent-1',
+          payload: Buffer.from(''),
+          timestampUnixMs: 1
+        }
+      };
+    }
+
+    function makeHandle(events: any[], errorAtEnd?: unknown): any {
+      return {
+        events: {
+          async *[Symbol.asyncIterator]() {
+            for (const e of events) yield e;
+            if (errorAtEnd) throw errorAtEnd;
+          }
+        },
+        abort: jest.fn()
+      };
+    }
+
+    function newMarker(): any {
+      return { aborted: false, finalized: false, connected: false, lastProcessedSeq: 0, envelopeOrdinal: 0 };
+    }
+
+    it('increments the envelope ordinal only for stream envelopes and persists it', async () => {
+      let seq = 0;
+      eventService.persistRawAndCanonical.mockImplementation(async () => [{ seq: ++seq, type: 'message.received', data: {} }] as any);
+
+      const marker = newMarker();
+      const handleRawEventInner = (service as any).handleRawEventInner.bind(service);
+      const ctx = { knownParticipants: new Set<string>(), execution: {}, runtimeSessionId: 'session-1' };
+
+      await handleRawEventInner('run-1', envelope('m1'), ctx, 'session-1', marker);
+      await handleRawEventInner('run-1', envelope('m2'), ctx, 'session-1', marker);
+      // A non-envelope (snapshot) must NOT bump the ordinal.
+      await handleRawEventInner(
+        'run-1',
+        { kind: 'session-snapshot', receivedAt: 't', sessionSnapshot: { state: 'SESSION_STATE_OPEN' } },
+        ctx,
+        'session-1',
+        marker
+      );
+
+      expect(marker.envelopeOrdinal).toBe(2);
+      expect(runtimeSessionRepository.updateStreamCursor).toHaveBeenLastCalledWith('run-1', expect.any(Number), 2);
+    });
+
+    it('resubscribes from the persisted envelope ordinal after a stream error', async () => {
+      (config as any).streamBackoffBaseMs = 1; // fast backoff for the test
+      let seq = 0;
+      eventService.persistRawAndCanonical.mockImplementation(async (_runId: string, raw: any) => {
+        if (raw.kind === 'session-snapshot' && raw.sessionSnapshot?.state === 'SESSION_STATE_RESOLVED') {
+          return [{ seq: ++seq, type: 'session.state.changed', data: { state: 'SESSION_STATE_RESOLVED' } }] as any;
+        }
+        if (raw.kind === 'stream-envelope') return [{ seq: ++seq, type: 'message.received', data: {} }] as any;
+        return [] as any;
+      });
+
+      const handle1 = makeHandle([envelope('m1'), envelope('m2')], new Error('disconnect'));
+      const handle2 = makeHandle([
+        envelope('m3'),
+        envelope('m4'),
+        { kind: 'session-snapshot', receivedAt: 't', sessionSnapshot: { sessionId: 'session-1', mode: '', state: 'SESSION_STATE_RESOLVED' } }
+      ]);
+      const mockProvider = { subscribeSession: jest.fn().mockReturnValueOnce(handle2), getSession: jest.fn() };
+      runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+      const marker = newMarker();
+      await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+      expect(mockProvider.subscribeSession).toHaveBeenCalledTimes(1);
+      expect(mockProvider.subscribeSession).toHaveBeenCalledWith({
+        runId: 'run-1',
+        runtimeSessionId: 'session-1',
+        afterSequence: 2
+      });
+      expect(marker.envelopeOrdinal).toBe(4);
+      expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
+    });
+
+    it('emits session.stream.gap and degrades to poll-only on a compacted-history FAILED_PRECONDITION', async () => {
+      const gapError = Object.assign(new Error('session history before ordinal 5 was compacted'), { code: 9 });
+      const handle1 = makeHandle([envelope('m1')], gapError);
+      const mockProvider = {
+        subscribeSession: jest.fn(),
+        getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
+      };
+      runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+      const marker = newMarker();
+      await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+      // Never resubscribe on a gap (would double-ingest history).
+      expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
+      expect(marker.historyGap).toBe(true);
+      const gapEmitted = eventService.emitControlPlaneEvents.mock.calls.some((call) =>
+        (call[1] as any[]).some((e) => e.type === 'session.stream.gap')
+      );
+      expect(gapEmitted).toBe(true);
+      // Poll fallback observed RESOLVED → run completed.
+      expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
+    });
+
+    it('does not resubscribe when STREAM_RESUME_ENABLED is false (legacy poll-degrade)', async () => {
+      (config as any).streamResumeEnabled = false;
+      const handle1 = makeHandle([envelope('m1')], new Error('disconnect'));
+      const mockProvider = {
+        subscribeSession: jest.fn(),
+        getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
+      };
+      runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+      const marker = newMarker();
+      await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+      expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
+      expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
+    });
+  });
+
+  describe('SESSION_STATE_CANCELLED terminal detection (T10, matrix #7)', () => {
+    it('finalizes the run as cancelled when session.state.changed reports CANCELLED', async () => {
+      // Simulate the normalizer emitting a CANCELLED session.state.changed event.
+      eventService.persistRawAndCanonical.mockResolvedValueOnce([
+        {
+          seq: 5,
+          type: 'session.state.changed',
+          data: { state: 'SESSION_STATE_CANCELLED', sessionId: 'sess-x' }
+        }
+      ] as any);
+
+      const marker = { aborted: false, finalized: false, connected: true, lastProcessedSeq: 0 };
+      const handleRawEventInner = (service as any).handleRawEventInner.bind(service);
+
+      await handleRawEventInner(
+        'run-cancel-state',
+        { kind: 'session-snapshot', receivedAt: new Date().toISOString(), sessionSnapshot: { state: 'SESSION_STATE_CANCELLED' } },
+        { knownParticipants: new Set<string>(), execution: {}, runtimeSessionId: 'sess-x' },
+        'sess-x',
+        marker
+      );
+
+      expect(runManager.markCancelled).toHaveBeenCalledWith('run-cancel-state');
+      expect(runManager.markFailed).not.toHaveBeenCalled();
+      expect(marker.finalized).toBe(true);
     });
   });
 });

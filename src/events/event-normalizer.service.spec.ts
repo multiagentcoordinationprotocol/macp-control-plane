@@ -360,6 +360,23 @@ describe('EventNormalizerService', () => {
       expect(proposalUpdated).toBeDefined();
       expect(proposalUpdated!.subject).toEqual({ kind: 'proposal', id: 'msg-1' });
     });
+
+    it('passes HandoffAccept `implicit` through the decoded payload (T5)', () => {
+      protoRegistry.decodeKnown.mockReturnValue({ handoffId: 'handoff-7', implicit: true });
+      const envelope = makeEnvelope({ messageType: 'HandoffAccept', mode: 'macp.mode.handoff.v1' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const proposalUpdated = events.find((e) => e.type === 'proposal.updated');
+      expect(proposalUpdated).toBeDefined();
+      expect((proposalUpdated!.data.decodedPayload as Record<string, unknown>).implicit).toBe(true);
+    });
   });
 
   describe('progress from task lifecycle', () => {

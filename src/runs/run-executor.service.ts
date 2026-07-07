@@ -17,7 +17,8 @@ import { StreamConsumerService } from './stream-consumer.service';
 
 /**
  * Validates a sessionId against the runtime's session validator (UUID v4/v7 or base64url 22+).
- * Mirrors `runtime/src/session.rs:146-177`.
+ * Mirrors `crates/macp-core/src/session.rs`. Runtime v0.5.0 accepts 36-char
+ * base64url session ids containing `-`; this permissive pattern already agrees.
  */
 function isValidSessionId(candidate: string): boolean {
   // UUID v4 / v7 pattern (any version 1-7).
@@ -336,7 +337,9 @@ export class RunExecutorService {
         {
           runtimeSessionId: sessionId,
           initiator: snapshot.initiator ?? '',
-          ack: { sessionState: snapshot.state }
+          ack: { sessionState: snapshot.state },
+          contextId: snapshot.contextId,
+          extensionKeys: snapshot.extensionKeys
         },
         initResult.capabilities as unknown as Record<string, unknown>
       );

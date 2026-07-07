@@ -15,8 +15,30 @@ services:
       timeout: 2s
       retries: 10
 
-  # Only started with: docker compose --profile with-runtime up
+  # Pinned release image. Started with: docker compose --profile with-runtime up
+  # Runtime v0.5.0 refuses to boot without an explicit MACP_ALLOW_INSECURE=1
+  # (the published image no longer bakes it in). MACP_ALLOW_DEV_SENDER_HEADER was
+  # removed upstream — the dev-header auth path no longer exists.
   runtime:
+    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:v0.5.0
+    ports:
+      - '50051:50051'
+    environment:
+      MACP_ALLOW_INSECURE: '1'
+    profiles:
+      - with-runtime
+    healthcheck:
+      # NOTE: verify the published v0.5.0 image still ships /bin/grpc_health_probe;
+      # if not, switch to a grpcurl/TCP probe.
+      test: ['CMD', '/bin/grpc_health_probe', '-addr=:50051']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Local runtime-development variant: builds from the sibling ../macp-runtime
+  # checkout instead of pulling the release. Started with:
+  #   docker compose -f docker-compose.test.yml --profile with-runtime-src up runtime-src
+  runtime-src:
     build:
       context: ../macp-runtime
       dockerfile: Dockerfile
@@ -24,9 +46,8 @@ services:
       - '50051:50051'
     environment:
       MACP_ALLOW_INSECURE: '1'
-      MACP_ALLOW_DEV_SENDER_HEADER: '1'
     profiles:
-      - with-runtime
+      - with-runtime-src
     healthcheck:
       test: ['CMD', '/bin/grpc_health_probe', '-addr=:50051']
       interval: 5s

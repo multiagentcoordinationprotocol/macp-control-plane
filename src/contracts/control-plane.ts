@@ -132,6 +132,7 @@ export const CANONICAL_EVENT_TYPES = [
   'run.resumed',
   'session.bound',
   'session.stream.opened',
+  'session.stream.gap',
   'session.state.changed',
   'participant.seen',
   'message.sent',
@@ -234,6 +235,14 @@ export interface RunSummaryProjection {
   modeName?: string;
   contextId?: string;
   extensionKeys?: string[];
+  /**
+   * True when the control-plane could not resume the per-session StreamSession
+   * from its last envelope ordinal because that history was compacted away
+   * (runtime FAILED_PRECONDITION). Some envelope-level events between the
+   * compacted base and reconnect may be missing from this run's event log; the
+   * console surfaces this as a fidelity warning. Set by T7's gap handler.
+   */
+  historyGap?: boolean;
 }
 
 export interface ParticipantProjection {
@@ -257,6 +266,14 @@ export interface DecisionProposalContribution {
   ts: string;
   vote?: 'allow' | 'deny';
   messageType?: string;
+  /**
+   * True when this contribution is a runtime-emitted **synthetic** HandoffAccept
+   * (`HandoffAcceptPayload.implicit`, RFC-MACP-0010 §5.1) — the target never
+   * explicitly accepted; the runtime auto-accepted on the implicit-accept timer.
+   * The console badges these distinctly from real accepts. Absent for all other
+   * contributions. Corroborated by a `message_id` prefixed `implicit-accept:`.
+   */
+  implicit?: boolean;
 }
 
 /**

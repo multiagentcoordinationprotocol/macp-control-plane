@@ -1,6 +1,6 @@
 # Absorb macp-runtime v0.5.0 + macp-proto 0.1.6
 
-Status: **planned** (nothing implemented yet)
+Status: **implemented** (T1–T10 landed with unit coverage; T11 live pass pending — see Implementation note)
 Owner: control-plane maintainers
 Upstream inputs: `macp-runtime` v0.5.0 (CHANGELOG.md `[0.5.0] — 2026-07-05`, `docs/change-review-phases-a-e.md`), `@multiagentcoordinationprotocol/proto` 0.1.4 → 0.1.6 (published on GitHub Packages; verified `npm view` lists `0.1.6`), and the spec-repo RFC updates that ride along.
 
@@ -421,6 +421,49 @@ All slices are additive and independently revertible:
   out of scope here). Flagged for a follow-up audit.
 
 ---
+
+## Implementation note (2026-07-06)
+
+All code/config/doc tasks landed; full unit suite green (676 tests, 48 suites),
+`nest build` clean, `eslint --max-warnings=0` clean, CI convention greps clean.
+
+Per-task outcomes:
+- **T1** dev-bearer fallback + config deprecation/fail-fast + docs (README, ARCHITECTURE, INTEGRATION, TROUBLESHOOTING, CLAUDE.md, .env.example). Specs updated.
+- **T2** `docker-compose.test.yml` pinned to `ghcr.io/...:v0.5.0` with a `with-runtime-src` build-from-source profile; dead `MACP_ALLOW_DEV_SENDER_HEADER` removed; INTEGRATION.md `after_sequence` contract + watch-lag + WatchSignals-auth notes; ARCHITECTURE ops section (metrics/HS256/insecure).
+- **T3** `package.json` → `^0.1.6`; `multi_round.proto` added to the load list; `Contribute → ContributePayload` with JSON/proto both normalized to `{value}`. New `proto-registry.contribute.spec.ts` (real protobufjs).
+- **T4/T4b** suspended→expired spec; `contextId`/`extensionKeys` wired `fromSessionMetadata` → snapshot → `session-snapshot`/`session.bound` → projection; specs.
+- **T5** `implicit` HandoffAccept passthrough → `DecisionProposalContribution.implicit`; normalizer + projection specs.
+- **T6** `listSessions` pagination loop (`next_page_token`), 50-page cap; provider specs.
+- **T7** `runtime_sessions.last_envelope_ordinal` (migration `0016`); ordinal counting in the stream consumer; resubscribe-on-error from the persisted ordinal; `FAILED_PRECONDITION` → `session.stream.gap` + `historyGap` + poll-only; `STREAM_RESUME_ENABLED` flag; `macp_stream_resume_gap_total` metric; mock `afterSequence` parity; 4 unit tests. `run-recovery` kept `pollOnly` per Pass-3 decision.
+- **T8** deterministic unit test for RESOURCE_EXHAUSTED watch-stream reconnect in SessionDiscovery (fast-forwards the 5s backoff). A full `test/integration` variant still needs the test DB + a scripted-mock mid-stream error and is left for the live pass.
+- **T9** `ErrorCode.REGISTRY_READ_ONLY` (405); provider caches Initialize capabilities; controller short-circuits + translates FAILED_PRECONDITION read-only rejections; specs.
+- **T10** `SESSION_STATE_CANCELLED` handled in both StreamConsumer paths (`markCancelled`); stale mirror-comment path fixed; 36-char base64url session-id validate spec; quorum-percentage doc sweep (none found).
+- **T11** live-runtime checklist NOT run here — requires the pinned `ghcr.io/...:v0.5.0` image + Postgres (5433) + a Python agent to generate traffic. Must be executed before declaring absorption done.
+
+**Lockfile:** regenerated via `npm install` (GH-Packages-authed) — `^0.1.6`
+resolved to the latest published **0.1.8**; `package-lock.json` updated and
+`npm ci` verified consistent in CI.
+
+**Deferred (each explicitly optional in this plan — no required action skipped):**
+- **T4 — `maxSuspendMs` projection surfacing:** *deferred* (plan §T4 marks it
+  "optionally … No API change"). The required safety path (suspended→expired →
+  `markFailed`) is implemented and unit-tested. `maxSuspendMs` is already decoded
+  into `message.received` payloads automatically post-bump; exposing it in the
+  run summary is a UI nicety and can be added later with no behavioral risk.
+- **T7 step 5 — `run-recovery` `afterSequence` resume:** *deferred* per Pass-3
+  ("keep `pollOnly` until the ordinal column soaks in production"). Recovery still
+  resubscribes `pollOnly: true`; the new resume path is exercised by the live
+  StreamConsumer only.
+- **T10 — optional orchestrator-not-in-pool task fixture:** *deferred* (plan marks
+  it "Optional live fixture"); needs a live runtime.
+- **T8 — integration-test location:** implemented as a deterministic **unit** test
+  (`session-discovery.service.spec.ts`) covering the `RESOURCE_EXHAUSTED` reconnect
+  rather than a `test/integration/` spec (which would need mock mid-stream
+  error-injection + the test DB). Same behavior verified; the full integration
+  variant is a follow-up.
+
+**CI status:** PR #37 — all checks green (lint, typecheck, 676 unit tests,
+integration-test [mock runtime + migration 0016], build, conventions, secrets).
 
 ## Revision log
 

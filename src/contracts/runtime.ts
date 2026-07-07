@@ -92,6 +92,10 @@ export interface RuntimeSessionSnapshot {
   configurationVersion?: string;
   policyVersion?: string;
   initiator?: string;
+  /** SessionMetadata.context_id (field 12) — the SessionStart context_id, preserved verbatim. */
+  contextId?: string;
+  /** SessionMetadata.extension_keys (field 13) — keys of the SessionStart extensions map. */
+  extensionKeys?: string[];
 }
 
 export interface RuntimeCancelSessionRequest {
@@ -249,7 +253,9 @@ export interface RuntimeProvider {
   listRoots(): Promise<RuntimeRootDescriptor[]>;
   health(): Promise<RuntimeHealth>;
 
-  // Session lifecycle observation
+  // Session lifecycle observation.
+  // `listSessions` fully drains the runtime's paginated ListSessions RPC
+  // (following `next_page_token`) and returns the concatenated snapshots.
   listSessions(): Promise<RuntimeSessionSnapshot[]>;
   watchSessions(): AsyncIterable<SessionLifecycleEvent>;
 

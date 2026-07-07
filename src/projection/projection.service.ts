@@ -170,6 +170,13 @@ export class ProjectionService {
           };
           break;
         }
+        case 'session.stream.gap': {
+          // T7: the CP could not resume the StreamSession from its last envelope
+          // ordinal (history compacted). Flag the run so the console can warn
+          // that some envelope-level events may be missing.
+          next.run.historyGap = true;
+          break;
+        }
         case 'session.bound':
         case 'session.state.changed': {
           next.run.runtimeSessionId = (event.data.sessionId as string | undefined) ?? next.run.runtimeSessionId;
@@ -350,7 +357,11 @@ export class ProjectionService {
             reasons: extractReasons(proposalPayload),
             ts: event.ts,
             vote: inferContributionVote(messageType, proposalPayload),
-            messageType: messageType || undefined
+            messageType: messageType || undefined,
+            // RFC-MACP-0010 §5.1: badge runtime-emitted synthetic HandoffAccepts.
+            // `implicit` comes from the decoded HandoffAcceptPayload; the
+            // `implicit-accept:` message-id prefix is corroboration only.
+            ...(isImplicitAccept(proposalPayload, event.data.messageId) ? { implicit: true } : {})
           };
           const existingProposals = next.decision.current?.proposals ?? [];
           const proposalId = String(
@@ -718,6 +729,16 @@ function inferContributionAction(messageType: string, payload?: Record<string, u
   const action = payload?.action ?? payload?.option ?? payload?.revisedAction;
   if (action) return String(action);
   return messageType || 'contribution';
+}
+
+/**
+ * Detect a runtime-emitted synthetic HandoffAccept. Primary signal is the
+ * decoded `HandoffAcceptPayload.implicit` boolean; the `implicit-accept:`
+ * message-id prefix (RFC-MACP-0010 §5.1) is corroboration only.
+ */
+function isImplicitAccept(payload: Record<string, unknown> | undefined, messageId: unknown): boolean {
+  if (payload?.implicit === true) return true;
+  return typeof messageId === 'string' && messageId.startsWith('implicit-accept:');
 }
 
 function inferContributionVote(messageType: string, payload?: Record<string, unknown>): 'allow' | 'deny' | undefined {

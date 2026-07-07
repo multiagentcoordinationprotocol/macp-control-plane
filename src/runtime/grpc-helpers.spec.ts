@@ -111,6 +111,24 @@ describe('gRPC helpers (Q3-1)', () => {
       const snap = fromSessionMetadata({});
       expect(snap.state).toBe('SESSION_STATE_UNSPECIFIED');
     });
+
+    it('maps contextId (field 12) and extensionKeys (field 13) from 0.1.6 metadata', () => {
+      const snap = fromSessionMetadata({
+        sessionId: 's',
+        mode: 'decision',
+        state: 'SESSION_STATE_OPEN',
+        contextId: 'ctx-42',
+        extensionKeys: ['analytics', 'trace']
+      });
+      expect(snap.contextId).toBe('ctx-42');
+      expect(snap.extensionKeys).toEqual(['analytics', 'trace']);
+    });
+
+    it('leaves contextId/extensionKeys undefined when absent or empty', () => {
+      const snap = fromSessionMetadata({ sessionId: 's', state: 'SESSION_STATE_OPEN', extensionKeys: [] });
+      expect(snap.contextId).toBeUndefined();
+      expect(snap.extensionKeys).toBeUndefined();
+    });
   });
 
   describe('buildMetadata', () => {

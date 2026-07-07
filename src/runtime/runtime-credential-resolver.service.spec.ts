@@ -50,16 +50,19 @@ describe('RuntimeCredentialResolverService (single-bearer, CP-9)', () => {
     });
   });
 
-  describe('dev header fallback', () => {
-    it('falls back to x-macp-agent-id when no bearer token and dev header is enabled', async () => {
+  describe('dev bearer fallback (runtime v0.5.0)', () => {
+    it('falls back to Authorization: Bearer <devAgentId> when no bearer token and dev header is enabled', async () => {
       const service = makeService({
         runtimeBearerToken: '',
         runtimeUseDevHeader: true,
         runtimeDevAgentId: 'control-plane'
       });
       const result = await service.resolve({ runtimeKind: 'rust' });
-      expect(result.metadata['x-macp-agent-id']).toBe('control-plane');
-      expect(result.metadata.authorization).toBeUndefined();
+      // Runtime v0.5.0 removed the x-macp-agent-id header; the dev fallback is a
+      // bearer whose value is the sender identity.
+      expect(result.metadata.authorization).toBe('Bearer control-plane');
+      expect(result.metadata['x-macp-agent-id']).toBeUndefined();
+      expect(result.sender).toBe('control-plane');
     });
   });
 

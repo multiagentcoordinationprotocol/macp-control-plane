@@ -84,6 +84,11 @@ export class InstrumentationService implements OnModuleInit {
     help: 'Total stream reconnection attempts'
   });
 
+  readonly streamResumeGapTotal = new client.Counter({
+    name: 'macp_stream_resume_gap_total',
+    help: 'Total StreamSession resume attempts that hit a compacted-history gap (FAILED_PRECONDITION) and degraded to poll-only'
+  });
+
   readonly recoveryTotal = new client.Counter({
     name: 'macp_recovery_total',
     help: 'Total recovery attempts by status',

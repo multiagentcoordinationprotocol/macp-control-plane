@@ -76,7 +76,7 @@ control-plane's observer identity using a **three-step fallback chain**:
 
 1. **JWT mint** (when `MACP_AUTH_SERVICE_URL` is set) — `RuntimeJwtMinterService` POSTs to `${url}/tokens` for a short-lived RS256 token with scope `{is_observer: true, can_start_sessions: false}`. Cached until expiry minus a 30s refresh buffer and 10s clock-skew; concurrent refreshes deduped via in-flight promise. Mint failures log `auth_mint_failure` and fall through.
 2. **Static Bearer** — attaches `RUNTIME_BEARER_TOKEN` verbatim. Must match an entry in the runtime's `MACP_AUTH_TOKENS_JSON` with `can_start_sessions: false`.
-3. **Dev header** — attaches `x-macp-agent-id: <RUNTIME_DEV_AGENT_ID>` instead of `Authorization`. Requires the runtime to enable `MACP_ALLOW_DEV_SENDER_HEADER=1`.
+3. **Dev bearer** *(deprecated, `RUNTIME_USE_DEV_HEADER=true`)* — runtime v0.5.0 removed the `x-macp-agent-id` header path entirely, so this fallback now attaches `Authorization: Bearer <RUNTIME_DEV_AGENT_ID>`. A dev-mode runtime (`MACP_ALLOW_INSECURE=1`, no auth configured) accepts any bearer and uses its value as the sender identity, so the control-plane keeps its `macp-control-plane` identity. Rejected in production (fail-fast unless a static bearer or JWT-mint is configured).
 
 For token configuration on the runtime side and the resolver order as the runtime sees it, see [macp-runtime/docs/getting-started.md#authentication](../../macp-runtime/docs/getting-started.md#authentication) and [macp-runtime/docs/deployment.md#authentication](../../macp-runtime/docs/deployment.md#authentication). The minter is covered by `src/runtime/runtime-jwt-minter.service.spec.ts` (TTL refresh, concurrent-refresh dedupe, 4xx / missing-token / network failure modes).
 
@@ -146,7 +146,7 @@ them into canonical events via the pipeline above.
 |-------|-----------|---------------|
 | Controllers | `src/controllers/` | HTTP endpoints — runs, runtime, dashboard, webhooks, admin, health |
 | Run Orchestration | `src/runs/` | RunManager (state machine), RunExecutor (coordination), StreamConsumer (per-session event loop), SessionDiscovery (`WatchSessions`), SignalConsumer (`WatchSignals`) |
-| Runtime Abstraction | `src/runtime/` | `RuntimeProvider` interface, `RustRuntimeProvider` (gRPC), `ProtoRegistryService`, `RuntimeCredentialResolverService` (JWT → static-bearer → dev-header chain), `RuntimeJwtMinterService` (short-lived JWT mint + cache) |
+| Runtime Abstraction | `src/runtime/` | `RuntimeProvider` interface, `RustRuntimeProvider` (gRPC), `ProtoRegistryService`, `RuntimeCredentialResolverService` (JWT → static-bearer → dev-bearer chain), `RuntimeJwtMinterService` (short-lived JWT mint + cache) |
 | Events | `src/events/` | Normalization (raw→canonical), transactional persistence, SSE publishing |
 | Projection | `src/projection/` | Applies canonical events to build UI read models (versioned) |
 | Dashboard | `src/dashboard/` | Aggregated KPIs (runs, signals, tokens, cost), recent runs, runtime health, time-series charts |
@@ -196,10 +196,16 @@ All modes terminate with `Commitment` (`macp.v1.CommitmentPayload`). The control
 1. **Scenario-agnostic**: Accepts only a generic `RunDescriptor` — scenario-specific fields (`kickoff[]`, `participants[].role`, `policyHints`, `commitments[]`, `initiatorParticipantId`) are rejected with 400 via `forbidNonWhitelisted: true`.
 2. **Three-layer event pipeline**: Raw → canonical → projections. Raw preserves original data; canonical provides normalized, typed view.
 3. **Observer-only streaming**: `subscribeSession({runId, sessionId, afterSequence?})` returns a read-only `RuntimeSessionHandle` — `events` async iterable + `abort()`. No `send()`. The provider writes exactly one passive-subscribe frame and keeps the write side open for the session's lifetime (RFC-MACP-0006 §3.2).
-4. **JWT-first runtime auth**: The credential resolver prefers minted short-lived JWTs (via `MACP_AUTH_SERVICE_URL`) and falls back to a static Bearer or dev header. Scopes are fixed at mint time (`is_observer: true, can_start_sessions: false`) so the observer identity can never accidentally gain write authority.
+4. **JWT-first runtime auth**: The credential resolver prefers minted short-lived JWTs (via `MACP_AUTH_SERVICE_URL`) and falls back to a static Bearer or a deprecated dev bearer. Scopes are fixed at mint time (`is_observer: true, can_start_sessions: false`) so the observer identity can never accidentally gain write authority.
 5. **Transactional event persistence**: Sequence allocation + persistence in single DB transaction.
 6. **Snake_case → camelCase normalization**: ProtoRegistryService converts Python/JSON snake_case to protobufjs camelCase.
 7. **Proto-encoded payloads**: Real runtime requires proto encoding; control plane supports JSON fallback for testing.
 8. **Circuit breaker**: CLOSED/OPEN/HALF_OPEN wrapping all gRPC unary calls with configurable threshold and reset.
 9. **Bindable idempotency**: `bindSession` catches `ConflictException` from the state-machine guard and returns the current run, so a raced transition (RunExecutor vs SessionDiscovery) logs a warning instead of crashing the process.
 10. **Graceful drain on shutdown**: Background observation services expose tracked loop promises and a bounded drain (default 2s) from `onModuleDestroy`, ensuring in-flight `persistRawAndCanonical` chain entries complete before the DB pool closes.
+
+## Operating alongside runtime v0.5.0
+
+- **Runtime metrics**: the control-plane exposes its own Prometheus metrics at `GET /metrics` (prom-client, `@Public()`). The runtime independently exposes its own Prometheus endpoint via `MACP_METRICS_ADDR` (e.g. `MACP_METRICS_ADDR=0.0.0.0:9464`). Scrape both to cover the CP and the runtime — nothing in the CP scrapes the runtime for you. For local debugging you can expose `9464` from the runtime container.
+- **JWT algorithms**: runtime v0.5.0 removed **HS256** from the default JWT algorithm allowlist (RS256/ES256 only). The CP mints RS256 tokens via the auth-service, so no CP change is needed. Deployments that intentionally use shared-secret HS256 tokens against the runtime must opt in explicitly with `MACP_AUTH_JWT_ALGS=HS256` on the **runtime** side.
+- **Dev-mode startup**: runtime v0.5.0 refuses to start without `MACP_ALLOW_INSECURE=1`, and the published image no longer bakes it in — set it explicitly for local/dev/test runtimes.

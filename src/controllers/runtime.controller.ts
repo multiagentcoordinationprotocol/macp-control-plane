@@ -1,6 +1,8 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpStatus, Param, Post, Query } from '@nestjs/common';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { AppConfigService } from '../config/app-config.service';
+import { AppException } from '../errors/app-exception';
+import { ErrorCode } from '../errors/error-codes';
 import { RuntimeHealthResponseDto } from '../dto/run-responses.dto';
 import {
   RuntimeManifestResultDto,
@@ -97,17 +99,29 @@ export class RuntimeController {
     }
 
     const provider = this.runtimeRegistry.get(this.config.runtimeKind);
-    const result = await provider.registerPolicy({
-      descriptor: {
-        policyId: body.policyId,
-        mode: body.mode,
-        description: body.description,
-        rules: Buffer.from(JSON.stringify(body.rules)),
-        schemaVersion
-      }
-    });
+    // Short-circuit when the runtime advertised a read-only policy registry
+    // (MACP_POLICIES_DIR) via its Initialize capabilities — clearer than letting
+    // the write fail with a generic 409.
+    this.assertRegistryWritable(provider);
+    let result: Awaited<ReturnType<typeof provider.registerPolicy>>;
+    try {
+      result = await provider.registerPolicy({
+        descriptor: {
+          policyId: body.policyId,
+          mode: body.mode,
+          description: body.description,
+          rules: Buffer.from(JSON.stringify(body.rules)),
+          schemaVersion
+        }
+      });
+    } catch (err) {
+      throw this.translateRegistryError(err);
+    }
     if (!result.ok && result.error?.includes('INVALID_POLICY_DEFINITION')) {
       throw new BadRequestException(result.error);
+    }
+    if (!result.ok && this.isReadOnlyMessage(result.error)) {
+      throw this.readOnlyException(result.error);
     }
     return result;
   }
@@ -145,6 +159,62 @@ export class RuntimeController {
   @ApiOkResponse({ type: RuntimeUnregisterPolicyResultDto })
   async unregisterPolicy(@Param('policyId') policyId: string) {
     const provider = this.runtimeRegistry.get(this.config.runtimeKind);
-    return provider.unregisterPolicy({ policyId });
+    this.assertRegistryWritable(provider);
+    let result: Awaited<ReturnType<typeof provider.unregisterPolicy>>;
+    try {
+      result = await provider.unregisterPolicy({ policyId });
+    } catch (err) {
+      throw this.translateRegistryError(err);
+    }
+    if (!result.ok && this.isReadOnlyMessage(result.error)) {
+      throw this.readOnlyException(result.error);
+    }
+    return result;
+  }
+
+  /**
+   * Reject registry writes up-front when the runtime's Initialize response
+   * advertised `policyRegistry.registerPolicy === false` (a read-only registry
+   * backed by `MACP_POLICIES_DIR`, runtime v0.5.0). Only trips when the provider
+   * exposes cached capabilities; otherwise the error path below still catches
+   * the runtime's FAILED_PRECONDITION rejection.
+   */
+  private assertRegistryWritable(provider: ReturnType<RuntimeProviderRegistry['get']>): void {
+    const capabilities = (provider as { capabilities?: { policyRegistry?: { registerPolicy?: boolean } } })
+      .capabilities;
+    if (capabilities?.policyRegistry && capabilities.policyRegistry.registerPolicy === false) {
+      throw this.readOnlyException('runtime policy registry is read-only (MACP_POLICIES_DIR)');
+    }
+  }
+
+  /**
+   * Translate a thrown runtime error into a read-only 405 when it is the
+   * runtime's FAILED_PRECONDITION rejection for a read-only registry; otherwise
+   * rethrow unchanged so the global filter maps it as before.
+   */
+  private translateRegistryError(err: unknown): unknown {
+    const grpcCode = (err as { details?: { grpcCode?: number } })?.details?.grpcCode;
+    const message = err instanceof Error ? err.message : String(err);
+    // grpc FAILED_PRECONDITION === 9.
+    if ((grpcCode === 9 || err instanceof AppException) && this.isReadOnlyMessage(message)) {
+      return this.readOnlyException(message);
+    }
+    return err;
+  }
+
+  private isReadOnlyMessage(message?: string): boolean {
+    if (!message) return false;
+    const m = message.toLowerCase();
+    return m.includes('read-only') || m.includes('read only') || m.includes('macp_policies_dir') || m.includes('immutable');
+  }
+
+  private readOnlyException(message?: string): AppException {
+    return new AppException(
+      ErrorCode.REGISTRY_READ_ONLY,
+      message && this.isReadOnlyMessage(message)
+        ? message
+        : 'runtime policy registry is read-only and cannot be modified',
+      HttpStatus.METHOD_NOT_ALLOWED
+    );
   }
 }
