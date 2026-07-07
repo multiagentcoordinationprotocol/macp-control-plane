@@ -440,11 +440,30 @@ Per-task outcomes:
 - **T10** `SESSION_STATE_CANCELLED` handled in both StreamConsumer paths (`markCancelled`); stale mirror-comment path fixed; 36-char base64url session-id validate spec; quorum-percentage doc sweep (none found).
 - **T11** live-runtime checklist NOT run here — requires the pinned `ghcr.io/...:v0.5.0` image + Postgres (5433) + a Python agent to generate traffic. Must be executed before declaring absorption done.
 
-**Environment caveat (lockfile):** GH Packages returned `401` in this session, so
-`npm install` could not refresh `package-lock.json` (still pins 0.1.3) — the
-local `packages/proto-npm` 0.1.6-content was linked into `node_modules` for
-validation. Before merge, run `npm install` in a GH-Packages-authed environment
-(`NODE_AUTH_TOKEN`) to regenerate the lockfile against the published 0.1.6.
+**Lockfile:** regenerated via `npm install` (GH-Packages-authed) — `^0.1.6`
+resolved to the latest published **0.1.8**; `package-lock.json` updated and
+`npm ci` verified consistent in CI.
+
+**Deferred (each explicitly optional in this plan — no required action skipped):**
+- **T4 — `maxSuspendMs` projection surfacing:** *deferred* (plan §T4 marks it
+  "optionally … No API change"). The required safety path (suspended→expired →
+  `markFailed`) is implemented and unit-tested. `maxSuspendMs` is already decoded
+  into `message.received` payloads automatically post-bump; exposing it in the
+  run summary is a UI nicety and can be added later with no behavioral risk.
+- **T7 step 5 — `run-recovery` `afterSequence` resume:** *deferred* per Pass-3
+  ("keep `pollOnly` until the ordinal column soaks in production"). Recovery still
+  resubscribes `pollOnly: true`; the new resume path is exercised by the live
+  StreamConsumer only.
+- **T10 — optional orchestrator-not-in-pool task fixture:** *deferred* (plan marks
+  it "Optional live fixture"); needs a live runtime.
+- **T8 — integration-test location:** implemented as a deterministic **unit** test
+  (`session-discovery.service.spec.ts`) covering the `RESOURCE_EXHAUSTED` reconnect
+  rather than a `test/integration/` spec (which would need mock mid-stream
+  error-injection + the test DB). Same behavior verified; the full integration
+  variant is a follow-up.
+
+**CI status:** PR #37 — all checks green (lint, typecheck, 676 unit tests,
+integration-test [mock runtime + migration 0016], build, conventions, secrets).
 
 ## Revision log
 
