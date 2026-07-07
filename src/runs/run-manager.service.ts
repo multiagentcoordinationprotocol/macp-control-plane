@@ -126,7 +126,13 @@ export class RunManagerService {
   async bindSession(
     runId: string,
     request: RunDescriptor,
-    session: { runtimeSessionId: string; initiator: string; ack: { sessionState: string } },
+    session: {
+      runtimeSessionId: string;
+      initiator: string;
+      ack: { sessionState: string };
+      contextId?: string;
+      extensionKeys?: string[];
+    },
     capabilities?: Record<string, unknown>
   ) {
     let run: Awaited<ReturnType<RunRepository['markBindingSession']>>;
@@ -190,7 +196,11 @@ export class RunManagerService {
           modeVersion: request.session.modeVersion,
           configurationVersion: request.session.configurationVersion,
           policyVersion: request.session.policyVersion || 'policy.default',
-          participants: request.session.participants.map((item) => item.id)
+          participants: request.session.participants.map((item) => item.id),
+          ...(session.contextId ? { contextId: session.contextId } : {}),
+          ...(session.extensionKeys && session.extensionKeys.length > 0
+            ? { extensionKeys: session.extensionKeys }
+            : {})
         }
       },
       ...participantEvents

@@ -51,7 +51,9 @@ export class EventNormalizerService implements EventNormalizer {
             modeName: rawEvent.sessionSnapshot.mode,
             modeVersion: rawEvent.sessionSnapshot.modeVersion,
             configurationVersion: rawEvent.sessionSnapshot.configurationVersion,
-            policyVersion: rawEvent.sessionSnapshot.policyVersion
+            policyVersion: rawEvent.sessionSnapshot.policyVersion,
+            contextId: rawEvent.sessionSnapshot.contextId,
+            extensionKeys: rawEvent.sessionSnapshot.extensionKeys
           },
           'session-snapshot'
         )

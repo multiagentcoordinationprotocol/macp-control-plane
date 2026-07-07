@@ -85,7 +85,12 @@ export function fromSessionMetadata(metadata: any): RuntimeSessionSnapshot {
     modeVersion: metadata?.modeVersion,
     configurationVersion: metadata?.configurationVersion,
     policyVersion: metadata?.policyVersion,
-    initiator: metadata?.initiator ?? undefined
+    initiator: metadata?.initiator ?? undefined,
+    // 0.1.6 SessionMetadata.context_id (12) / extension_keys (13). Carried through
+    // to the projection so `state.run.contextId` / `extensionKeys` light up.
+    contextId: metadata?.contextId || undefined,
+    extensionKeys:
+      Array.isArray(metadata?.extensionKeys) && metadata.extensionKeys.length > 0 ? metadata.extensionKeys : undefined
   };
 }
 

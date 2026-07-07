@@ -1,6 +1,6 @@
 # Absorb macp-runtime v0.5.0 + macp-proto 0.1.6
 
-Status: **planned** (nothing implemented yet)
+Status: **implemented** (T1–T10 landed with unit coverage; T11 live pass pending — see Implementation note)
 Owner: control-plane maintainers
 Upstream inputs: `macp-runtime` v0.5.0 (CHANGELOG.md `[0.5.0] — 2026-07-05`, `docs/change-review-phases-a-e.md`), `@multiagentcoordinationprotocol/proto` 0.1.4 → 0.1.6 (published on GitHub Packages; verified `npm view` lists `0.1.6`), and the spec-repo RFC updates that ride along.
 
@@ -421,6 +421,30 @@ All slices are additive and independently revertible:
   out of scope here). Flagged for a follow-up audit.
 
 ---
+
+## Implementation note (2026-07-06)
+
+All code/config/doc tasks landed; full unit suite green (676 tests, 48 suites),
+`nest build` clean, `eslint --max-warnings=0` clean, CI convention greps clean.
+
+Per-task outcomes:
+- **T1** dev-bearer fallback + config deprecation/fail-fast + docs (README, ARCHITECTURE, INTEGRATION, TROUBLESHOOTING, CLAUDE.md, .env.example). Specs updated.
+- **T2** `docker-compose.test.yml` pinned to `ghcr.io/...:v0.5.0` with a `with-runtime-src` build-from-source profile; dead `MACP_ALLOW_DEV_SENDER_HEADER` removed; INTEGRATION.md `after_sequence` contract + watch-lag + WatchSignals-auth notes; ARCHITECTURE ops section (metrics/HS256/insecure).
+- **T3** `package.json` → `^0.1.6`; `multi_round.proto` added to the load list; `Contribute → ContributePayload` with JSON/proto both normalized to `{value}`. New `proto-registry.contribute.spec.ts` (real protobufjs).
+- **T4/T4b** suspended→expired spec; `contextId`/`extensionKeys` wired `fromSessionMetadata` → snapshot → `session-snapshot`/`session.bound` → projection; specs.
+- **T5** `implicit` HandoffAccept passthrough → `DecisionProposalContribution.implicit`; normalizer + projection specs.
+- **T6** `listSessions` pagination loop (`next_page_token`), 50-page cap; provider specs.
+- **T7** `runtime_sessions.last_envelope_ordinal` (migration `0016`); ordinal counting in the stream consumer; resubscribe-on-error from the persisted ordinal; `FAILED_PRECONDITION` → `session.stream.gap` + `historyGap` + poll-only; `STREAM_RESUME_ENABLED` flag; `macp_stream_resume_gap_total` metric; mock `afterSequence` parity; 4 unit tests. `run-recovery` kept `pollOnly` per Pass-3 decision.
+- **T8** deterministic unit test for RESOURCE_EXHAUSTED watch-stream reconnect in SessionDiscovery (fast-forwards the 5s backoff). A full `test/integration` variant still needs the test DB + a scripted-mock mid-stream error and is left for the live pass.
+- **T9** `ErrorCode.REGISTRY_READ_ONLY` (405); provider caches Initialize capabilities; controller short-circuits + translates FAILED_PRECONDITION read-only rejections; specs.
+- **T10** `SESSION_STATE_CANCELLED` handled in both StreamConsumer paths (`markCancelled`); stale mirror-comment path fixed; 36-char base64url session-id validate spec; quorum-percentage doc sweep (none found).
+- **T11** live-runtime checklist NOT run here — requires the pinned `ghcr.io/...:v0.5.0` image + Postgres (5433) + a Python agent to generate traffic. Must be executed before declaring absorption done.
+
+**Environment caveat (lockfile):** GH Packages returned `401` in this session, so
+`npm install` could not refresh `package-lock.json` (still pins 0.1.3) — the
+local `packages/proto-npm` 0.1.6-content was linked into `node_modules` for
+validation. Before merge, run `npm install` in a GH-Packages-authed environment
+(`NODE_AUTH_TOKEN`) to regenerate the lockfile against the published 0.1.6.
 
 ## Revision log
 

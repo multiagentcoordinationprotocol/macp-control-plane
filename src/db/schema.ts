@@ -63,6 +63,12 @@ export const runtimeSessions = pgTable(
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' }),
     capabilities: jsonb('capabilities').$type<Record<string, unknown>>().notNull().default({}),
     lastStreamCursor: integer('last_stream_cursor'),
+    // 1-based count of accepted envelopes delivered on this run's per-session
+    // StreamSession — the runtime's `after_sequence` ordinal (stable across
+    // compaction, exclusive). Distinct from `last_stream_cursor`, which is the
+    // CP-side canonical event seq. Used to resume the stream after a disconnect
+    // without re-ingesting history (T7, runtime v0.5.0).
+    lastEnvelopeOrdinal: integer('last_envelope_ordinal').notNull().default(0),
     streamConnectedAt: timestamp('stream_connected_at', { withTimezone: true, mode: 'string' }),
     streamDisconnectedAt: timestamp('stream_disconnected_at', { withTimezone: true, mode: 'string' }),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),

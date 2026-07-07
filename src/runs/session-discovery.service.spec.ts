@@ -150,6 +150,41 @@ describe('SessionDiscoveryService', () => {
     expect(mockRunManager.createRun).toHaveBeenCalledTimes(1);
   });
 
+  it('reconnects after a RESOURCE_EXHAUSTED watch-stream error and resumes discovery (T8)', async () => {
+    // Runtime v0.5.0 terminates a lagging watch stream with RESOURCE_EXHAUSTED
+    // (gRPC code 8). The discovery loop must reconnect and keep discovering.
+    const lagError = Object.assign(new Error('watch stream lagged'), { code: 8 });
+    const failingStream = (async function* () {
+      await Promise.resolve();
+      throw lagError;
+    })();
+    mockProvider.watchSessions
+      .mockReturnValueOnce(failingStream)
+      .mockReturnValueOnce(scriptedStream([makeLifecycleEvent('created', 'session-after-reconnect')]));
+    mockRunManager.findBySessionId.mockResolvedValue(null);
+
+    await service.onModuleInit();
+
+    // Wait until the loop parks in its 5s reconnect sleep, then cancel it to
+    // fast-forward instead of waiting the full backoff.
+    for (let i = 0; i < 50 && !(service as unknown as { reconnectResolve?: () => void }).reconnectResolve; i++) {
+      await flushAsync();
+    }
+    (service as unknown as { reconnectResolve?: () => void }).reconnectResolve?.();
+    await flushAsync();
+    await flushAsync();
+
+    // Reconnected at least once (first stream errored, second was consumed).
+    expect(mockProvider.watchSessions.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(mockRunManager.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({ session: expect.objectContaining({ sessionId: 'session-after-reconnect' }) }),
+      'session-after-reconnect',
+      'session-after-reconnect'
+    );
+
+    await service.onModuleDestroy();
+  });
+
   it('skips created event when a run for that session already exists', async () => {
     mockRunManager.findBySessionId.mockResolvedValue({ id: 'preexisting-run', status: 'running' });
     mockProvider.watchSessions.mockReturnValue(
@@ -187,6 +222,23 @@ describe('SessionDiscoveryService', () => {
 
     expect(mockRunManager.markFailed).toHaveBeenCalledWith('run-expire', expect.any(Error));
     expect(mockRunManager.markCompleted).not.toHaveBeenCalled();
+  });
+
+  it('marks a suspended run failed when it expires (max_suspend_ms elapsed, T4)', async () => {
+    // A session paused via SuspendSession banks TTL; if the suspend cap
+    // (max_suspend_ms) elapses the runtime expires it. The run is in `suspended`
+    // status, and suspended → failed is a valid transition.
+    mockRunManager.findBySessionId.mockResolvedValue({ id: 'run-susp-exp', status: 'suspended' });
+    mockProvider.watchSessions.mockReturnValue(
+      scriptedStream([makeLifecycleEvent('expired', 'session-se')])
+    );
+
+    await service.onModuleInit();
+    await flushAsync();
+
+    expect(mockRunManager.markFailed).toHaveBeenCalledWith('run-susp-exp', expect.any(Error));
+    expect(mockRunManager.markCompleted).not.toHaveBeenCalled();
+    expect(mockRunManager.markCancelled).not.toHaveBeenCalled();
   });
 
   it('marks the run cancelled on a cancelled event (macp-proto 0.1.3)', async () => {

@@ -357,6 +357,25 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       expect(result.sessionId).toBe(sessionId);
     });
 
+    it('accepts a 36-char base64url sessionId containing "-" (runtime v0.5.0, T10)', async () => {
+      // Runtime v0.5.0 mints 36-char base64url session ids that may contain `-`.
+      const sessionId = 'abcDEF012345_678-9ABCdefGHIjklMNOpqr';
+      expect(sessionId.length).toBe(36);
+      const result = await service.validate(
+        makeRunDescriptor({
+          session: {
+            modeName: 'decision',
+            modeVersion: '1.0',
+            configurationVersion: '1.0',
+            ttlMs: 60000,
+            participants: [{ id: 'agent-1' }],
+            sessionId
+          }
+        })
+      );
+      expect(result.errors).not.toContain('session.sessionId must be a UUID v4/v7 or base64url 22+ chars');
+    });
+
     it('rejects invalid sessionId', async () => {
       await expect(
         service.launch(

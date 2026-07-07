@@ -17,6 +17,7 @@ describe('CANONICAL_EVENT_TYPES (§3 contract stability)', () => {
       'run.resumed',
       'session.bound',
       'session.stream.opened',
+      'session.stream.gap',
       'session.state.changed',
       'participant.seen',
       'message.sent',

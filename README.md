@@ -98,13 +98,15 @@ npm run drizzle:migrate
 npm run start:dev
 ```
 
-Make sure the runtime is running at `RUNTIME_ADDRESS`. For dev auth against the reference runtime profile, start the runtime with `MACP_ALLOW_INSECURE=1 MACP_ALLOW_DEV_SENDER_HEADER=1` (see [macp-runtime/docs/getting-started.md#authentication](../macp-runtime/docs/getting-started.md#authentication) → *Development mode*) and set on the control-plane:
+Make sure the runtime is running at `RUNTIME_ADDRESS`. Runtime **v0.5.0 removed the `x-macp-agent-id` dev header** and refuses to start without an explicit `MACP_ALLOW_INSECURE=1` (the published image no longer bakes it in). For dev auth against the reference runtime profile, start the runtime with `MACP_ALLOW_INSECURE=1` only (see [macp-runtime/docs/getting-started.md#authentication](../macp-runtime/docs/getting-started.md#authentication) → *Development mode*) and set on the control-plane:
 
 ```bash
 RUNTIME_ALLOW_INSECURE=true
-RUNTIME_USE_DEV_HEADER=true
-RUNTIME_DEV_AGENT_ID=macp-control-plane
+RUNTIME_USE_DEV_HEADER=true            # deprecated flag; now sends a dev BEARER, not a header
+RUNTIME_DEV_AGENT_ID=macp-control-plane # value used as the dev bearer / sender identity
 ```
+
+In dev-mode the runtime accepts *any* bearer and treats its value as the sender, so the control-plane keeps its `macp-control-plane` identity. `RUNTIME_USE_DEV_HEADER` is deprecated and rejected in production — configure `RUNTIME_BEARER_TOKEN` or `MACP_AUTH_SERVICE_URL` there.
 
 ## Runtime auth (observer identity)
 
@@ -114,7 +116,7 @@ The control-plane has **exactly one** runtime identity with fixed scope `is_obse
 | --- | --- | --- |
 | JWT mint (preferred) | `MACP_AUTH_SERVICE_URL` set | `MACP_AUTH_SERVICE_URL`, `MACP_AUTH_SERVICE_TIMEOUT_MS`, `MACP_AUTH_TOKEN_TTL_SECONDS`, `MACP_AUTH_TOKEN_SENDER` |
 | Static Bearer | JWT disabled or mint fails | `RUNTIME_BEARER_TOKEN` (must match an entry in the runtime's `MACP_AUTH_TOKENS_JSON` with `can_start_sessions: false`) |
-| Dev header | `RUNTIME_USE_DEV_HEADER=true`, local only | `RUNTIME_DEV_AGENT_ID` |
+| Dev bearer *(deprecated)* | `RUNTIME_USE_DEV_HEADER=true`, local only | `RUNTIME_DEV_AGENT_ID` — sent as `Authorization: Bearer <id>`; runtime v0.5.0 dropped the `x-macp-agent-id` header, so the fallback now uses a bearer that a dev-mode runtime accepts as the sender |
 
 For the runtime-side token configuration, TLS, and the full production auth story, see:
 

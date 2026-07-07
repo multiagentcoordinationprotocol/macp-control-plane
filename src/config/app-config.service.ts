@@ -58,6 +58,15 @@ export class AppConfigService implements OnModuleInit {
    * themselves now.
    */
   readonly runtimeBearerToken = process.env.RUNTIME_BEARER_TOKEN ?? '';
+  /**
+   * @deprecated Runtime v0.5.0 removed the `x-macp-agent-id` dev-header auth
+   * path. This flag now gates a **dev-bearer** fallback instead: when enabled
+   * with no static/JWT credential, the resolver sends
+   * `Authorization: Bearer ${RUNTIME_DEV_AGENT_ID}`, which a dev-mode runtime
+   * (MACP_ALLOW_INSECURE=1, no auth configured) accepts as the sender identity.
+   * The variable is retained for backwards compatibility and will be removed in
+   * a future release; prefer configuring a real bearer/JWT.
+   */
   readonly runtimeUseDevHeader = readBoolean('RUNTIME_USE_DEV_HEADER', process.env.NODE_ENV === 'development');
   readonly runtimeRequestTimeoutMs = readNumber('RUNTIME_REQUEST_TIMEOUT_MS', 30000);
   readonly runtimeDevAgentId = process.env.RUNTIME_DEV_AGENT_ID ?? 'macp-control-plane';
@@ -109,6 +118,13 @@ export class AppConfigService implements OnModuleInit {
   readonly replayBatchSize = readNumber('REPLAY_BATCH_SIZE', 500);
   readonly runRecoveryEnabled = readBoolean('RUN_RECOVERY_ENABLED', true);
   readonly sessionDiscoveryEnabled = readBoolean('SESSION_DISCOVERY_ENABLED', true);
+  /**
+   * T7 (runtime v0.5.0): on a per-session StreamSession error, resubscribe with
+   * `after_sequence` = the persisted envelope ordinal to resume the event flow,
+   * instead of degrading to a GetSession poll loop. Default true; set false to
+   * restore the old poll-degrade behavior without a code rollback.
+   */
+  readonly streamResumeEnabled = readBoolean('STREAM_RESUME_ENABLED', true);
 
   readonly dbPoolMax = readNumber('DB_POOL_MAX', 20);
   readonly dbPoolIdleTimeout = readNumber('DB_POOL_IDLE_TIMEOUT', 30000);
@@ -132,15 +148,30 @@ export class AppConfigService implements OnModuleInit {
   readonly redactPatterns = readStringList('MACP_REDACT_PATTERNS');
 
   onModuleInit(): void {
+    // Deprecation notice (fires in every environment): the dev-header path is
+    // gone in runtime v0.5.0. RUNTIME_USE_DEV_HEADER now gates a dev-bearer
+    // fallback (Authorization: Bearer ${RUNTIME_DEV_AGENT_ID}) instead.
+    if (this.runtimeUseDevHeader && !this.runtimeBearerToken && !this.authServiceUrl) {
+      this.logger.warn(
+        'RUNTIME_USE_DEV_HEADER is deprecated: runtime v0.5.0 removed the x-macp-agent-id header. ' +
+          `Falling back to a dev bearer (Authorization: Bearer ${this.runtimeDevAgentId}), accepted only by ` +
+          'a dev-mode runtime (MACP_ALLOW_INSECURE=1). Configure RUNTIME_BEARER_TOKEN or MACP_AUTH_SERVICE_URL for real deployments.'
+      );
+    }
     this.validate();
   }
 
   private validate(): void {
     if (this.isDevelopment) return;
 
-    // 1.2: Fail-fast if bearer token missing in production with dev header enabled
-    if (!this.runtimeBearerToken && this.runtimeUseDevHeader) {
-      throw new Error('RUNTIME_BEARER_TOKEN must be set in production when RUNTIME_USE_DEV_HEADER is enabled');
+    // 1.2: Fail-fast if no runtime credential in production while relying on the
+    // dev fallback. The dev-bearer fallback (RUNTIME_DEV_AGENT_ID as a bearer)
+    // is only accepted by an insecure dev-mode runtime and must never be used in
+    // production — require a real static bearer or JWT-mint instead.
+    if (!this.runtimeBearerToken && !this.authServiceUrl && this.runtimeUseDevHeader) {
+      throw new Error(
+        'RUNTIME_BEARER_TOKEN (or MACP_AUTH_SERVICE_URL) must be set in production; the RUNTIME_USE_DEV_HEADER dev-bearer fallback is not permitted'
+      );
     }
 
     // Warn (don't fail) when the control-plane has no runtime identity configured —

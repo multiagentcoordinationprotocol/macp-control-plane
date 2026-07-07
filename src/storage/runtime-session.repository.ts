@@ -44,10 +44,17 @@ export class RuntimeSessionRepository {
     return this.findByRunId(runId);
   }
 
-  async updateStreamCursor(runId: string, cursor: number) {
+  async updateStreamCursor(runId: string, cursor: number, envelopeOrdinal?: number) {
+    // `cursor` is the CP-side canonical event seq; `envelopeOrdinal` (optional)
+    // is the runtime's 1-based accepted-envelope ordinal used for stream resume
+    // (T7). Written together so a single row update advances both markers.
     await this.database.db
       .update(runtimeSessions)
-      .set({ lastStreamCursor: cursor, updatedAt: new Date().toISOString() })
+      .set({
+        lastStreamCursor: cursor,
+        ...(envelopeOrdinal !== undefined ? { lastEnvelopeOrdinal: envelopeOrdinal } : {}),
+        updatedAt: new Date().toISOString()
+      })
       .where(eq(runtimeSessions.runId, runId));
   }
 

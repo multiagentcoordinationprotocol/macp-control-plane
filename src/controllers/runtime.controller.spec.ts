@@ -12,6 +12,8 @@ describe('RuntimeController', () => {
     listRoots: jest.Mock;
     health: jest.Mock;
     registerPolicy: jest.Mock;
+    unregisterPolicy: jest.Mock;
+    capabilities?: unknown;
   };
 
   beforeEach(() => {
@@ -20,7 +22,8 @@ describe('RuntimeController', () => {
       listModes: jest.fn(),
       listRoots: jest.fn(),
       health: jest.fn(),
-      registerPolicy: jest.fn()
+      registerPolicy: jest.fn(),
+      unregisterPolicy: jest.fn()
     };
 
     mockConfig = {
@@ -174,6 +177,55 @@ describe('RuntimeController', () => {
 
       expect(result.ok).toBe(false);
       expect(result.error).toContain('already registered');
+    });
+
+    it('returns REGISTRY_READ_ONLY 405 when capabilities advertise a read-only registry (T9)', async () => {
+      mockProvider.capabilities = { policyRegistry: { registerPolicy: false } };
+
+      const err = await controller
+        .registerPolicy({
+          policyId: 'policy.ro',
+          mode: 'macp.mode.decision.v1',
+          description: 'read-only',
+          rules: { voting: { algorithm: 'majority' } },
+          schemaVersion: 1
+        })
+        .catch((e) => e);
+
+      expect(err.errorCode).toBe('REGISTRY_READ_ONLY');
+      expect(err.getStatus()).toBe(405);
+      expect(mockProvider.registerPolicy).not.toHaveBeenCalled();
+    });
+
+    it('returns REGISTRY_READ_ONLY 405 when the runtime rejects with a read-only FAILED_PRECONDITION (T9)', async () => {
+      mockProvider.registerPolicy.mockRejectedValue(
+        Object.assign(new Error('policy registry is read-only (MACP_POLICIES_DIR)'), {
+          details: { grpcCode: 9 }
+        })
+      );
+
+      const err = await controller
+        .registerPolicy({
+          policyId: 'policy.ro2',
+          mode: 'macp.mode.decision.v1',
+          description: 'read-only',
+          rules: { voting: { algorithm: 'majority' } },
+          schemaVersion: 1
+        })
+        .catch((e) => e);
+
+      expect(err.errorCode).toBe('REGISTRY_READ_ONLY');
+      expect(err.getStatus()).toBe(405);
+    });
+
+    it('unregisterPolicy surfaces REGISTRY_READ_ONLY on a read-only registry (T9)', async () => {
+      mockProvider.capabilities = { policyRegistry: { registerPolicy: false } };
+
+      const err = await controller.unregisterPolicy('policy.ro').catch((e) => e);
+
+      expect(err.errorCode).toBe('REGISTRY_READ_ONLY');
+      expect(err.getStatus()).toBe(405);
+      expect(mockProvider.unregisterPolicy).not.toHaveBeenCalled();
     });
 
     it('rejects reserved policy.default policyId', async () => {

@@ -12,6 +12,7 @@ import {
   RuntimeHealth,
   RuntimeInitializeRequest,
   RuntimeInitializeResult,
+  RuntimeCapabilities,
   RuntimeManifestResult,
   RuntimeModeDescriptor,
   RuntimeProvider,
@@ -73,6 +74,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   private runtimeAddress!: string;
   private channelCreds!: grpc.ChannelCredentials;
   private circuitBreaker!: CircuitBreaker;
+  /** Runtime capabilities cached from the most recent Initialize response. */
+  capabilities?: RuntimeCapabilities;
 
   constructor(
     private readonly config: AppConfigService,
@@ -160,6 +163,24 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       opts
     );
 
+    const capabilities = response.capabilities
+      ? {
+          sessions: response.capabilities.sessions,
+          cancellation: response.capabilities.cancellation,
+          progress: response.capabilities.progress,
+          manifest: response.capabilities.manifest,
+          modeRegistry: response.capabilities.modeRegistry,
+          roots: response.capabilities.roots,
+          policyRegistry: response.capabilities.policyRegistry
+        }
+      : undefined;
+
+    // Cache the runtime's advertised capabilities so callers (e.g. the policy
+    // controller) can short-circuit a write against a read-only registry
+    // (MACP_POLICIES_DIR, runtime v0.5.0) instead of round-tripping to a
+    // FAILED_PRECONDITION.
+    if (capabilities) this.capabilities = capabilities;
+
     return {
       selectedProtocolVersion: response.selectedProtocolVersion,
       runtimeInfo: {
@@ -171,17 +192,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       },
       supportedModes: response.supportedModes ?? [],
       instructions: response.instructions || undefined,
-      capabilities: response.capabilities
-        ? {
-            sessions: response.capabilities.sessions,
-            cancellation: response.capabilities.cancellation,
-            progress: response.capabilities.progress,
-            manifest: response.capabilities.manifest,
-            modeRegistry: response.capabilities.modeRegistry,
-            roots: response.capabilities.roots,
-            policyRegistry: response.capabilities.policyRegistry
-          }
-        : undefined
+      capabilities
     };
   }
 
@@ -439,9 +450,28 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   // ── Session lifecycle observation ─────────────────────────────────
 
   async listSessions(): Promise<RuntimeSessionSnapshot[]> {
+    // 0.1.6 ListSessions is paginated: the response carries `next_page_token`
+    // when more results exist; pass it back verbatim as `page_token`. Against
+    // v0.5.0 (no server-side capping yet) `next_page_token` comes back empty and
+    // this loops exactly once — identical to the old single-call behavior — but
+    // it is forward-correct once the runtime starts capping page size.
     const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
-    const response = await this.unary('ListSessions', {}, buildMetadata(creds.metadata));
-    return (response.sessions ?? []).map((s: any) => fromSessionMetadata(s));
+    const metadata = buildMetadata(creds.metadata);
+    const snapshots: RuntimeSessionSnapshot[] = [];
+    let pageToken = '';
+    // Guard against a buggy/looping server that never clears next_page_token.
+    const MAX_PAGES = 50;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const response = await this.unary('ListSessions', { pageToken }, metadata);
+      for (const s of response.sessions ?? []) {
+        snapshots.push(fromSessionMetadata(s));
+      }
+      const nextPageToken: string = response.nextPageToken ?? response.next_page_token ?? '';
+      if (!nextPageToken) return snapshots;
+      pageToken = nextPageToken;
+    }
+    this.logger.warn(`ListSessions exceeded ${MAX_PAGES} pages; returning ${snapshots.length} sessions (truncated)`);
+    return snapshots;
   }
 
   watchSessions(): AsyncIterable<SessionLifecycleEvent> {

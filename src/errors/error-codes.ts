@@ -14,6 +14,10 @@ export enum ErrorCode {
   POLICY_DENIED = 'POLICY_DENIED',
   INVALID_POLICY_DEFINITION = 'INVALID_POLICY_DEFINITION',
   SESSION_ALREADY_EXISTS = 'SESSION_ALREADY_EXISTS',
+  // Runtime v0.5.0: a policy registry backed by MACP_POLICIES_DIR is read-only —
+  // register/unregister are rejected. Distinct from a generic 409 CONFLICT so the
+  // console can render "registry is read-only" rather than a write conflict.
+  REGISTRY_READ_ONLY = 'REGISTRY_READ_ONLY',
   // Generic codes used when translating a downstream gRPC status into an HTTP
   // response (see `mapGrpcError`). Kept distinct from the domain-specific codes
   // above so clients can branch on the transport-level cause.

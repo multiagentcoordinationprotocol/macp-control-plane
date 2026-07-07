@@ -589,6 +589,54 @@ describe('ProjectionService', () => {
       });
     });
 
+    it('badges a synthetic (implicit) HandoffAccept contribution (T5, RFC-MACP-0010 §5.1)', () => {
+      const base = service.empty('run-1');
+      const events: CanonicalEvent[] = [
+        makeEvent({
+          type: 'proposal.updated',
+          seq: 1,
+          data: {
+            sender: 'target-agent',
+            messageType: 'HandoffAccept',
+            messageId: 'implicit-accept:handoff-7',
+            decodedPayload: { handoffId: 'handoff-7', implicit: true }
+          }
+        })
+      ];
+
+      const result = service.applyEvents(base, events);
+
+      const contribution = result.decision.current?.proposals?.[0];
+      expect(contribution).toMatchObject({
+        participantId: 'target-agent',
+        vote: 'allow',
+        messageType: 'HandoffAccept',
+        implicit: true
+      });
+    });
+
+    it('does not badge an explicit HandoffAccept as implicit (T5)', () => {
+      const base = service.empty('run-1');
+      const events: CanonicalEvent[] = [
+        makeEvent({
+          type: 'proposal.updated',
+          seq: 1,
+          data: {
+            sender: 'target-agent',
+            messageType: 'HandoffAccept',
+            messageId: 'msg-real-1',
+            decodedPayload: { handoffId: 'handoff-8', implicit: false }
+          }
+        })
+      ];
+
+      const result = service.applyEvents(base, events);
+
+      const contribution = result.decision.current?.proposals?.[0];
+      expect(contribution?.vote).toBe('allow');
+      expect(contribution?.implicit).toBeUndefined();
+    });
+
     it('decision.finalized sets resolvedAt + resolvedBy (§2.2)', () => {
       const base = service.empty('run-1');
       const event = makeEvent({
@@ -712,6 +760,59 @@ describe('ProjectionService', () => {
 
       expect(result.run.status).toBe('completed');
       expect(result.run.runtimeSessionId).toBe('session-1');
+    });
+
+    it('session.stream.gap flags the run summary historyGap (T7)', () => {
+      const base = service.empty('run-1');
+      base.run.status = 'running';
+
+      const event = makeEvent({
+        type: 'session.stream.gap',
+        data: { requestedAfter: 5, detail: 'compacted' }
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.run.historyGap).toBe(true);
+      expect(result.run.status).toBe('running'); // not terminal
+    });
+
+    it('session.state.changed carries contextId/extensionKeys into run summary (T4b)', () => {
+      const base = service.empty('run-1');
+      base.run.status = 'running';
+
+      const event = makeEvent({
+        type: 'session.state.changed',
+        data: {
+          sessionId: 'session-1',
+          state: 'SESSION_STATE_OPEN',
+          contextId: 'ctx-42',
+          extensionKeys: ['analytics', 'trace']
+        }
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.run.contextId).toBe('ctx-42');
+      expect(result.run.extensionKeys).toEqual(['analytics', 'trace']);
+    });
+
+    it('session.bound carries contextId/extensionKeys into run summary (T4b)', () => {
+      const base = service.empty('run-1');
+
+      const event = makeEvent({
+        type: 'session.bound',
+        data: {
+          sessionId: 'session-1',
+          contextId: 'ctx-99',
+          extensionKeys: ['k1']
+        }
+      });
+
+      const result = service.applyEvents(base, [event]);
+
+      expect(result.run.contextId).toBe('ctx-99');
+      expect(result.run.extensionKeys).toEqual(['k1']);
     });
   });
 

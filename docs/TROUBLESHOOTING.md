@@ -51,7 +51,7 @@
 
 **Checks:**
 1. Is the auth-service reachable? `curl -X POST $MACP_AUTH_SERVICE_URL/tokens -d '{}' -H 'content-type: application/json'` (expect a 4xx response, not a connection error).
-2. Is `RUNTIME_BEARER_TOKEN` set as a fallback? Without it the call eventually proceeds with no `Authorization` header (dev-header mode) or fails auth on the runtime side.
+2. Is `RUNTIME_BEARER_TOKEN` set as a fallback? Without it the call proceeds with the deprecated dev bearer (`Authorization: Bearer ${RUNTIME_DEV_AGENT_ID}`) when `RUNTIME_USE_DEV_HEADER=true`, which only a dev-mode runtime (`MACP_ALLOW_INSECURE=1`) accepts — otherwise it fails auth on the runtime side.
 3. If the auth-service is healthy but calls still fail, check `MACP_AUTH_SERVICE_TIMEOUT_MS` (default 5000 ms) — slow auth-services can time out under load.
 
 **See also:** [macp-runtime/docs/getting-started.md#authentication](../../macp-runtime/docs/getting-started.md#authentication) → *Resolver order* for how the runtime evaluates inbound credentials, and [ARCHITECTURE.md § Runtime Credential Resolution](./ARCHITECTURE.md#runtime-credential-resolution) for the control-plane side of the chain.

@@ -112,17 +112,29 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
       }
     };
 
-    // Schedule all scripted events unconditionally — observer mode.
+    // Honor the passive-subscribe `after_sequence` (T7): skip the first N
+    // already-delivered stream envelopes (1-based, exclusive) so a resubscribe
+    // resumes where the prior stream left off. Non-envelope scripted events do
+    // not count toward the ordinal.
+    const afterSequence = req.afterSequence ?? 0;
+    let envelopeOrdinal = 0;
+
+    // Schedule the scripted events — observer mode.
     (async () => {
       for (const se of this.script.events) {
+        const isEnvelope = se.event.kind === 'stream-envelope' && !!se.event.envelope;
+        if (isEnvelope) {
+          envelopeOrdinal += 1;
+          if (envelopeOrdinal <= afterSequence) continue; // already delivered before resume
+        }
         if (se.delayMs) {
           await new Promise((r) => setTimeout(r, se.delayMs));
         }
         // Re-stamp session id on each envelope so it's routed to this subscriber's sessionId.
-        if (se.event.kind === 'stream-envelope' && se.event.envelope) {
+        if (isEnvelope) {
           emit({
             ...se.event,
-            envelope: { ...se.event.envelope, sessionId: req.runtimeSessionId },
+            envelope: { ...se.event.envelope!, sessionId: req.runtimeSessionId },
           });
         } else {
           emit(se.event);

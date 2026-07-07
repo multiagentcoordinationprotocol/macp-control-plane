@@ -43,9 +43,18 @@ const MESSAGE_TYPE_MAP: Record<string, Record<string, string>> = {
     Abstain: 'macp.modes.quorum.v1.AbstainPayload'
   },
   'ext.multi_round.v1': {
-    Contribute: '__json__'
+    Contribute: 'macp.modes.multi_round.v1.ContributePayload'
   }
 };
+
+/**
+ * Fully-qualified proto types whose canonical shape is a single flat `value`
+ * string (currently just multi-round `ContributePayload`). Legacy agents may
+ * still emit these as JSON (`{"value":"..."}`); the runtime accepts JSON
+ * permanently, so both wire formats must normalize to the same `{value}` shape
+ * for downstream projection helpers that read top-level fields.
+ */
+const VALUE_STRING_TYPES = new Set<string>(['macp.modes.multi_round.v1.ContributePayload']);
 
 @Injectable()
 export class ProtoRegistryService implements OnModuleInit {
@@ -62,7 +71,8 @@ export class ProtoRegistryService implements OnModuleInit {
       path.join(protoRoot, 'macp/modes/proposal/v1/proposal.proto'),
       path.join(protoRoot, 'macp/modes/task/v1/task.proto'),
       path.join(protoRoot, 'macp/modes/handoff/v1/handoff.proto'),
-      path.join(protoRoot, 'macp/modes/quorum/v1/quorum.proto')
+      path.join(protoRoot, 'macp/modes/quorum/v1/quorum.proto'),
+      path.join(protoRoot, 'macp/modes/multi_round/v1/multi_round.proto')
     ];
 
     try {
@@ -103,13 +113,41 @@ export class ProtoRegistryService implements OnModuleInit {
       return this.tryDecodeUtf8(payload);
     }
     // Try proto decode first (real Rust runtime). If the bytes aren't valid proto
-    // (e.g. mock runtime sends JSON), fall back to UTF-8/JSON parsing rather than
-    // throwing — the normalizer must be resilient to either wire format.
+    // (e.g. mock runtime / legacy SDK sends JSON), fall back to UTF-8/JSON parsing
+    // rather than throwing — the normalizer must be resilient to either wire format.
     try {
-      return this.decodeMessage(typeName, payload);
+      const decoded = this.decodeMessage(typeName, payload);
+      // protobufjs can "successfully" decode JSON bytes into a garbage object
+      // (unknown fields get skipped). For flat value-string payloads (Contribute)
+      // require a real string `value`; otherwise treat it as the JSON path so a
+      // legacy `{"value":"..."}` envelope isn't silently swallowed.
+      if (VALUE_STRING_TYPES.has(typeName) && typeof decoded.value !== 'string') {
+        return this.decodeValueStringJson(payload);
+      }
+      return decoded;
     } catch {
+      if (VALUE_STRING_TYPES.has(typeName)) {
+        return this.decodeValueStringJson(payload);
+      }
       return this.tryDecodeUtf8(payload);
     }
+  }
+
+  /**
+   * JSON fallback for flat value-string payloads (Contribute). Unwraps the
+   * `{ json: { value } }` shape that `tryDecodeUtf8` produces into a flat
+   * `{ value }` so it matches the proto-decoded shape exactly — projection
+   * helpers read `value` at the top level.
+   */
+  private decodeValueStringJson(payload: Buffer): Record<string, unknown> | undefined {
+    const fallback = this.tryDecodeUtf8(payload);
+    if (fallback && fallback.encoding === 'json' && fallback.json && typeof fallback.json === 'object') {
+      const inner = fallback.json as Record<string, unknown>;
+      if (typeof inner.value === 'string') {
+        return { value: inner.value };
+      }
+    }
+    return fallback;
   }
 
   decodeMessage(typeName: string, payload: Buffer): Record<string, unknown> {
