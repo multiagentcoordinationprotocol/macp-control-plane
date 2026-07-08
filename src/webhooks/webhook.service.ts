@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { createHmac } from 'node:crypto';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { WebhookDeliveryRepository } from './webhook-delivery.repository';
@@ -13,14 +13,39 @@ export interface WebhookPayload {
 }
 
 @Injectable()
-export class WebhookService {
+export class WebhookService implements OnModuleDestroy {
   private readonly logger = new Logger(WebhookService.name);
+  // Graceful-drain state (mirrors the stream/session/signal consumers). Delivery
+  // uses fire-and-forget async loops with setTimeout backoff; without draining
+  // them, a retry can wake after the DB pool is closed and reject against a dead
+  // pool. Track in-flight deliveries + pending backoff timers so shutdown can
+  // cancel the sleeps and await outstanding work.
+  private readonly inFlight = new Set<Promise<void>>();
+  private readonly pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+  private shuttingDown = false;
 
   constructor(
     private readonly webhookRepository: WebhookRepository,
     private readonly deliveryRepository: WebhookDeliveryRepository,
     private readonly instrumentation: InstrumentationService
   ) {}
+
+  async onModuleDestroy(): Promise<void> {
+    this.shuttingDown = true;
+    for (const timer of this.pendingTimers) clearTimeout(timer);
+    this.pendingTimers.clear();
+    if (this.inFlight.size > 0) {
+      await Promise.race([
+        Promise.allSettled([...this.inFlight]),
+        new Promise((resolve) => setTimeout(resolve, 2000))
+      ]);
+    }
+  }
+
+  private track(promise: Promise<void>): void {
+    this.inFlight.add(promise);
+    void promise.finally(() => this.inFlight.delete(promise));
+  }
 
   async register(input: { url: string; events: string[]; secret: string }) {
     return this.webhookRepository.create(input);
@@ -56,7 +81,7 @@ export class WebhookService {
           runId: payload.runId,
           payload: payload as unknown as Record<string, unknown>
         });
-        void this.deliverWithTracking(delivery.id, webhook.url, webhook.secret, payload);
+        this.track(this.deliverWithTracking(delivery.id, webhook.url, webhook.secret, payload));
       }
     } catch (err) {
       this.logger.warn(
@@ -71,12 +96,14 @@ export class WebhookService {
     for (const delivery of pending) {
       const webhook = await this.webhookRepository.findById(delivery.webhookId);
       if (!webhook) continue;
-      void this.deliverWithTracking(
-        delivery.id,
-        webhook.url,
-        webhook.secret,
-        delivery.payload as unknown as WebhookPayload,
-        delivery.attempts
+      this.track(
+        this.deliverWithTracking(
+          delivery.id,
+          webhook.url,
+          webhook.secret,
+          delivery.payload as unknown as WebhookPayload,
+          delivery.attempts
+        )
       );
       retried++;
     }
@@ -95,6 +122,7 @@ export class WebhookService {
     const signature = createHmac('sha256', secret).update(body).digest('hex');
 
     for (let attempt = startAttempt + 1; attempt <= maxAttempts; attempt++) {
+      if (this.shuttingDown) return;
       try {
         const response = await fetch(url, {
           method: 'POST',
@@ -111,21 +139,55 @@ export class WebhookService {
           throw new Error(`webhook returned ${response.status}`);
         }
 
-        await this.deliveryRepository.markDelivered(deliveryId, response.status);
+        await this.markDeliveredSafe(deliveryId, response.status);
         this.instrumentation.webhookDeliveriesTotal.inc({ status: 'delivered' });
         return;
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         this.logger.warn(`webhook delivery to ${url} failed (attempt ${attempt}/${maxAttempts}): ${errorMessage}`);
-        await this.deliveryRepository.markFailed(deliveryId, attempt, errorMessage);
+        if (!(await this.markFailedSafe(deliveryId, attempt, errorMessage))) return;
         if (attempt >= maxAttempts) {
           this.instrumentation.webhookDeliveriesTotal.inc({ status: 'failed' });
         }
         if (attempt < maxAttempts) {
           const backoffMs = 1000 * 2 ** (attempt - 1);
-          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+          if (!(await this.backoff(backoffMs))) return;
         }
       }
+    }
+  }
+
+  /** Cancellable backoff sleep. Returns false if shutdown cancelled it. */
+  private backoff(ms: number): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingTimers.delete(timer);
+        resolve(!this.shuttingDown);
+      }, ms);
+      this.pendingTimers.add(timer);
+    });
+  }
+
+  /** Persist markDelivered, swallowing pool-closed errors during shutdown. */
+  private async markDeliveredSafe(deliveryId: string, status: number): Promise<void> {
+    try {
+      await this.deliveryRepository.markDelivered(deliveryId, status);
+    } catch (err) {
+      if (!this.shuttingDown) throw err;
+    }
+  }
+
+  /**
+   * Persist markFailed, swallowing pool-closed errors during shutdown. Returns
+   * false if the write was skipped (shutting down) so the caller stops retrying.
+   */
+  private async markFailedSafe(deliveryId: string, attempt: number, message: string): Promise<boolean> {
+    try {
+      await this.deliveryRepository.markFailed(deliveryId, attempt, message);
+      return true;
+    } catch (err) {
+      if (!this.shuttingDown) throw err;
+      return false;
     }
   }
 }

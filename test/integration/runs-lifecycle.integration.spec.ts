@@ -1,5 +1,9 @@
 import { createTestApp, TestAppContext } from '../helpers/test-app';
-import { decisionModeRequest, decisionHappyScript } from '../fixtures/decision-mode';
+import {
+  decisionModeRequest,
+  decisionHappyScript,
+  decisionEnrichedCommitmentScript,
+} from '../fixtures/decision-mode';
 import { testRuntimeKind } from '../helpers/runtime-kind';
 import { waitFor } from '../helpers/wait-for';
 
@@ -110,4 +114,72 @@ describe('Run Lifecycle (integration, observer mode)', () => {
     );
     expect(['completed', 'failed', 'cancelled']).toContain(run.status);
   });
+
+  (isRealRuntime ? it.skip : it)(
+    'enriches terminal run metadata with durationMs and eventCount (fire-and-forget — polled)',
+    async () => {
+      const { runId } = await ctx.client.createRun(decisionModeRequest());
+
+      await waitFor(
+        async () => {
+          const r = (await ctx.client.getRun(runId)) as any;
+          return r.status === 'completed' ? r : null;
+        },
+        { timeoutMs: 10000, label: 'run completed' },
+      );
+
+      // Enrichment runs async after markCompleted — poll until the fields land.
+      const enriched = await waitFor(
+        async () => {
+          const r = (await ctx.client.getRun(runId)) as any;
+          const meta = r.metadata ?? {};
+          return meta.durationMs !== undefined && meta.eventCount !== undefined ? r : null;
+        },
+        { timeoutMs: 5000, label: 'metadata enrichment' },
+      );
+
+      expect(enriched.metadata.durationMs).toBeGreaterThanOrEqual(0);
+      expect(enriched.metadata.eventCount).toBeGreaterThan(0);
+    },
+  );
+
+  (isRealRuntime ? it.skip : it)(
+    'enriches terminal run metadata with decisionCount from the finalized decision',
+    async () => {
+      // The enriched-commitment fixture carries an `action` on the Commitment.
+      // Against the real Rust runtime that lands in the proto-decoded payload and
+      // enrichment surfaces it as `metadata.finalAction`. The mock runtime sends
+      // JSON-encoded payloads, which `ProtoRegistryService.decodeKnown` wraps as
+      // `{ json: {...} }` rather than exposing top-level proto fields, so
+      // finalAction/finalConfidence are only assertable against a real runtime
+      // (and `confidence` is not a field on macp.v1.CommitmentPayload at all).
+      // decisionCount is derived from canonical event *types* in MetricsService,
+      // so it is verifiable regardless of the wire format.
+      ctx.mockRuntime.setScript(decisionEnrichedCommitmentScript());
+      try {
+        const { runId } = await ctx.client.createRun(decisionModeRequest());
+
+        await waitFor(
+          async () => {
+            const r = (await ctx.client.getRun(runId)) as any;
+            return r.status === 'completed' ? r : null;
+          },
+          { timeoutMs: 10000, label: 'run completed' },
+        );
+
+        const enriched = await waitFor(
+          async () => {
+            const r = (await ctx.client.getRun(runId)) as any;
+            const meta = r.metadata ?? {};
+            return meta.decisionCount !== undefined ? r : null;
+          },
+          { timeoutMs: 5000, label: 'decision metadata enrichment' },
+        );
+
+        expect(enriched.metadata.decisionCount).toBeGreaterThanOrEqual(1);
+      } finally {
+        ctx.mockRuntime.setScript(decisionHappyScript());
+      }
+    },
+  );
 });

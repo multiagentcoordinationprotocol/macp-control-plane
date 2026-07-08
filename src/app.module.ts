@@ -75,8 +75,14 @@ import { WebhookService } from './webhooks/webhook.service';
     })
   ],
   controllers: [
-    RunsController,
+    // RunInsightsController MUST precede RunsController: its static routes
+    // (POST /runs/batch/cancel, /runs/batch/archive, /runs/compare) share the
+    // `runs` base with RunsController's param routes (POST /runs/:id/cancel,
+    // /runs/:id/archive). Express matches in registration order, so if
+    // RunsController registered first, `:id` would capture "batch" and the batch
+    // handlers would be unreachable (ParseUUIDPipe → 400).
     RunInsightsController,
+    RunsController,
     RuntimeController,
     ObservabilityController,
     HealthController,

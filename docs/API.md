@@ -186,6 +186,16 @@ Two flows, selected via run metadata:
 - **Option A (default)** — control-plane HTTP-POSTs to the initiator agent's `cancelCallback` URL (recorded in the run's `metadata.cancelCallback`). The agent then calls `runtime.CancelSession` with its own identity. Fails with 400 if no callback is registered.
 - **Option B (policy-delegated)** — when the run's `metadata.cancellationDelegated` is `true`, the control-plane calls `runtime.CancelSession` directly using its own observer identity. Requires the scenario's policy to grant cancel authority to the control-plane.
 
+### `POST /runs/:id/suspend`
+Suspend (pause) a running session (macp-proto 0.1.3). Body: `{ "reason": "optional" }`
+
+Calls `runtime.SuspendSession` with the control-plane's observer identity (a Core control-plane RPC, not `Send`, so it is permitted under the observer invariant). The run enters the non-terminal `suspended` state with its remaining TTL banked, and a `run.suspended` canonical event is emitted. The observer stream stays subscribed. Only valid from `running` — any other status returns `400` (`only running runs can be suspended`).
+
+### `POST /runs/:id/resume`
+Resume a suspended session. Body: `{ "reason": "optional" }`
+
+Calls `runtime.ResumeSession`; the banked TTL is restored runtime-side and the run returns to `running`, emitting a `run.resumed` canonical event. Only valid from `suspended` — any other status returns `400`.
+
 ### `POST /runs/:id/clone`
 Clone a run with optional overrides. Body: `{ "tags": [...], "context": {...} }`
 

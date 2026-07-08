@@ -78,6 +78,10 @@ export async function createTestApp(
   process.env.LOG_LEVEL = 'warn';
   process.env.RUNTIME_ALLOW_INSECURE = 'true';
   process.env.RUN_RECOVERY_ENABLED = 'false';
+  // Integration tests poll HTTP endpoints aggressively (waitFor). The production
+  // default of 100 req/60s per user starves long-running suites with silent 429s,
+  // so raise the limit unless a test explicitly overrides it.
+  process.env.THROTTLE_LIMIT = process.env.THROTTLE_LIMIT ?? '100000';
 
   if (!process.env.RUNTIME_ADDRESS) {
     process.env.RUNTIME_ADDRESS = '127.0.0.1:50051';

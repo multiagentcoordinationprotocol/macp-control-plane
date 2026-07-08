@@ -18,7 +18,10 @@ services:
       retries: 5
 
   migrate:
-    build: .
+    build:
+      context: .
+      secrets:
+        - npm_token
     command: ['node', 'dist/db/migrate.js']
     environment:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/macp_control_plane
@@ -27,7 +30,10 @@ services:
         condition: service_healthy
 
   macp-control-plane:
-    build: .
+    build:
+      context: .
+      secrets:
+        - npm_token
     ports:
       - '3001:3001'
     environment:
@@ -42,3 +48,9 @@ services:
 
 volumes:
   pgdata:
+
+# GHCR token for the private @multiagentcoordinationprotocol/proto package.
+# Export GITHUB_TOKEN (a PAT with read:packages) before `docker compose build`.
+secrets:
+  npm_token:
+    environment: GITHUB_TOKEN

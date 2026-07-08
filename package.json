@@ -4,6 +4,10 @@
   "private": true,
   "description": "Scenario-agnostic control plane for the MACP runtime, built with NestJS.",
   "license": "MIT",
+  "engines": {
+    "node": ">=20",
+    "npm": ">=10"
+  },
   "scripts": {
     "build": "nest build",
     "start": "node dist/main.js",

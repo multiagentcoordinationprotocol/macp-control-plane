@@ -116,6 +116,15 @@ npm run test:integration
 INTEGRATION_RUNTIME=remote RUNTIME_ADDRESS=127.0.0.1:50051 npm run test:integration
 ```
 
+The integration suites cover the full run lifecycle plus suspend/resume, webhook
+delivery (HMAC + retry against a local receiver), replay, retention purge,
+stream-gap recovery, batch operations, and SSE resume. Deterministic mock
+scripting lives in `test/helpers/scripted-mock-runtime.provider.ts` — a
+`RuntimeScript` is a list of `{ delayMs, event }` steps (and `{ error: { code } }`
+steps to simulate stream failures like a compacted-history `FAILED_PRECONDITION`);
+`test/helpers/webhook-receiver.ts` is a throwaway HTTP server for asserting
+webhook payloads and signatures.
+
 See `test/integration/` for the suites and `test/helpers/test-app.ts` for the NestJS boot
 harness. The harness wraps `app.close()` so every `afterAll` hook runs
 `drainBackgroundWork()` first — force-terminating in-progress runs, then awaiting

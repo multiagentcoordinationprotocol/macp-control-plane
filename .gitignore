@@ -16,6 +16,9 @@ CLAUDE.md
 .env
 .env.local
 .env.*.local
+deploy/.env.prod
+deploy/.current_tag
+deploy/.previous_tag
 
 # OS
 .DS_Store
