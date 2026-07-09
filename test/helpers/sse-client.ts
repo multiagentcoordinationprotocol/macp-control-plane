@@ -36,9 +36,20 @@ export class TestSSEClient {
    */
   connect(
     runId: string,
-    opts?: { afterSeq?: number; includeSnapshot?: boolean; heartbeatMs?: number }
+    opts?: {
+      afterSeq?: number;
+      includeSnapshot?: boolean;
+      heartbeatMs?: number;
+      /** Extra request headers (e.g. `Last-Event-Id` for resume). */
+      headers?: Record<string, string>;
+      /**
+       * Override the request path (default `/runs/:id/stream`). May include a
+       * query string (e.g. `/runs/:id/replay/stream?mode=instant`).
+       */
+      path?: string;
+    }
   ): void {
-    const url = new URL(`/runs/${runId}/stream`, this.baseUrl);
+    const url = new URL(opts?.path ?? `/runs/${runId}/stream`, this.baseUrl);
     if (opts?.afterSeq !== undefined)
       url.searchParams.set('afterSeq', String(opts.afterSeq));
     if (opts?.includeSnapshot !== undefined)
@@ -48,7 +59,8 @@ export class TestSSEClient {
 
     const headers: Record<string, string> = {
       Accept: 'text/event-stream',
-      'Cache-Control': 'no-cache'
+      'Cache-Control': 'no-cache',
+      ...(opts?.headers ?? {})
     };
     if (this.apiKey) {
       headers.Authorization = `Bearer ${this.apiKey}`;

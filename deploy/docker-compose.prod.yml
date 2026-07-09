@@ -1,0 +1,58 @@
+# Production single-VM deployment. Standalone file — NOT an override of the
+# repo-root dev compose. Always invoked with an explicit image tag:
+#   TAG=v0.5.1 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+# Prefer deploy.sh, which wraps pull → migrate → up → health-verify.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}
+      POSTGRES_DB: macp_control_plane
+    # No host port mapping by default — the app reaches postgres on the
+    # compose network. Uncomment for host-side psql access:
+    # ports:
+    #   - '127.0.0.1:5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  migrate:
+    image: ghcr.io/multiagentcoordinationprotocol/macp-control-plane:${TAG:?set TAG to the image version, e.g. v0.5.1}
+    command: ['node', 'dist/db/migrate.js']
+    env_file: .env.prod
+    restart: 'no'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app:
+    image: ghcr.io/multiagentcoordinationprotocol/macp-control-plane:${TAG:?set TAG to the image version, e.g. v0.5.1}
+    ports:
+      - '3001:3001'
+    env_file: .env.prod
+    init: true
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # The image ships its own HEALTHCHECK (GET /healthz).
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+volumes:
+  pgdata:

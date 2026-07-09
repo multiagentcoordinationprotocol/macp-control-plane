@@ -73,6 +73,78 @@ export function decisionHappyScript(): RuntimeScript {
   };
 }
 
+/**
+ * Slow decision: Proposal arrives quickly, the final Commitment lands only after
+ * ~8s. Keeps the run in `running` long enough for suspend/resume (and other
+ * mid-flight control operations) to be exercised deterministically.
+ */
+export function decisionSlowScript(commitmentDelayMs = 8000): RuntimeScript {
+  return {
+    supportedModes: ['macp.mode.decision.v1'],
+    initiator: 'proposer',
+    events: [
+      {
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Proposal', 'proposer', {
+          proposalId: 'prop-slow-1',
+          option: 'Deploy feature S',
+          rationale: 'Slow integration test proposal',
+        }),
+      },
+      {
+        delayMs: commitmentDelayMs,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Commitment', 'proposer', {
+          proposalId: 'prop-slow-1',
+          outcome: 'approved',
+          finalized: true,
+          outcome_positive: true,
+          rationale: 'Slow consensus reached',
+        }),
+      },
+    ],
+  };
+}
+
+/**
+ * Happy path whose Commitment payload carries `action` + `confidence`, so the
+ * terminal metadata enrichment (`finalAction` / `finalConfidence`) is assertable.
+ */
+export function decisionEnrichedCommitmentScript(): RuntimeScript {
+  return {
+    supportedModes: ['macp.mode.decision.v1'],
+    initiator: 'proposer',
+    events: [
+      {
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Proposal', 'proposer', {
+          proposalId: 'prop-enriched-1',
+          option: 'Deploy feature E',
+          rationale: 'Enriched integration test proposal',
+        }),
+      },
+      {
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Vote', 'voter', {
+          vote: 'approve',
+          rationale: 'Approved',
+        }),
+      },
+      {
+        delayMs: 10,
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Commitment', 'proposer', {
+          proposalId: 'prop-enriched-1',
+          action: 'approved',
+          confidence: 0.87,
+          outcome: 'approved',
+          finalized: true,
+          outcome_positive: true,
+          rationale: 'Consensus with explicit action/confidence',
+        }),
+      },
+    ],
+  };
+}
+
 /** Objection flow: Proposal → Objection → revised Proposal → Evaluation → Vote → Commitment. */
 export function decisionObjectionScript(): RuntimeScript {
   return {

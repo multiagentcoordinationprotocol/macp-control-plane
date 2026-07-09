@@ -34,7 +34,14 @@ export interface ScriptedEvent {
   /** Delay before emitting this event (ms). */
   delayMs?: number;
   /** The raw event to emit. */
-  event: RawRuntimeEvent;
+  event?: RawRuntimeEvent;
+  /**
+   * Terminate the stream with an error instead of emitting an event.
+   * The pending/next `next()` call rejects with `Object.assign(new Error(message), { code })`
+   * (mirrors a gRPC stream error). Error-terminated streams skip the trailing
+   * auto-RESOLVED session snapshot.
+   */
+  error?: { code?: number; message?: string };
 }
 
 export interface RuntimeScript {
@@ -86,6 +93,15 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
     this.sessionOpenAt = Date.now() + (script.sessionOpenAfterMs ?? 0);
   }
 
+  /**
+   * Flip the state that `getSession` reports (e.g. to `SESSION_STATE_RESOLVED`)
+   * so the control-plane's poll fallback can finalize a run after a scripted
+   * stream error.
+   */
+  setSessionState(state: SessionState): void {
+    this.sessionState = state;
+  }
+
   async initialize(_req: RuntimeInitializeRequest): Promise<RuntimeInitializeResult> {
     return {
       selectedProtocolVersion: '1.0',
@@ -96,19 +112,36 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
 
   subscribeSession(req: RuntimeSubscribeSessionRequest): RuntimeSessionHandle {
     type ResolverFn = (value: IteratorResult<RawRuntimeEvent>) => void;
+    type RejecterFn = (err: Error) => void;
     const state = {
       resolveNextEvent: null as ResolverFn | null,
+      rejectNextEvent: null as RejecterFn | null,
       eventQueue: [] as RawRuntimeEvent[],
       streamDone: false,
+      /** Set when a scripted `error` step terminates the stream; delivered once via next() rejection. */
+      streamError: null as Error | null,
     };
 
     const emit = (event: RawRuntimeEvent) => {
       if (state.resolveNextEvent) {
         const resolve = state.resolveNextEvent;
         state.resolveNextEvent = null;
+        state.rejectNextEvent = null;
         resolve({ done: false, value: event });
       } else {
         state.eventQueue.push(event);
+      }
+    };
+
+    const emitError = (err: Error) => {
+      state.streamDone = true;
+      if (state.rejectNextEvent) {
+        const reject = state.rejectNextEvent;
+        state.resolveNextEvent = null;
+        state.rejectNextEvent = null;
+        reject(err);
+      } else {
+        state.streamError = err;
       }
     };
 
@@ -122,7 +155,7 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
     // Schedule the scripted events — observer mode.
     (async () => {
       for (const se of this.script.events) {
-        const isEnvelope = se.event.kind === 'stream-envelope' && !!se.event.envelope;
+        const isEnvelope = se.event?.kind === 'stream-envelope' && !!se.event.envelope;
         if (isEnvelope) {
           envelopeOrdinal += 1;
           if (envelopeOrdinal <= afterSequence) continue; // already delivered before resume
@@ -130,6 +163,18 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
         if (se.delayMs) {
           await new Promise((r) => setTimeout(r, se.delayMs));
         }
+        if (state.streamDone) return; // aborted while sleeping
+        if (se.error) {
+          // Error-terminated stream: reject the pending/next next() and skip
+          // the trailing auto-RESOLVED snapshot.
+          emitError(
+            Object.assign(new Error(se.error.message ?? 'scripted stream error'), {
+              ...(se.error.code !== undefined ? { code: se.error.code } : {}),
+            }),
+          );
+          return;
+        }
+        if (!se.event) continue;
         // Re-stamp session id on each envelope so it's routed to this subscriber's sessionId.
         if (isEnvelope) {
           emit({
@@ -142,6 +187,7 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
       }
       // Close the stream shortly after the last event, simulating SESSION_STATE_RESOLVED.
       await new Promise((r) => setTimeout(r, 50));
+      if (state.streamDone) return;
       emit({
         kind: 'session-snapshot',
         receivedAt: new Date().toISOString(),
@@ -150,6 +196,7 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
       state.streamDone = true;
       const pending = state.resolveNextEvent;
       state.resolveNextEvent = null;
+      state.rejectNextEvent = null;
       if (pending) pending({ done: true, value: undefined });
     })();
 
@@ -160,11 +207,17 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
             if (state.eventQueue.length > 0) {
               return Promise.resolve({ done: false, value: state.eventQueue.shift()! });
             }
+            if (state.streamError) {
+              const err = state.streamError;
+              state.streamError = null; // deliver once; subsequent next() → done
+              return Promise.reject(err);
+            }
             if (state.streamDone) {
               return Promise.resolve({ done: true, value: undefined });
             }
-            return new Promise((resolve) => {
+            return new Promise((resolve, reject) => {
               state.resolveNextEvent = resolve;
+              state.rejectNextEvent = reject;
             });
           },
           return(): Promise<IteratorResult<RawRuntimeEvent>> {
@@ -181,6 +234,7 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
         state.streamDone = true;
         const pending = state.resolveNextEvent;
         state.resolveNextEvent = null;
+        state.rejectNextEvent = null;
         if (pending) pending({ done: true, value: undefined });
       },
     };

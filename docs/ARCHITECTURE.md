@@ -163,14 +163,21 @@ them into canonical events via the pipeline above.
 ## Run State Machine
 
 ```
-queued → starting → binding_session → running → completed
-  │         │              │             │
+queued → starting → binding_session → running ──────→ completed
+  │         │              │             │  ▲
+  │         │              │             ▼  │
+  │         │              │          suspended        (non-terminal pause,
+  │         │              │             │              macp-proto 0.1.3)
   └────┬────┘──────┬───────┘─────┬───────┘
        ▼           ▼             ▼
      failed     cancelled
 ```
 
 Terminal states: `completed`, `failed`, `cancelled` (no outgoing transitions).
+`running ⇄ suspended` is the non-terminal pause/resume pair: `POST /runs/:id/suspend`
+calls `runtime.SuspendSession` (TTL banked), `POST /runs/:id/resume` restores it.
+Both are Core control-plane RPCs — not `Send` — so they are permitted under the
+observer invariant. A suspended run can still be cancelled or fail.
 
 ## Database Schema
 
@@ -202,7 +209,11 @@ All modes terminate with `Commitment` (`macp.v1.CommitmentPayload`). The control
 7. **Proto-encoded payloads**: Real runtime requires proto encoding; control plane supports JSON fallback for testing.
 8. **Circuit breaker**: CLOSED/OPEN/HALF_OPEN wrapping all gRPC unary calls with configurable threshold and reset.
 9. **Bindable idempotency**: `bindSession` catches `ConflictException` from the state-machine guard and returns the current run, so a raced transition (RunExecutor vs SessionDiscovery) logs a warning instead of crashing the process.
-10. **Graceful drain on shutdown**: Background observation services expose tracked loop promises and a bounded drain (default 2s) from `onModuleDestroy`, ensuring in-flight `persistRawAndCanonical` chain entries complete before the DB pool closes.
+10. **Graceful drain on shutdown**: Background observation services expose tracked loop promises and a bounded drain (default 2s) from `onModuleDestroy`, ensuring in-flight `persistRawAndCanonical` chain entries complete before the DB pool closes. `WebhookService` follows the same pattern — it tracks in-flight deliveries and cancels pending retry-backoff timers on `onModuleDestroy`, so a delivery retry can't wake after the pool closes and write against a dead connection.
+
+## CI/CD & Deployment
+
+The pipeline (lint → typecheck → tests → audit/scans → build → Docker) and the release/deploy flow are documented in [CICD.md](./CICD.md). Production deployment is single-VM Docker Compose — see [deploy/README.md](../deploy/README.md).
 
 ## Operating alongside runtime v0.5.0
 

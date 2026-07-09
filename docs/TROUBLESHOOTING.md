@@ -98,6 +98,29 @@
 - Database connection pool exhaustion — check `DB_POOL_MAX` (default 20)
 - Event accumulation — check `STREAM_MAX_RETRIES` for stuck reconnection loops
 
+## Docker Build Fails Resolving @multiagentcoordinationprotocol/proto
+
+**Symptom:** `docker build` fails during `npm ci` with a 401/404 from `npm.pkg.github.com`, or `cat: /run/secrets/npm_token: No such file or directory`.
+
+**Explanation:** The private proto package installs from GitHub Packages, and the Dockerfile reads the token from a **BuildKit secret** (`npm_token`) — not a build-arg.
+
+**Fix:**
+```bash
+docker build --secret id=npm_token,env=GITHUB_TOKEN -t macp-control-plane .
+# docker compose: export GITHUB_TOKEN (classic PAT with read:packages) first
+```
+
+## Production Deploy Fails Health Check
+
+**Symptom:** `deploy.sh deploy <tag>` exits with "app did not become healthy".
+
+**Checks:**
+1. `TAG=<tag> docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod logs app`
+2. Most common cause: missing REQUIRED values in `.env.prod` (`AUTH_API_KEYS`, `DATABASE_URL`) — production config validation fails fast at startup.
+3. `RUNTIME_TLS=false` without `RUNTIME_ALLOW_INSECURE=true` is rejected in production.
+4. Did the `migrate` one-shot succeed? `docker compose ... ps -a` — a failed migration blocks `app` startup.
+5. Roll back only if the release contained no schema changes: `./deploy.sh rollback` (migrations are forward-only).
+
 ## Integration Test Issues
 
 **Test DB connection fails:**

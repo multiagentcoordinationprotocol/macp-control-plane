@@ -32,9 +32,14 @@ The control plane is an observer. **It never calls `Send`** on the runtime.
 - `GET /runs/:id/events` — canonical events
 - `GET /runs/:id/stream` — SSE of live events
 - `POST /runs/:id/cancel` — UI cancel (Option A: proxies to initiator agent's cancelCallback; Option B: calls runtime.CancelSession when policy-delegated)
+- `POST /runs/:id/suspend` / `POST /runs/:id/resume` — non-terminal pause/resume (macp-proto 0.1.3; TTL banked while suspended)
 - `POST /runs/validate` — preflight validation
 - `POST /runs/:id/clone` — clone with optional tag overrides (session context overrides rejected)
 - `POST /runs/:id/replay` — replay descriptor
+- `POST /runs/batch/{cancel,export,archive,delete}` + `POST /runs/compare` — batch operations
+- `GET/POST/PATCH/DELETE /webhooks` — webhook subscriptions (HMAC-SHA256 signed, outbox + retry)
+
+Full endpoint reference: [docs/API.md](docs/API.md).
 
 ### Removed (direct-agent-auth CP-5/6/7)
 These endpoints return **410 Gone**. Agents emit envelopes via the SDKs directly:
@@ -91,12 +96,44 @@ Response: `{ "runId": "<uuid>", "sessionId": "<uuid>", "status": "queued", "trac
 
 ## Local development
 
+Node 20 (`.nvmrc`) and npm 10+ (see `engines` in package.json).
+
 ```bash
 cp .env.example .env
 npm install
 npm run drizzle:migrate
 npm run start:dev
 ```
+
+### Docker
+
+The Dockerfile consumes the private `@multiagentcoordinationprotocol/proto` package via a **BuildKit secret** (never a `--build-arg`, which would leak into image history):
+
+```bash
+docker build --secret id=npm_token,env=GITHUB_TOKEN -t macp-control-plane .
+# or, with GITHUB_TOKEN exported (PAT with read:packages):
+docker compose up --build
+```
+
+## Testing
+
+```bash
+npm test                   # unit tests (Jest, colocated *.spec.ts)
+npm run test:cov           # with coverage
+docker compose -f docker-compose.test.yml up -d postgres-test
+npm run test:integration   # integration tests (real NestJS app + PostgreSQL on 5433, scripted mock runtime)
+```
+
+See [docs/INTEGRATION.md § Running Integration Tests](docs/INTEGRATION.md#running-integration-tests) for runtime modes (`mock` / `docker` / `remote`).
+
+## CI/CD & deployment
+
+- **CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)): lint, typecheck, unit + integration tests (with coverage summary), `npm audit` gate, secret scan, CLAUDE.md convention sweeps, build, and a Docker build on every PR (pushed to GHCR + Trivy-scanned on `main`).
+- **Release** ([.github/workflows/release.yml](.github/workflows/release.yml)): pushing a `v*.*.*` tag builds the image, gates it with a Trivy CRITICAL scan **before** pushing semver tags (`vX.Y.Z`, `vX.Y`, `latest`) to GHCR, and creates a GitHub Release with generated notes.
+- **CodeQL** ([.github/workflows/codeql.yml](.github/workflows/codeql.yml)) and **Dependabot** ([.github/dependabot.yml](.github/dependabot.yml)) run on a weekly schedule.
+- **Deployment**: single-VM Docker Compose under [deploy/](deploy/README.md) — `./deploy.sh deploy <tag>` pulls the pinned GHCR image, runs migrations, starts the stack, and verifies `/healthz`; an optional SSH deploy workflow ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)) activates once `DEPLOY_SSH_*` secrets exist.
+
+See [docs/CICD.md](docs/CICD.md) for the full pipeline reference.
 
 Make sure the runtime is running at `RUNTIME_ADDRESS`. Runtime **v0.5.0 removed the `x-macp-agent-id` dev header** and refuses to start without an explicit `MACP_ALLOW_INSECURE=1` (the published image no longer bakes it in). For dev auth against the reference runtime profile, start the runtime with `MACP_ALLOW_INSECURE=1` only (see [macp-runtime/docs/getting-started.md#authentication](../macp-runtime/docs/getting-started.md#authentication) → *Development mode*) and set on the control-plane:
 
