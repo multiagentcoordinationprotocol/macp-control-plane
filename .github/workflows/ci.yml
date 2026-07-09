@@ -135,12 +135,12 @@ jobs:
   # Report-only for now: the current dependency tree has high/critical advisories
   # with no non-breaking fix (e.g. multer / path-to-regexp via @nestjs, protobufjs
   # via otel), so a hard gate would fail every build until those are upgraded.
-  # `continue-on-error` surfaces advisories in the Actions UI without blocking.
+  # Step-level `continue-on-error` keeps the job (and its PR check) green while the
+  # advisories stay visible in the step log.
   # TODO: after the dependency-advisory cleanup, remove continue-on-error and add
   # `audit` back to the `build` job's `needs` to make this blocking.
   audit:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -150,6 +150,7 @@ jobs:
       # npm ci needed. NODE_AUTH_TOKEN must still be set because the committed
       # .npmrc references it and npm fails on any unexpanded env var.
       - run: npm audit --omit=dev --audit-level=high
+        continue-on-error: true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -275,7 +276,7 @@ jobs:
       - name: Trivy scan (main image)
         if: github.event_name != 'pull_request'
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.30.0
         with:
           image-ref: ghcr.io/${{ github.repository }}:latest
           severity: CRITICAL
