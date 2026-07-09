@@ -58,7 +58,7 @@ jobs:
           cache-from: type=gha
 
       - name: Trivy scan (release gate)
-        uses: aquasecurity/trivy-action@v0.30.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ghcr.io/${{ github.repository }}:scan-target
           severity: CRITICAL
