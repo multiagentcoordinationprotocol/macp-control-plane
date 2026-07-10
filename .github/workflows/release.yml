@@ -47,7 +47,7 @@ jobs:
 
       # Build locally first so Trivy gates BEFORE anything reaches the registry.
       - name: Build image for scanning
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -67,7 +67,7 @@ jobs:
 
       # Every layer is already cached from the scan build — this is near-instant.
       - name: Push release image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
