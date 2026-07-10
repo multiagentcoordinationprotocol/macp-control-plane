@@ -1,8 +1,6 @@
-# Dependabot must resolve ALL dependencies (including the private
-# @multiagentcoordinationprotocol/proto package) to regenerate the lockfile,
-# so the npm ecosystem is dead without the registry credential below.
-# Create a Dependabot secret named DEPENDABOT_GHPR_TOKEN (Settings → Secrets
-# and variables → Dependabot) holding a classic PAT with read:packages.
+# npm resolves the private @multiagentcoordinationprotocol/proto package from
+# GitHub Packages; that needs a Dependabot secret DEPENDABOT_GHPR_TOKEN (classic
+# PAT, read:packages) for the registry below.
 version: 2
 registries:
   github-npm:
@@ -20,15 +18,18 @@ updates:
     groups:
       minor-and-patch:
         update-types: ['minor', 'patch']
+      major-updates:
+        update-types: ['major']
     ignore:
-      # Proto upgrades are deliberate, planned absorptions (see plans/), not
-      # drive-by version bumps.
       - dependency-name: '@multiagentcoordinationprotocol/proto'
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
 
   - package-ecosystem: docker
     directory: /
