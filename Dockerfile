@@ -2,7 +2,7 @@
 # Build with a BuildKit secret for the private @multiagentcoordinationprotocol
 # registry (never a --build-arg — build args are recorded in image history):
 #   docker build --secret id=npm_token,env=GITHUB_TOKEN -t macp-control-plane .
-FROM node:20-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ COPY src/ src/
 RUN npm run build
 
 # --- Runtime ---
-FROM node:20-alpine
+FROM node:26-alpine
 
 WORKDIR /app
 
