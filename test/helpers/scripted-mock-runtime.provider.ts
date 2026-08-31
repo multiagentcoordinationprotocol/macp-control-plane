@@ -11,6 +11,7 @@ import {
   RuntimeInitializeRequest,
   RuntimeInitializeResult,
   RuntimeListPoliciesRequest,
+  RuntimeListSessionsResult,
   RuntimeManifestResult,
   RuntimeModeDescriptor,
   RuntimePolicyDescriptor,
@@ -329,8 +330,8 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
 
   // ── Session lifecycle observation (stub) ────────────────────────────
 
-  async listSessions(): Promise<RuntimeSessionSnapshot[]> {
-    return [];
+  async listSessions(): Promise<RuntimeListSessionsResult> {
+    return { sessions: [], complete: true, pagesFetched: 0 };
   }
 
   async *watchSessions(): AsyncIterable<SessionLifecycleEvent> {

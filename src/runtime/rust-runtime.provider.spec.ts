@@ -1,9 +1,12 @@
+import * as grpc from '@grpc/grpc-js';
 import { RustRuntimeProvider } from './rust-runtime.provider';
 import { AppConfigService } from '../config/app-config.service';
 import { RuntimeCredentialResolverService } from './runtime-credential-resolver.service';
 import { RuntimeJwtMinterService } from './runtime-jwt-minter.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { RawRuntimeEvent, RuntimeSubscribeSessionRequest } from '../contracts/runtime';
+import { CircuitBreaker } from './circuit-breaker';
+import { AppException } from '../errors/app-exception';
 
 /**
  * Focused unit tests for the RFC-MACP-0006 §3.2 passive-subscribe behavior
@@ -38,16 +41,31 @@ function makeFakeStream(): FakeStream {
   return stream;
 }
 
-function makeProvider(streamFactory: () => unknown): {
+/** Minimal jest-mocked shape of the two listSessions() metrics on InstrumentationService. */
+interface FakeListSessionsInstrumentation {
+  macpRuntimeListSessionsPages: { observe: jest.Mock };
+  macpRuntimeListSessionsTruncatedTotal: { inc: jest.Mock };
+}
+
+function makeProvider(
+  streamFactory: () => unknown,
+  configOverrides: Record<string, unknown> = {}
+): {
   provider: RustRuntimeProvider;
   resolver: RuntimeCredentialResolverService;
+  instrumentation: FakeListSessionsInstrumentation;
 } {
   const config = {
     runtimeDevAgentId: 'control-plane',
     runtimeBearerToken: 'obs-token',
     runtimeUseDevHeader: false,
     runtimeCircuitBreakerThreshold: 5,
-    runtimeCircuitBreakerResetMs: 30_000
+    runtimeCircuitBreakerResetMs: 30_000,
+    runtimeRequestTimeoutMs: 30_000,
+    runtimeListSessionsPageSize: 100,
+    runtimeListSessionsMaxPages: 200,
+    runtimeListSessionsTimeoutMs: 60_000,
+    ...configOverrides
   } as unknown as AppConfigService;
 
   const jwtMinter = {
@@ -55,8 +73,11 @@ function makeProvider(streamFactory: () => unknown): {
     getToken: () => Promise.reject(new Error('jwt disabled in unit test'))
   } as unknown as RuntimeJwtMinterService;
   const resolver = new RuntimeCredentialResolverService(config, jwtMinter);
-  const instrumentation = {} as InstrumentationService;
-  const provider = new RustRuntimeProvider(config, resolver, instrumentation);
+  const instrumentation = {
+    macpRuntimeListSessionsPages: { observe: jest.fn() },
+    macpRuntimeListSessionsTruncatedTotal: { inc: jest.fn() }
+  } as unknown as FakeListSessionsInstrumentation;
+  const provider = new RustRuntimeProvider(config, resolver, instrumentation as unknown as InstrumentationService);
 
   // Bypass onModuleInit() — proto loading is unnecessary for these tests.
   // Stub the gRPC client so getClientMethod(client, 'StreamSession') returns
@@ -66,7 +87,7 @@ function makeProvider(streamFactory: () => unknown): {
     StreamSession: fakeStreamSession
   };
 
-  return { provider, resolver };
+  return { provider, resolver, instrumentation };
 }
 
 async function drain(events: AsyncIterable<RawRuntimeEvent>, max = 10): Promise<RawRuntimeEvent[]> {
@@ -211,13 +232,16 @@ describe('RustRuntimeProvider.subscribeSession — passive-subscribe frame (RFC-
   });
 });
 
-describe('RustRuntimeProvider.listSessions — pagination (T6, 0.1.6)', () => {
-  it('follows next_page_token across pages and concatenates all sessions', async () => {
-    const stream = makeFakeStream();
-    const { provider } = makeProvider(() => stream);
+describe('RustRuntimeProvider.listSessions — pagination, bounds, and truth-in-contract (Phase 2, 0.7.0)', () => {
+  function spyUnary(provider: RustRuntimeProvider) {
+    return jest.spyOn(provider as unknown as { unary: (...a: unknown[]) => Promise<unknown> }, 'unary');
+  }
 
-    const unary = jest
-      .spyOn(provider as unknown as { unary: (...a: unknown[]) => Promise<unknown> }, 'unary')
+  it('follows next_page_token across pages, concatenates sessions, and reports complete:true', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream, { runtimeListSessionsPageSize: 100 });
+
+    const unary = spyUnary(provider)
       .mockImplementationOnce(async () => ({
         sessions: [{ sessionId: 's1', state: 'SESSION_STATE_OPEN' }],
         nextPageToken: 'page-2'
@@ -229,24 +253,291 @@ describe('RustRuntimeProvider.listSessions — pagination (T6, 0.1.6)', () => {
 
     const result = await provider.listSessions();
 
-    expect(result.map((s) => s.sessionId)).toEqual(['s1', 's2']);
+    expect(result.sessions.map((s) => s.sessionId)).toEqual(['s1', 's2']);
+    expect(result.complete).toBe(true);
+    expect(result.pagesFetched).toBe(2);
     expect(unary).toHaveBeenCalledTimes(2);
-    // First call sends an empty page token, second echoes the server's token.
-    expect(unary.mock.calls[0][1]).toEqual({ pageToken: '' });
-    expect(unary.mock.calls[1][1]).toEqual({ pageToken: 'page-2' });
+    // First call sends an empty page token plus the configured page size;
+    // second echoes the server's token and keeps the same page size.
+    expect(unary.mock.calls[0][1]).toEqual({ pageToken: '', pageSize: 100 });
+    expect(unary.mock.calls[1][1]).toEqual({ pageToken: 'page-2', pageSize: 100 });
   });
 
-  it('returns after a single call when next_page_token is empty (v0.5.0 behavior)', async () => {
+  it('returns complete:true, pagesFetched:1 after a single call when next_page_token is empty', async () => {
     const stream = makeFakeStream();
-    const { provider } = makeProvider(() => stream);
+    const { provider, instrumentation } = makeProvider(() => stream);
 
-    const unary = jest
-      .spyOn(provider as unknown as { unary: (...a: unknown[]) => Promise<unknown> }, 'unary')
-      .mockResolvedValue({ sessions: [{ sessionId: 's1', state: 'SESSION_STATE_OPEN' }] });
+    const unary = spyUnary(provider).mockResolvedValue({
+      sessions: [{ sessionId: 's1', state: 'SESSION_STATE_OPEN' }],
+      nextPageToken: ''
+    });
 
     const result = await provider.listSessions();
 
-    expect(result).toHaveLength(1);
+    expect(result.sessions).toHaveLength(1);
+    expect(result.complete).toBe(true);
+    expect(result.pagesFetched).toBe(1);
     expect(unary).toHaveBeenCalledTimes(1);
+    expect(instrumentation.macpRuntimeListSessionsTruncatedTotal.inc).not.toHaveBeenCalled();
+    expect(instrumentation.macpRuntimeListSessionsPages.observe).toHaveBeenCalledWith(1);
+  });
+
+  it('stops at RUNTIME_LIST_SESSIONS_MAX_PAGES against a server that never clears next_page_token, returning the collected prefix with complete:false', async () => {
+    const stream = makeFakeStream();
+    const { provider, instrumentation } = makeProvider(() => stream, { runtimeListSessionsMaxPages: 3 });
+
+    const unary = spyUnary(provider).mockImplementation(async () => ({
+      sessions: [{ sessionId: 'sX', state: 'SESSION_STATE_OPEN' }],
+      nextPageToken: 'always-more'
+    }));
+
+    const result = await provider.listSessions();
+
+    expect(result.complete).toBe(false);
+    expect(result.pagesFetched).toBe(3);
+    expect(result.sessions).toHaveLength(3);
+    expect(unary).toHaveBeenCalledTimes(3);
+    expect(instrumentation.macpRuntimeListSessionsTruncatedTotal.inc).toHaveBeenCalledTimes(1);
+    expect(instrumentation.macpRuntimeListSessionsPages.observe).toHaveBeenCalledWith(3);
+  });
+
+  it('stops when the overall RUNTIME_LIST_SESSIONS_TIMEOUT_MS budget is exceeded, returning complete:false', async () => {
+    const stream = makeFakeStream();
+    const { provider, instrumentation } = makeProvider(() => stream, {
+      runtimeListSessionsTimeoutMs: 10,
+      runtimeListSessionsMaxPages: 50
+    });
+
+    // Each page "arrives" slower than the whole drain's timeout budget, so the
+    // deadline check at the top of the next loop iteration trips before a
+    // second page is ever requested.
+    const unary = spyUnary(provider).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(
+            () => resolve({ sessions: [{ sessionId: 'sX', state: 'SESSION_STATE_OPEN' }], nextPageToken: 'more' }),
+            50
+          );
+        })
+    );
+
+    const result = await provider.listSessions();
+
+    expect(result.complete).toBe(false);
+    expect(result.pagesFetched).toBe(1);
+    expect(unary).toHaveBeenCalledTimes(1);
+    expect(instrumentation.macpRuntimeListSessionsTruncatedTotal.inc).toHaveBeenCalledTimes(1);
+  });
+
+  it('halves the page size and retries the same page on RESOURCE_EXHAUSTED, then succeeds', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream, { runtimeListSessionsPageSize: 200 });
+
+    const resourceExhausted = Object.assign(new Error('received message larger than max'), {
+      metadata: { grpcCode: grpc.status.RESOURCE_EXHAUSTED }
+    });
+
+    const unary = spyUnary(provider)
+      .mockRejectedValueOnce(resourceExhausted)
+      .mockResolvedValueOnce({ sessions: [{ sessionId: 's1', state: 'SESSION_STATE_OPEN' }], nextPageToken: '' });
+
+    const result = await provider.listSessions();
+
+    expect(result.complete).toBe(true);
+    expect(result.sessions.map((s) => s.sessionId)).toEqual(['s1']);
+    expect(unary).toHaveBeenCalledTimes(2);
+    // Same page (empty pageToken) retried with a halved page size.
+    expect(unary.mock.calls[0][1]).toEqual({ pageToken: '', pageSize: 200 });
+    expect(unary.mock.calls[1][1]).toEqual({ pageToken: '', pageSize: 100 });
+  });
+
+  it('rethrows RESOURCE_EXHAUSTED once the page size is already at the floor of 1', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream, { runtimeListSessionsPageSize: 1 });
+
+    const resourceExhausted = Object.assign(new Error('received message larger than max'), {
+      metadata: { grpcCode: grpc.status.RESOURCE_EXHAUSTED }
+    });
+
+    const unary = spyUnary(provider).mockRejectedValue(resourceExhausted);
+
+    await expect(provider.listSessions()).rejects.toThrow('received message larger than max');
+    expect(unary).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a non-RESOURCE_EXHAUSTED error and discards already-collected pages (unlike page-cap truncation)', async () => {
+    const stream = makeFakeStream();
+    const { provider, instrumentation } = makeProvider(() => stream);
+
+    const unavailable = Object.assign(new Error('runtime unavailable'), {
+      metadata: { grpcCode: grpc.status.UNAVAILABLE }
+    });
+
+    const unary = spyUnary(provider)
+      .mockImplementationOnce(async () => ({
+        sessions: [{ sessionId: 's1', state: 'SESSION_STATE_OPEN' }],
+        nextPageToken: 'page-2'
+      }))
+      .mockRejectedValueOnce(unavailable);
+
+    await expect(provider.listSessions()).rejects.toThrow('runtime unavailable');
+    expect(unary).toHaveBeenCalledTimes(2);
+    // No truncation signal is emitted for a hard failure — this is a thrown
+    // error, not a labeled partial result.
+    expect(instrumentation.macpRuntimeListSessionsTruncatedTotal.inc).not.toHaveBeenCalled();
+  });
+
+  it('bounds RESOURCE_EXHAUSTED halving to MAX_PAGE_SIZE_HALVINGS (GAP 1): rethrows on the 3rd attempt even though pageSize is still > 1', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream, { runtimeListSessionsPageSize: 200 });
+
+    const resourceExhausted = Object.assign(new Error('received message larger than max'), {
+      metadata: { grpcCode: grpc.status.RESOURCE_EXHAUSTED }
+    });
+
+    const unary = spyUnary(provider).mockRejectedValue(resourceExhausted);
+
+    await expect(provider.listSessions()).rejects.toThrow('received message larger than max');
+    // 200 -> 100 -> 50: 1 initial attempt + MAX_PAGE_SIZE_HALVINGS (2) retries
+    // = 3 attempts, then rethrow even though pageSize (50) is still > 1 — the
+    // halving *budget*, not the floor of 1, is what stops the ladder here.
+    expect(unary).toHaveBeenCalledTimes(3);
+    expect(unary.mock.calls[0][1]).toEqual({ pageToken: '', pageSize: 200 });
+    expect(unary.mock.calls[1][1]).toEqual({ pageToken: '', pageSize: 100 });
+    expect(unary.mock.calls[2][1]).toEqual({ pageToken: '', pageSize: 50 });
+  });
+
+  it('returns complete:false with the collected prefix when DEADLINE_EXCEEDED surfaces after the overall budget has expired mid-page (GAP 2)', async () => {
+    const stream = makeFakeStream();
+    const { provider, instrumentation } = makeProvider(() => stream, {
+      runtimeListSessionsTimeoutMs: 20,
+      runtimeListSessionsMaxPages: 50
+    });
+
+    // Real post-mapGrpcError shape (see isDeadlineExceeded's comment):
+    // metadata.grpcCode, not a raw grpc.ServiceError .code.
+    const deadlineExceeded = Object.assign(new Error('Deadline exceeded'), {
+      metadata: { grpcCode: grpc.status.DEADLINE_EXCEEDED }
+    });
+
+    const unary = spyUnary(provider)
+      .mockImplementationOnce(async () => ({
+        sessions: [{ sessionId: 's1', state: 'SESSION_STATE_OPEN' }],
+        nextPageToken: 'page-2'
+      }))
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            // Longer than the 20ms overall budget, so by the time this
+            // rejects, Date.now() >= deadlineAt — simulating the CP's own
+            // per-call deadline clamp firing mid-page, not a slow runtime.
+            setTimeout(() => reject(deadlineExceeded), 40);
+          })
+      );
+
+    const result = await provider.listSessions();
+
+    expect(result.complete).toBe(false);
+    expect(result.sessions.map((s) => s.sessionId)).toEqual(['s1']);
+    expect(result.pagesFetched).toBe(1);
+    expect(unary).toHaveBeenCalledTimes(2);
+    expect(instrumentation.macpRuntimeListSessionsTruncatedTotal.inc).toHaveBeenCalledTimes(1);
+  });
+
+  it('rethrows DEADLINE_EXCEEDED when the runtime is merely slow and the overall budget has NOT expired (GAP 2)', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream, { runtimeListSessionsTimeoutMs: 60_000 });
+
+    const deadlineExceeded = Object.assign(new Error('Deadline exceeded'), {
+      metadata: { grpcCode: grpc.status.DEADLINE_EXCEEDED }
+    });
+
+    const unary = spyUnary(provider).mockRejectedValue(deadlineExceeded);
+
+    await expect(provider.listSessions()).rejects.toThrow('Deadline exceeded');
+    expect(unary).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('RustRuntimeProvider.listSessions — RESOURCE_EXHAUSTED ladder vs. the real CircuitBreaker (GAP 1 regression)', () => {
+  it('makes exactly 3 attempts, rethrows the RESOURCE_EXHAUSTED-derived error (not "Circuit breaker is OPEN"), and leaves the breaker CLOSED at the default threshold of 5', async () => {
+    // Unlike every test above, this one does NOT `jest.spyOn(provider,
+    // 'unary')` — that bypasses `unary()` (and the CircuitBreaker it wraps)
+    // entirely, which is exactly why GAP 1 slipped through review. Instead,
+    // stub one level lower: the gRPC client method `unary()` calls.
+    const config = {
+      runtimeDevAgentId: 'control-plane',
+      runtimeBearerToken: 'obs-token',
+      runtimeUseDevHeader: false,
+      runtimeCircuitBreakerThreshold: 5,
+      runtimeCircuitBreakerResetMs: 30_000,
+      runtimeRequestTimeoutMs: 30_000,
+      runtimeListSessionsPageSize: 200,
+      runtimeListSessionsMaxPages: 200,
+      runtimeListSessionsTimeoutMs: 60_000
+    } as unknown as AppConfigService;
+
+    const jwtMinter = {
+      isEnabled: () => false,
+      getToken: () => Promise.reject(new Error('jwt disabled in unit test'))
+    } as unknown as RuntimeJwtMinterService;
+    const resolver = new RuntimeCredentialResolverService(config, jwtMinter);
+    const instrumentation = {
+      macpRuntimeListSessionsPages: { observe: jest.fn() },
+      macpRuntimeListSessionsTruncatedTotal: { inc: jest.fn() },
+      grpcCallDuration: { observe: jest.fn() },
+      circuitBreakerSuccessTotal: { inc: jest.fn() },
+      circuitBreakerFailuresTotal: { inc: jest.fn() },
+      circuitBreakerState: { set: jest.fn() }
+    } as unknown as InstrumentationService;
+
+    const provider = new RustRuntimeProvider(config, resolver, instrumentation);
+
+    // Install the SAME circuit breaker onModuleInit() builds — via the
+    // extracted `buildCircuitBreaker()` — without running proto loading or
+    // opening a real gRPC channel.
+    (provider as unknown as { circuitBreaker: CircuitBreaker }).circuitBreaker = (
+      provider as unknown as { buildCircuitBreaker: () => CircuitBreaker }
+    ).buildCircuitBreaker();
+
+    const client = {
+      ListSessions: jest.fn(
+        (
+          _request: unknown,
+          _metadata: unknown,
+          _opts: unknown,
+          callback: (error: unknown, response: unknown) => void
+        ) => {
+          // A raw grpc.ServiceError-shaped rejection — exactly what
+          // @grpc/grpc-js hands unary()'s callback. The real `mapGrpcError()`
+          // inside the real `unary()` does the translation to metadata.grpcCode.
+          const serviceError = Object.assign(new Error('received message larger than max'), {
+            code: grpc.status.RESOURCE_EXHAUSTED,
+            details: 'received message larger than max'
+          });
+          callback(serviceError, null);
+        }
+      )
+    };
+    (provider as unknown as { client: unknown }).client = client;
+
+    let thrown: unknown;
+    try {
+      await provider.listSessions();
+    } catch (error) {
+      thrown = error;
+    }
+
+    // 200 -> 100 -> 50: exactly 3 attempts (1 initial + MAX_PAGE_SIZE_HALVINGS).
+    expect(client.ListSessions).toHaveBeenCalledTimes(3);
+    // Rethrows the RESOURCE_EXHAUSTED-derived AppException, NOT a
+    // "Circuit breaker is OPEN" error — this is the whole point of the gap.
+    expect(thrown).toBeInstanceOf(AppException);
+    expect((thrown as Error).message).toBe('received message larger than max');
+    expect((thrown as Error).message).not.toMatch(/circuit breaker/i);
+    expect((thrown as AppException).metadata).toEqual({ grpcCode: grpc.status.RESOURCE_EXHAUSTED });
+    // With the default threshold of 5, a 3-attempt ladder must not trip the breaker.
+    expect(provider.getCircuitBreakerState()).toBe('CLOSED');
+    expect(provider.getCircuitBreakerState()).not.toBe('OPEN');
   });
 });

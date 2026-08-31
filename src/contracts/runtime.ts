@@ -98,6 +98,19 @@ export interface RuntimeSessionSnapshot {
   extensionKeys?: string[];
 }
 
+/**
+ * Result of a `listSessions()` drain. `complete: false` means the drain
+ * stopped early (page cap or overall timeout reached) and `sessions` is a
+ * PREFIX of the full set, not the whole set — callers must not treat it as
+ * exhaustive without checking this flag.
+ */
+export interface RuntimeListSessionsResult {
+  sessions: RuntimeSessionSnapshot[];
+  /** false => the drain stopped early; `sessions` is a prefix, not the whole set. */
+  complete: boolean;
+  pagesFetched: number;
+}
+
 export interface RuntimeCancelSessionRequest {
   runId: string;
   runtimeSessionId: string;
@@ -254,9 +267,16 @@ export interface RuntimeProvider {
   health(): Promise<RuntimeHealth>;
 
   // Session lifecycle observation.
-  // `listSessions` fully drains the runtime's paginated ListSessions RPC
-  // (following `next_page_token`) and returns the concatenated snapshots.
-  listSessions(): Promise<RuntimeSessionSnapshot[]>;
+  // `listSessions` drains the runtime's paginated ListSessions RPC (following
+  // `next_page_token`) up to a configurable page/time budget
+  // (RUNTIME_LIST_SESSIONS_MAX_PAGES / RUNTIME_LIST_SESSIONS_TIMEOUT_MS) and
+  // returns a `RuntimeListSessionsResult` whose `complete` flag tells the
+  // caller whether the drain actually reached an empty `next_page_token` or
+  // stopped early. It does NOT unconditionally "fully drain" the RPC — a
+  // server that never clears the token, or a slow drain that exceeds the
+  // overall timeout, yields a truthful partial result (`complete: false`)
+  // instead of silently returning a truncated list that looks whole.
+  listSessions(): Promise<RuntimeListSessionsResult>;
   watchSessions(): AsyncIterable<SessionLifecycleEvent>;
 
   /**

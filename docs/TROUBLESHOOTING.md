@@ -159,16 +159,18 @@ Some behavior (e.g. `ListSessions` pagination across a large session store) can 
        -H 'Authorization: Bearer macp-control-plane' \
        -d '{}' 127.0.0.1:50051 macp.v1.MACPRuntimeService/ListSessions
      ```
-   - To actually exceed a 100-session `ListSessions` page you must **seed live (OPEN) sessions** using an agent-role client — the control-plane must never emit envelopes itself (see the observer-only invariant above), so seeding has to go through `macp-sdk-python`/`macp-sdk-typescript` or a raw gRPC client acting as an agent, calling `SessionStart` directly against the runtime. Gotchas that cost real debugging time when doing this:
+   - To actually exceed a `ListSessions` page you must **seed live (OPEN) sessions** using an agent-role client — the control-plane must never emit envelopes itself (see the observer-only invariant above), so seeding has to go through `macp-sdk-python`/`macp-sdk-typescript` or a raw gRPC client acting as an agent, calling `SessionStart` directly against the runtime. Note the page size that matters here is the **control-plane's own** `RUNTIME_LIST_SESSIONS_PAGE_SIZE` (default 200) — the CP always sends an explicit `pageSize` on every `ListSessions` call, so the runtime's own server-side default (100) never applies once the CP is the caller. Gotchas that cost real debugging time when doing this:
      - The mode id is `macp.mode.decision.v1` — **not** `macp.mode.decision`.
      - `SessionStartPayload.configuration_version` **and** `mode_version` are both mandatory and must be non-empty strings (`../macp-runtime/crates/macp-core/src/session.rs:344-346`); an empty string is rejected, it is not treated as "use default".
      - The ack success field on the response is `ok` — **not** `accepted`.
      - `MACP_SESSION_START_LIMIT_PER_MINUTE` defaults to 60 **per sender**, so seeding more than 60 sessions in a minute requires spreading the `SessionStart` calls across distinct sender identities (distinct Bearer values), not just looping as one sender.
 3. Run the control-plane's integration suite against it:
    ```bash
-   INTEGRATION_RUNTIME=remote RUNTIME_ADDRESS=127.0.0.1:50051 npm run test:integration
+   INTEGRATION_RUNTIME=remote RUNTIME_ADDRESS=127.0.0.1:50051 \
+     RUNTIME_LIST_SESSIONS_PAGE_SIZE=50 npm run test:integration
    ```
    Specs gated with `test/helpers/real-runtime-gate.ts` (`describeWithRealRuntime`) — e.g. `test/integration/list-sessions-pagination.integration.spec.ts` — only run in this mode; they are skipped, not failed, under the default mock runtime.
+   - The live pagination spec asserts `pagesFetched > 1`, which requires the seeded store to span **more than one page at the control-plane's configured page size**. This doc does not prescribe a session count, so check what your store actually holds: if it is smaller than the default `RUNTIME_LIST_SESSIONS_PAGE_SIZE` (200), the whole store fits in one page and the spec fails with its "only fetched 1 page(s)" guard. There are two remedies, and you only need one: lower `RUNTIME_LIST_SESSIONS_PAGE_SIZE` (e.g. `=50`, as above, which spans multiple pages for any store above 50), or seed more than 200 live sessions so the default page size itself spans multiple pages.
 
 ## Common Error Codes
 

@@ -17,6 +17,9 @@ describe('AppConfigService', () => {
     delete process.env.RUNTIME_USE_DEV_HEADER;
     delete process.env.RUNTIME_REQUEST_TIMEOUT_MS;
     delete process.env.RUNTIME_DEV_AGENT_ID;
+    delete process.env.RUNTIME_LIST_SESSIONS_PAGE_SIZE;
+    delete process.env.RUNTIME_LIST_SESSIONS_MAX_PAGES;
+    delete process.env.RUNTIME_LIST_SESSIONS_TIMEOUT_MS;
     delete process.env.RUNTIME_STREAM_SUBSCRIPTION_MESSAGE_TYPE;
     delete process.env.RUNTIME_STREAM_SUBSCRIBER_ID;
     delete process.env.STREAM_IDLE_TIMEOUT_MS;
@@ -44,6 +47,21 @@ describe('AppConfigService', () => {
     it('should default port to 3001', () => {
       const config = new AppConfigService();
       expect(config.port).toBe(3001);
+    });
+
+    it('should default runtimeListSessionsPageSize to 200', () => {
+      const config = new AppConfigService();
+      expect(config.runtimeListSessionsPageSize).toBe(200);
+    });
+
+    it('should default runtimeListSessionsMaxPages to 200', () => {
+      const config = new AppConfigService();
+      expect(config.runtimeListSessionsMaxPages).toBe(200);
+    });
+
+    it('should default runtimeListSessionsTimeoutMs to 60000', () => {
+      const config = new AppConfigService();
+      expect(config.runtimeListSessionsTimeoutMs).toBe(60000);
     });
 
     it('should default runtimeRequestTimeoutMs to 30000', () => {
@@ -291,6 +309,79 @@ describe('AppConfigService', () => {
     it('should not throw when all production config is valid', () => {
       const config = new AppConfigService();
       expect(() => config.onModuleInit()).not.toThrow();
+    });
+  });
+
+  describe('listSessions pagination config (Phase 2, runtime 0.7.0 absorption)', () => {
+    it('should throw if RUNTIME_LIST_SESSIONS_PAGE_SIZE is zero, even outside production', () => {
+      process.env.RUNTIME_LIST_SESSIONS_PAGE_SIZE = '0';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_PAGE_SIZE must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_LIST_SESSIONS_PAGE_SIZE is negative', () => {
+      process.env.RUNTIME_LIST_SESSIONS_PAGE_SIZE = '-5';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_PAGE_SIZE must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_LIST_SESSIONS_MAX_PAGES is zero, even outside production', () => {
+      process.env.RUNTIME_LIST_SESSIONS_MAX_PAGES = '0';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_MAX_PAGES must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_LIST_SESSIONS_MAX_PAGES is negative', () => {
+      process.env.RUNTIME_LIST_SESSIONS_MAX_PAGES = '-1';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_MAX_PAGES must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_LIST_SESSIONS_TIMEOUT_MS is zero, even outside production (GAP 3)', () => {
+      process.env.RUNTIME_LIST_SESSIONS_TIMEOUT_MS = '0';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_TIMEOUT_MS must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_LIST_SESSIONS_TIMEOUT_MS is a blank string (Number(\'\') === 0 bypasses the default)', () => {
+      process.env.RUNTIME_LIST_SESSIONS_TIMEOUT_MS = '';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_TIMEOUT_MS must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_LIST_SESSIONS_TIMEOUT_MS is negative', () => {
+      process.env.RUNTIME_LIST_SESSIONS_TIMEOUT_MS = '-1000';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_TIMEOUT_MS must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_LIST_SESSIONS_PAGE_SIZE is fractional (GAP 4)', () => {
+      process.env.RUNTIME_LIST_SESSIONS_PAGE_SIZE = '2.5';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_PAGE_SIZE must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_LIST_SESSIONS_MAX_PAGES is fractional (GAP 4)', () => {
+      process.env.RUNTIME_LIST_SESSIONS_MAX_PAGES = '10.5';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_MAX_PAGES must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_LIST_SESSIONS_TIMEOUT_MS is fractional (GAP 4)', () => {
+      process.env.RUNTIME_LIST_SESSIONS_TIMEOUT_MS = '5000.5';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_TIMEOUT_MS must be a positive integer');
+    });
+
+    it('should not throw with valid positive overrides', () => {
+      process.env.RUNTIME_LIST_SESSIONS_PAGE_SIZE = '50';
+      process.env.RUNTIME_LIST_SESSIONS_MAX_PAGES = '10';
+      process.env.RUNTIME_LIST_SESSIONS_TIMEOUT_MS = '5000';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).not.toThrow();
+      expect(config.runtimeListSessionsPageSize).toBe(50);
+      expect(config.runtimeListSessionsMaxPages).toBe(10);
+      expect(config.runtimeListSessionsTimeoutMs).toBe(5000);
     });
   });
 

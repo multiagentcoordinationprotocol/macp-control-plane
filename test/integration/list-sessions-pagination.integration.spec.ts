@@ -3,10 +3,22 @@ import { RustRuntimeProvider } from '../../src/runtime/rust-runtime.provider';
 
 /**
  * Live ground-truth test for `RustRuntimeProvider.listSessions()` (Phase 1 of
- * plans/absorb-runtime-v0.7.0.md). It proves the multi-page drain branch in
- * `rust-runtime.provider.ts:452-475` actually executes against a real
- * runtime — until now that branch has only ever run against
- * `ScriptedMockRuntimeProvider`, which never returns a `next_page_token`.
+ * plans/absorb-runtime-v0.7.0.md, extended in Phase 2). It proves the
+ * multi-page drain branch in `rust-runtime.provider.ts` actually executes
+ * against a real runtime — until Phase 1 landed this branch had only ever
+ * run against `ScriptedMockRuntimeProvider`, which never returns a
+ * `next_page_token`.
+ *
+ * As of Phase 2, `listSessions()` sends an explicit `pageSize` (from
+ * `AppConfigService.runtimeListSessionsPageSize`, default 200) and returns a
+ * `RuntimeListSessionsResult` with `pagesFetched` and `complete` alongside
+ * `sessions`. This test asserts directly on `pagesFetched > 1` — the real
+ * signal that the drain loop followed a non-empty `next_page_token` at least
+ * once — instead of inferring multi-page behavior from `sessions.length`
+ * exceeding some assumed server page size. It also asserts `complete: true`:
+ * against the seeded store below with the default max-pages/timeout budget,
+ * the drain must reach an empty `next_page_token` and finish, or every other
+ * assertion here is only about a prefix of the store, not the whole thing.
  *
  * This spec constructs `RustRuntimeProvider` directly instead of booting the
  * whole app via `createTestApp()`. `listSessions()` needs no database, and
@@ -24,63 +36,35 @@ import { RustRuntimeProvider } from '../../src/runtime/rust-runtime.provider';
  * this test.
  *
  * Requires a real macp-runtime 0.7.0 reachable at RUNTIME_ADDRESS with more
- * than one server page (default page size 100) of *live* (non-terminal)
- * sessions. The runtime's persisted `.macp-data` store is NOT sufficient on
- * its own — its sessions are terminal and get evicted from memory at startup
+ * live (non-terminal) sessions than fit in one `RUNTIME_LIST_SESSIONS_PAGE_SIZE`
+ * page. The runtime's persisted `.macp-data` store is NOT sufficient on its
+ * own — its sessions are terminal and get evicted from memory at startup
  * (`evicted stale sessions from memory ... count=131`), so `ListSessions`
  * returns nothing for them. See docs/TROUBLESHOOTING.md → "Running a local
  * macp-runtime for verification" for how to seed enough live sessions and
- * the exact boot/verification commands.
- *
- * PAGE SIZE CAVEAT (read before touching this file in Phase 2+): the current
- * `listSessions()` never sends an explicit `pageSize`
- * (`rust-runtime.provider.ts:465` sends `{ pageToken }` only), so the runtime
- * applies its own server-side default — 100 sessions per page as of runtime
- * 0.7.0 — no matter what `RUNTIME_LIST_SESSIONS_PAGE_SIZE` is set to. Phase 2
- * of the absorption plan will make the CP send an explicit `pageSize`; until
- * that lands, `EXPECTED_PAGE_SIZE` below is floored at 100 so a configured
- * value below the true server page size (e.g. the `=50` that P2 AC6
- * prescribes) can never lower the multi-page guard below what the server
- * actually enforces today — doing so would let a single 100-item page
- * masquerade as proof of multi-page draining. A configured value above 100
- * is still allowed to raise the guard, which only makes the test stricter.
- * Once Phase 2 makes the CP send an explicit `pageSize` AND exposes
- * `pagesFetched`, replace this whole env-driven/floored `EXPECTED_PAGE_SIZE`
- * scheme with a direct assertion on `pagesFetched > 1` — that is the real
- * invariant we want, and it removes the coupling to the server's default
- * page size entirely.
+ * the exact boot/verification commands. Because this fixture now sends an
+ * explicit page size (default 200, same as production), a store of roughly
+ * 150 sessions fits in a single page — set `RUNTIME_LIST_SESSIONS_PAGE_SIZE`
+ * low (e.g. 50) to force multiple pages out of a smaller store, or seed more
+ * sessions so the store exceeds the configured page size on its own.
  */
 
-// Mirrors the not-yet-introduced Phase 2 config knob so this test keeps
-// exercising a genuine multi-page drain once page size becomes configurable.
-// Today (Phase 1, pre-P2) the CP never sends pageSize, so the runtime's own
-// server-side default applies — 100 sessions/page as of runtime 0.7.0 —
-// regardless of what this env var says.
+// Config knobs mirrored from `AppConfigService` (`src/config/app-config.service.ts`).
+// This fixture builds `RustRuntimeProvider`'s config directly, bypassing
+// AppConfigService/Nest DI entirely (see the class comment above), so the
+// same env vars and defaults are deliberately duplicated here rather than
+// imported, to keep this spec fully standalone.
 //
 // Guard against the empty-string case: `??` only catches `undefined`/`null`,
 // not `''`. `RUNTIME_LIST_SESSIONS_PAGE_SIZE=` (blank, routine in
-// `.env`/CI templates) would otherwise produce `Number('') = 0`, which
-// disables the loud-failure guard below entirely — `toBeGreaterThan(0)`
-// would then pass with a single session, a full false green. Treat any
-// blank, non-numeric, zero, or negative value the same as "unset" and fall
-// back to the server default of 100.
+// `.env`/CI templates) would otherwise produce `Number('') = 0`, which would
+// make the provider request page size 0. Treat any blank, non-numeric, zero,
+// or negative value the same as "unset" and fall back to the production
+// default of 200.
 const RAW_PAGE_SIZE = process.env.RUNTIME_LIST_SESSIONS_PAGE_SIZE?.trim();
 const PARSED_PAGE_SIZE = RAW_PAGE_SIZE ? Number(RAW_PAGE_SIZE) : NaN;
 const CONFIGURED_PAGE_SIZE =
-  Number.isFinite(PARSED_PAGE_SIZE) && PARSED_PAGE_SIZE > 0 ? PARSED_PAGE_SIZE : 100;
-
-// FLOOR at the true server-side default (100): the CP does not send an
-// explicit `pageSize` yet, so the runtime always pages at 100 regardless of
-// this env var. A configured value below 100 must not lower the guard below
-// the server's actual page size — that would let a single-page result (a
-// full 100-item page from a store that isn't even multi-page-sized) satisfy
-// `sessions.length > EXPECTED_PAGE_SIZE` without the drain loop's
-// non-empty-next-page-token branch ever having executed, i.e. a false green.
-// A configured value above 100 is left alone: raising the guard only makes
-// the test stricter, never weaker. Once Phase 2 lands (CP sends `pageSize`,
-// provider exposes `pagesFetched`), delete this floor and the env-driven
-// constant above in favor of asserting `pagesFetched > 1` directly.
-const EXPECTED_PAGE_SIZE = Math.max(CONFIGURED_PAGE_SIZE, 100);
+  Number.isFinite(PARSED_PAGE_SIZE) && PARSED_PAGE_SIZE > 0 ? PARSED_PAGE_SIZE : 200;
 
 describeWithRealRuntime('ListSessions pagination (live runtime)', () => {
   let provider: RustRuntimeProvider;
@@ -95,7 +79,12 @@ describeWithRealRuntime('ListSessions pagination (live runtime)', () => {
       runtimeTls: false,
       runtimeRequestTimeoutMs: 30000,
       runtimeCircuitBreakerThreshold: 5,
-      runtimeCircuitBreakerResetMs: 30000
+      runtimeCircuitBreakerResetMs: 30000,
+      // listSessions() pagination knobs — see AppConfigService for the
+      // production defaults this mirrors.
+      runtimeListSessionsPageSize: CONFIGURED_PAGE_SIZE,
+      runtimeListSessionsMaxPages: 200,
+      runtimeListSessionsTimeoutMs: 60000
     };
     const credentialResolver: any = {
       resolve: async () => ({
@@ -118,35 +107,40 @@ describeWithRealRuntime('ListSessions pagination (live runtime)', () => {
   it(
     'drains every page and returns unique, ascending session IDs spanning more than one server page',
     async () => {
-      const sessions = await provider.listSessions();
+      const { sessions, complete, pagesFetched } = await provider.listSessions();
 
       // ── Loud, non-vacuous failure if the store is too small ──
-      // A store at or below one server page can never prove the multi-page
-      // branch ran — `nextPageToken` would come back empty on page 1, and a
-      // green test here would mean nothing. Fail with an actionable message
-      // instead of silently passing, per plan §"Edge cases": "If the local
-      // store is under 100, the test must skip loudly rather than pass
-      // vacuously."
-      if (sessions.length <= EXPECTED_PAGE_SIZE) {
+      // A store that fits in one page can never prove the multi-page branch
+      // ran — `pagesFetched` would stay at 1, and a green test here would
+      // mean nothing. Fail with an actionable message instead of silently
+      // passing, per plan §"Edge cases": "If the local store is under 100,
+      // the test must skip loudly rather than pass vacuously."
+      if (pagesFetched <= 1) {
         throw new Error(
-          `listSessions() returned only ${sessions.length} sessions, which does not exceed the ` +
-            `configured page size of ${EXPECTED_PAGE_SIZE}. This test cannot prove multi-page ` +
-            `pagination against a store this small. Seed more live (non-terminal) sessions in the ` +
-            `runtime (see docs/TROUBLESHOOTING.md → "Running a local macp-runtime for verification") ` +
-            `so the total exceeds ${EXPECTED_PAGE_SIZE}, then re-run with ` +
-            `INTEGRATION_RUNTIME=remote npm run test:integration.`
+          `listSessions() only fetched ${pagesFetched} page(s) (returned ${sessions.length} sessions) against ` +
+            `a configured page size of ${CONFIGURED_PAGE_SIZE} (RUNTIME_LIST_SESSIONS_PAGE_SIZE). This test ` +
+            `cannot prove multi-page pagination against a store this small relative to the page size. Either ` +
+            `set RUNTIME_LIST_SESSIONS_PAGE_SIZE to a smaller value (e.g. 50) so the current store spans ` +
+            `multiple pages, or seed more live (non-terminal) sessions in the runtime (see ` +
+            `docs/TROUBLESHOOTING.md → "Running a local macp-runtime for verification") so the total exceeds ` +
+            `${CONFIGURED_PAGE_SIZE}, then re-run with INTEGRATION_RUNTIME=remote npm run test:integration.`
         );
       }
 
       // ── Proof the multi-page branch executed for real ──
-      // `sessions.length > EXPECTED_PAGE_SIZE` is only reachable if the loop
-      // in `listSessions()` followed a non-empty `next_page_token` at least
-      // once — a single page of the configured size can never exceed itself.
-      // A *short* page carrying a non-empty token (the runtime skips IDs
-      // whose session vanished between the ID scan and the per-ID fetch) is
-      // a legal intermediate state and does not affect this assertion: only
-      // the final concatenated count matters here.
-      expect(sessions.length).toBeGreaterThan(EXPECTED_PAGE_SIZE);
+      // `pagesFetched > 1` is only reachable if the loop in `listSessions()`
+      // followed a non-empty `next_page_token` at least once.
+      expect(pagesFetched).toBeGreaterThan(1);
+
+      // ── Proof the drain actually finished, not just ran multiple pages ──
+      // Against a live store sized for this test with the default
+      // max-pages/timeout budget, the drain must reach an empty
+      // `next_page_token` and return `complete: true`. If this were false,
+      // the drain aborted early (page cap or overall timeout) and every
+      // other assertion below is about a prefix of the store, not the whole
+      // set — which would make the uniqueness/ordering assertions far less
+      // meaningful.
+      expect(complete).toBe(true);
 
       const ids = sessions.map((s) => s.sessionId);
 

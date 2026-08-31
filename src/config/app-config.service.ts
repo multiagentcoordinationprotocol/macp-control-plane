@@ -72,6 +72,31 @@ export class AppConfigService implements OnModuleInit {
   readonly runtimeDevAgentId = process.env.RUNTIME_DEV_AGENT_ID ?? 'macp-control-plane';
 
   /**
+   * `listSessions()` pagination knobs (runtime v0.7.0 caps ListSessions pages
+   * server-side). Deliberately conservative defaults:
+   *
+   * - Page size defaults to 200, NOT the runtime's max of 1000. The gRPC
+   *   client is constructed with no channel options
+   *   (`rust-runtime.provider.ts` `createClient()`), so grpc-js's default 4 MB
+   *   `grpc.max_receive_message_length` applies. `SessionMetadata` carries
+   *   `repeated string participants` (up to 1000 per session),
+   *   `repeated ParticipantActivity`, and `repeated string extension_keys` —
+   *   a 1000-item page of large sessions can approach ~4 MB and fail with
+   *   RESOURCE_EXHAUSTED, turning a working-but-truncating drain into a total
+   *   failure. 200 keeps a worst-case page well under the limit. Values above
+   *   the runtime's max are clamped server-side, so a higher configured value
+   *   is safe from the server's perspective but not from the client's.
+   * - Max pages defaults to 200 (40,000 sessions ceiling) purely as a guard
+   *   against a server that never clears `next_page_token`; exhausting it
+   *   yields a truthful `complete: false`, not a silent truncation.
+   * - The overall timeout bounds the whole drain (not per-page), replacing an
+   *   unbounded worst case of maxPages * per-call deadlines.
+   */
+  readonly runtimeListSessionsPageSize = readNumber('RUNTIME_LIST_SESSIONS_PAGE_SIZE', 200);
+  readonly runtimeListSessionsMaxPages = readNumber('RUNTIME_LIST_SESSIONS_MAX_PAGES', 200);
+  readonly runtimeListSessionsTimeoutMs = readNumber('RUNTIME_LIST_SESSIONS_TIMEOUT_MS', 60000);
+
+  /**
    * When `MACP_AUTH_SERVICE_URL` is set, the credential resolver mints a
    * short-lived JWT for the `control-plane` sender via the auth-service
    * instead of using the static `RUNTIME_BEARER_TOKEN`. The minted token is
@@ -162,6 +187,32 @@ export class AppConfigService implements OnModuleInit {
   }
 
   private validate(): void {
+    // Config sanity checks that apply in every environment, not just production:
+    // a non-positive page size or page cap is always a misconfiguration, never
+    // a valid "use the server default" signal (0 pageSize would silently mean
+    // "server default" over the wire, which is exactly the untracked-truncation
+    // behavior this phase removes; negative values are a guaranteed
+    // INVALID_ARGUMENT from the runtime). Non-integer values are rejected too:
+    // `readNumber` admits any finite number, but `pageSize`/`page count` feed a
+    // proto `int32` field, and "positive integer" is the documented contract
+    // (.env.example, docs/INTEGRATION.md) — a fractional value must fail loud,
+    // not silently truncate or round somewhere downstream.
+    if (!Number.isInteger(this.runtimeListSessionsPageSize) || this.runtimeListSessionsPageSize <= 0) {
+      throw new Error('RUNTIME_LIST_SESSIONS_PAGE_SIZE must be a positive integer');
+    }
+    if (!Number.isInteger(this.runtimeListSessionsMaxPages) || this.runtimeListSessionsMaxPages <= 0) {
+      throw new Error('RUNTIME_LIST_SESSIONS_MAX_PAGES must be a positive integer');
+    }
+    // RUNTIME_LIST_SESSIONS_TIMEOUT_MS=0 (or a blank env-file entry, since
+    // `Number('') === 0` and `Number.isFinite(0)` is true, so readNumber's
+    // default never kicks in) would set deadlineAt = Date.now(), so the very
+    // first loop check in listSessions() returns an empty complete:false
+    // result having issued zero RPCs — the silent-degradation class this
+    // phase exists to remove. Validate it exactly like the other two knobs.
+    if (!Number.isInteger(this.runtimeListSessionsTimeoutMs) || this.runtimeListSessionsTimeoutMs <= 0) {
+      throw new Error('RUNTIME_LIST_SESSIONS_TIMEOUT_MS must be a positive integer');
+    }
+
     if (this.isDevelopment) return;
 
     // 1.2: Fail-fast if no runtime credential in production while relying on the
