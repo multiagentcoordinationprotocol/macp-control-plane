@@ -1,6 +1,6 @@
 # Absorb macp-runtime v0.7.0 (and 0.6.x) + macp-proto 0.1.9
 
-Status: **in progress** (P1–P2 DONE; P3–P7 TODO)
+Status: **in progress** (P1–P3 DONE; P4–P7 TODO)
 Owner: control-plane maintainers
 Upstream inputs: `macp-runtime` v0.7.0 (`CHANGELOG.md` `[0.7.0] — 2026-08-31`, PRs #116 / #108, `docs/change-review-phases-a-e.md`), `@multiagentcoordinationprotocol/proto` 0.1.8 → 0.1.9.
 
@@ -247,7 +247,7 @@ Legend: **IMPACT** = change required here; **NO IMPACT** = verified no change ne
 
 ### Phase 3 — Stream-consumer ordinal correctness + invariant-6 comment fixes
 
-- **Status:** TODO
+- **Status:** DONE
 - **Delivers:** The envelope ordinal can no longer drift ahead of what was actually persisted; the two comments that contradict invariant 6 are corrected.
 - **Depends on:** nothing (independent of P1/P2).
 - **Files:** `src/runs/stream-consumer.service.ts`, `src/runs/stream-consumer.service.spec.ts`, `src/runtime/rust-runtime.provider.ts` (comment + filter), `src/runtime/rust-runtime.provider.spec.ts` (comment + new case).
@@ -264,6 +264,27 @@ Legend: **IMPACT** = change required here; **NO IMPACT** = verified no change ne
   5. All existing stream-consumer specs still pass.
 - **Tests:** unit — persist-throws leaves the ordinal unchanged (new); empty-`sessionId` envelope filtered + logged (new); existing ordinal/resume/gap specs (`stream-consumer.service.spec.ts:338-484`) unchanged and green; existing frame-semantics specs (`rust-runtime.provider.spec.ts:82-211`) unchanged and green.
 - **Docs:** none (comment-level only).
+- **Divergence / notes from implementation (recorded at phase close):**
+  1. **A third false comment was found and fixed**, beyond the two the plan named. The filter
+     block still asserted "Runtime may broadcast across sessions on a shared stream" — that is
+     false. The verifier established from `../macp-runtime` that the stream bus is strictly
+     per-session (`src/stream_bus.rs:8-46` is a per-session-keyed broadcast map; the emit loop
+     has no `session_id` filter *because the channel is the filter*), and that empty-`session_id`
+     envelopes are structurally impossible on `StreamSession` (`src/runtime.rs:229-232` guards
+     publish on `!env.session_id.is_empty()`). Left standing, that false premise is exactly the
+     justification a future reader would use to argue the new `warn` is too noisy.
+  2. **Both new filter branches are unreachable against a conforming runtime.** That is the
+     point — a firing `warn` means a protocol violation or a proxy/routing bug, so warn-once or
+     a counter would be *worse*: they would suppress a signal that should never appear even once.
+  3. **The plan's line references were stale** (P2 shifted the provider by ~32 lines): the stale
+     header comment was at `:84`, not `:62`, and the spec comment at `:15`, not `:11-12`.
+  4. **A post-commit failure window was documented and tested** but deliberately not changed.
+     `persistRawAndCanonical` commits its transaction and *then* runs metrics + StreamHub
+     publish; if those throw, the events are already durable, so the resubscribe redelivers and
+     appends duplicates (there is no message-id dedup, and `onConflictDoNothing` cannot fire
+     because each append gets a fresh UUID and seq). Duplication-over-loss is the right trade —
+     pre-fix, the same failure advanced the ordinal and caused silent **loss** — but the comment
+     now says so explicitly instead of claiming an unqualified guarantee.
 
 ### Phase 4 — Cross-process envelope-ordinal resume
 

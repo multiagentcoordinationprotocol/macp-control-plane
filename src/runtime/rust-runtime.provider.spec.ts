@@ -12,8 +12,10 @@ import { AppException } from '../errors/app-exception';
  * Focused unit tests for the RFC-MACP-0006 §3.2 passive-subscribe behavior
  * added to RustRuntimeProvider.subscribeSession(): the control-plane writes
  * exactly one frame ({subscribeSessionId, afterSequence}) on the bidi stream
- * and then half-closes the write side. Full gRPC plumbing (proto loading,
- * real channel) is bypassed by stubbing the gRPC client directly.
+ * and then deliberately keeps the write side open (README invariant 6) —
+ * half-closing would signal "client is done" and stop live-envelope
+ * broadcast. Full gRPC plumbing (proto loading, real channel) is bypassed by
+ * stubbing the gRPC client directly.
  */
 
 interface FakeStream {
@@ -49,7 +51,8 @@ interface FakeListSessionsInstrumentation {
 
 function makeProvider(
   streamFactory: () => unknown,
-  configOverrides: Record<string, unknown> = {}
+  configOverrides: Record<string, unknown> = {},
+  watchSignalsStreamFactory?: () => unknown
 ): {
   provider: RustRuntimeProvider;
   resolver: RuntimeCredentialResolverService;
@@ -84,7 +87,8 @@ function makeProvider(
   // a function that yields our fake bidi stream.
   const fakeStreamSession = jest.fn(() => streamFactory());
   (provider as unknown as { client: unknown }).client = {
-    StreamSession: fakeStreamSession
+    StreamSession: fakeStreamSession,
+    ...(watchSignalsStreamFactory ? { WatchSignals: jest.fn(() => watchSignalsStreamFactory()) } : {})
   };
 
   return { provider, resolver, instrumentation };
@@ -229,6 +233,101 @@ describe('RustRuntimeProvider.subscribeSession — passive-subscribe frame (RFC-
     const envelopeEvents = events.filter((e) => e.kind === 'stream-envelope');
     expect(envelopeEvents).toHaveLength(1);
     expect(envelopeEvents[0].envelope?.messageId).toBe('m2');
+  });
+
+  it('drops an envelope with an empty sessionId on the per-session StreamSession and logs a warning', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream);
+    const warnSpy = jest.spyOn((provider as unknown as { logger: { warn: (msg: string) => void } }).logger, 'warn');
+
+    const handle = provider.subscribeSession(baseReq);
+    await new Promise((r) => setImmediate(r));
+
+    // Empty sessionId (e.g. malformed/ambient-shaped envelope arriving on the
+    // per-session stream) must NOT pass the filter — the old `envelope.sessionId &&`
+    // short-circuit let this through and silently advanced the resume ordinal.
+    stream.emit('data', {
+      envelope: {
+        sessionId: '',
+        messageType: 'Signal',
+        messageId: 'sig-1',
+        sender: 'agent-1',
+        payload: Buffer.from(''),
+        timestampUnixMs: 1
+      }
+    });
+    // Absent sessionId (undefined) must also be dropped.
+    stream.emit('data', {
+      envelope: {
+        messageType: 'Signal',
+        messageId: 'sig-2',
+        sender: 'agent-1',
+        payload: Buffer.from(''),
+        timestampUnixMs: 2
+      }
+    });
+    // Same-session envelope still delivered.
+    stream.emit('data', {
+      envelope: {
+        sessionId: 'sess-abc',
+        messageType: 'Decision',
+        messageId: 'm2',
+        sender: 'agent-1',
+        payload: Buffer.from(''),
+        timestampUnixMs: 3
+      }
+    });
+    stream.emit('end');
+
+    const events = await drain(handle.events);
+    const envelopeEvents = events.filter((e) => e.kind === 'stream-envelope');
+    expect(envelopeEvents).toHaveLength(1);
+    expect(envelopeEvents[0].envelope?.messageId).toBe('m2');
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    // Both calls share the "mismatched or empty sessionId" prefix, so pin down the
+    // interpolated envelopeSessionId to prove each drop was logged for the right
+    // envelope — not just that *some* warning containing "empty sessionId" fired.
+    expect(warnSpy.mock.calls[0][0]).toEqual(
+      expect.stringContaining('envelopeSessionId="", messageType=Signal, messageId=sig-1')
+    );
+    expect(warnSpy.mock.calls[1][0]).toEqual(
+      expect.stringContaining('envelopeSessionId="undefined", messageType=Signal, messageId=sig-2')
+    );
+  });
+
+  it('does not leak the empty-sessionId drop into watchSignals() — ambient Signal envelopes with empty sessionId are still delivered', async () => {
+    const signalStream = makeFakeStream();
+    const { provider } = makeProvider(
+      () => makeFakeStream(),
+      {},
+      () => signalStream
+    );
+
+    const iterable = provider.watchSignals();
+    const collected = drain(iterable);
+    await new Promise((r) => setImmediate(r));
+
+    // Ambient Signal envelopes always carry an empty sessionId (correlation
+    // happens via `correlation_session_id` in the decoded payload instead —
+    // see SignalConsumerService). watchSignals() has no session filter at all,
+    // and must keep delivering these unmodified by the StreamSession-only fix.
+    signalStream.emit('data', {
+      envelope: {
+        sessionId: '',
+        messageType: 'Signal',
+        messageId: 'sig-1',
+        sender: 'agent-1',
+        payload: Buffer.from(''),
+        timestampUnixMs: 1
+      }
+    });
+    signalStream.emit('end');
+
+    const events = await collected;
+    const envelopeEvents = events.filter((e) => e.kind === 'stream-envelope');
+    expect(envelopeEvents).toHaveLength(1);
+    expect(envelopeEvents[0].envelope?.sessionId).toBe('');
+    expect(envelopeEvents[0].envelope?.messageId).toBe('sig-1');
   });
 });
 

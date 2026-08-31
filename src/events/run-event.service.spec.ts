@@ -303,5 +303,32 @@ describe('RunEventService', () => {
       expect(result[1].id).toBeDefined();
       expect(result[1].id).not.toBe('');
     });
+
+    it('rejects on a post-commit metrics failure even though the transaction already committed (duplication-over-loss window)', async () => {
+      // The DB transaction (allocateSequence/appendRaw/appendCanonical/applyAndPersist)
+      // commits before metricsService.recordEvents and streamHub.publish* run. If
+      // recordEvents throws, the caller (StreamConsumerService.handleRawEventInner)
+      // sees a rejected promise and never bumps its envelope ordinal, so the runtime
+      // redelivers this envelope — appending duplicate rows, since the redelivered
+      // event gets a fresh id/seq and onConflictDoNothing cannot dedup it. This test
+      // proves the commit already happened by the time the rejection is observed.
+      runRepository.allocateSequence.mockResolvedValue(1);
+      metricsService.recordEvents.mockRejectedValueOnce(new Error('metrics backend unavailable'));
+
+      await expect(service.persistRawAndCanonical('run-1', rawEvent, canonicalEvents)).rejects.toThrow(
+        'metrics backend unavailable'
+      );
+
+      // The transaction (and everything inside it) already ran and resolved —
+      // the events are durably persisted before the rejection surfaces.
+      expect(eventRepository.appendRaw).toHaveBeenCalled();
+      expect(eventRepository.appendCanonical).toHaveBeenCalled();
+      expect(projectionService.applyAndPersist).toHaveBeenCalled();
+
+      // The failure happened after the commit, so downstream publish (which
+      // runs after metrics in source order) never fires for this call.
+      expect(streamHub.publishEvent).not.toHaveBeenCalled();
+      expect(streamHub.publishSnapshot).not.toHaveBeenCalled();
+    });
   });
 });
