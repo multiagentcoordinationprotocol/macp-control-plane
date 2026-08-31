@@ -19,8 +19,21 @@ _(one checkpoint per phase; `/implement` appends)_
 
 ## Repo map (gathered during planning — do not re-scan)
 
+> **Anchor by symbol, not by line.** Line numbers below are correct as of the P3 merge but rot
+> every time a phase inserts code — this map has already been wrong twice (P2 shifted the
+> provider ~32 lines, P3 shifted it ~16 more). Grep for the quoted symbol; treat the `:N` as a
+> hint, and re-grep before trusting it.
+
 ### Runtime / gRPC boundary
-- `src/runtime/rust-runtime.provider.ts` — the gRPC provider. `listSessions` at **:484+** (rewritten in P2; `MAX_PAGE_SIZE_HALVINGS` at **:72**, `buildCircuitBreaker()` at **:158-168**); `subscribeSession` at **:231-392** (handle gate in consumeLoop at `stream-consumer.service.ts:209`) (single frame written at **:317-320**, session filter at **:289**, no `.end()` anywhere in the file, rationale comment at **:306-315**); `unary()` helper at **:866-901** (per-call deadline at **:876**, circuit breaker at **:874**; already accepted an optional `GrpcCallOptions` on `main` — P2 did **not** change its signature); proto-loader options at **:125-139** (`keepCase: false` at **:132**); Initialize response version read at **:221**. header comment at **:81-87** and rationale at **:326-330** both now correctly state the write side is **kept open** (fixed in P3); session filter rewritten at **:288-305**.
+- `src/runtime/rust-runtime.provider.ts` — the gRPC provider. Grep these symbols (line hints as of P3):
+  `async listSessions(` **:500** (rewritten in P2); `const MAX_PAGE_SIZE_HALVINGS` **:72**;
+  `private buildCircuitBreaker(): ` **:160**; `subscribeSession(req` **:233** (handle gate in
+  consumeLoop at `stream-consumer.service.ts:209`); the single passive-subscribe frame
+  `grpcCall.write({` **:333**; the session filter `if (!envelope.sessionId ||` **:298** (P3 — drops
+  empty/absent too); `// We deliberately do NOT half-close` **:326** and the class header comment
+  **:81-87**, both correctly stating the write side is **kept open** (P3 fixed both); **no `.end()`
+  anywhere in this file**; `private async unary(` **:882** (already took an optional
+  `GrpcCallOptions` on `main` — P2 did **not** change its signature); `keepCase: false` **:134**.
 - `src/contracts/runtime.ts` — `RuntimeProvider` interface. `listSessions` declared **:279**, returning `RuntimeListSessionsResult` (**:107-112**); the false "fully drains" comment was corrected in P2. Policy types from **:300**.
 - `src/runtime/proto-registry.service.ts` — `MESSAGE_TYPE_MAP` at **:5-47** (`Commitment → macp.v1.CommitmentPayload` at :8); loads 8 protos at **:65-83** via raw protobufjs; `decodeMessage` at **:155-161**.
 - `src/runtime/observer-invariant.spec.ts` — grep-based invariant lint (90 lines). Forbidden patterns **:13-38**; walks `src/` at **:40-52**; comment stripping **:66-77**. **Must not be weakened.**
@@ -28,7 +41,13 @@ _(one checkpoint per phase; `/implement` appends)_
 - `src/runtime/runtime-credential-resolver.service.ts` — JWT mint → static bearer → dev bearer (**:53-58**).
 
 ### Stream / run orchestration
-- `src/runs/stream-consumer.service.ts` — the per-session consume loop. `resumeFromEnvelopeOrdinal` param **:74**, consumed **:84**; compacted-error classifier **:150-153**; `emitStreamGap` **:160-181**; resume-disabled break **:230**; gap break **:236**; resubscribe with ordinal **:245-249**; poll fallback **:255+**; `persistRawAndCanonical` **:380**, **ordinal increment now :393 (after the persist, P3)**; cursor persist **:396-397** (guarded by `lastProcessedSeq > 0` — can make the ordinal LAG, see P4). No message-id dedup (**:146-148**, **:206-207**).
+- `src/runs/stream-consumer.service.ts` — the per-session consume loop. Grep these symbols
+  (line hints as of P3): `resumeFromEnvelopeOrdinal` param **:74**, consumed **:84**;
+  `emitStreamGap` **:160-181**; the compacted-error classifier **:150-153**; resubscribe-with-ordinal
+  **:245-249**; `persistRawAndCanonical(runId` **:380**; `marker.envelopeOrdinal += 1` **:405**
+  (P3 moved it to **after** the persist); `updateStreamCursor(` **:415** — still guarded by
+  `lastProcessedSeq > 0`, which can make the persisted ordinal **LAG**; that guard is P4's hazard,
+  and P4 should grep `updateStreamCursor` rather than trust this number. No message-id dedup.
 - `src/runs/run-executor.service.ts` — first subscribe (no `afterSequence`) at **:348**, **:353**.
 - `src/runs/session-discovery.service.ts` — `WatchSessions` only, never `listSessions`. Loop **:52-67**, dispatch **:73-92**, subscribe **:138-143**. Unbounded `knownSessions` Set at **:22**.
 - `src/runs/run-recovery.service.ts` — calls `streamConsumer.start({...})` at **:123-131** with `pollOnly: true` at **:130**, NO `sessionHandle`, and NO `RuntimeProviderRegistry` in its constructor (**:16-24**) — P4 must inject the registry and subscribe; computes `resumeFromSeq` from `lastStreamCursor` at **:121**. **This is where P4 wires the ordinal.**
@@ -162,8 +181,17 @@ _(one checkpoint per phase; `/implement` appends)_
 - **Live-verified:** nothing new in this phase — it is unit-level only. The runtime-side claims
   (per-session bus, empty-`session_id` impossible on `StreamSession`) were verified by **reading
   `../macp-runtime` source**, not by observing a live runtime.
-- **Next:** ship P3 as its own PR, then P4 (cross-process envelope-ordinal resume) — the plan's
-  riskiest phase.
+- **Ship gate:** 1 round, **GAPS** — 3 items, none in `src/` behavior: (G1) the `PROGRESS.md` repo
+  map carried false line references *again*, including `:393` for the ordinal increment (actually
+  `:405`) — the exact pointer P4 follows. Rather than patch the numbers a third time, the map is
+  now **anchored on greppable symbols** with line numbers demoted to hints. (G2) the new
+  post-commit test asserted "the transaction already committed" but the mocked `db.transaction`
+  had no commit semantics — the gate proved it by mutation (moving metrics/publish *inside* the
+  transaction still passed). (G3) the newly-accepted duplicate-append failure mode was missing
+  from `ASSUMPTIONS.md`. All three closed before merge.
+- **Next:** P4 (cross-process envelope-ordinal resume) — the plan's riskiest phase. Note the
+  `lastProcessedSeq > 0` guard on `updateStreamCursor` can make the *persisted* ordinal lag; that
+  is P4's central hazard.
 
 ## Assumptions / decisions log
 

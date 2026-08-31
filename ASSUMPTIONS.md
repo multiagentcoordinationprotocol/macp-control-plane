@@ -99,6 +99,60 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   pages.
 - **Status:** UNCONFIRMED
 
+## P3 — post-commit metrics/publish failure now duplicates events instead of losing them
+- **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 3, divergence note 4)
+- **Assumed:** It is acceptable to leave `persistRawAndCanonical` (`src/events/run-event.service.ts`)
+  committing its drizzle transaction (raw + canonical rows + projection) and only *then* calling
+  `metricsService.recordEvents` and `streamHub.publishEvent`/`publishSnapshot` outside that
+  transaction, rather than restructuring so the whole thing is atomic.
+- **Chose:** Leave the ordering as-is and accept the resulting failure mode: if `recordEvents` or
+  either `publish*` call throws, the promise from `persistRawAndCanonical` rejects. In
+  `StreamConsumerService.handleRawEventInner` (`src/runs/stream-consumer.service.ts:379-406`) the
+  `marker.envelopeOrdinal` increment and the `updateStreamCursor` persist both sit *after* that
+  call resolves, so neither happens — the in-process resubscribe (and, once P4 lands, a
+  cross-process restart) requests `afterSequence: marker.envelopeOrdinal` again and the runtime
+  redelivers the same envelope. Verified this actually duplicates rather than getting deduped:
+  `EventRepository.appendRaw`/`appendCanonical` (`src/storage/event.repository.ts`) call
+  `.onConflictDoNothing()`, but the only unique indexes are `run_events_raw_run_seq_unique` and
+  `run_events_canonical_run_seq_unique` on `(run_id, seq)` (`src/db/schema.ts:102,130`) — and the
+  redelivered envelope gets a fresh `randomUUID()` id and a freshly-`allocateSequence`'d `seq`
+  (`run-event.service.ts:117-121`), so the conflict target never matches and a second, distinct
+  row is inserted. Pre-P3 the same post-commit failure instead advanced the ordinal unconditionally
+  and caused silent, permanent **loss** of the envelope; duplication-over-loss is the trade this
+  phase chose, matching the plan's own framing at `plans/absorb-runtime-v0.7.0.md:283-286` and
+  `:396-397,410`.
+- **Alternatives:** (a) Move `metricsService.recordEvents`/`streamHub.publish*` inside the
+  transaction callback — rejected: couples row durability to a metrics-backend or in-memory
+  StreamHub failure (an unrelated subsystem outage would roll back durable event persistence) and
+  lengthens the transaction. G2's regression test
+  (`src/events/run-event.service.spec.ts`, `persistRawAndCanonical` describe block) now fails if
+  this is done. (b) Decouple the ordinal/cursor advance from metrics+publish success — i.e. advance
+  once the transaction commits, and let a metrics/publish failure only log rather than block
+  redelivery — judged out of scope for this phase: it removes the automatic retry that currently
+  makes a transient metrics-backend blip self-healing, and was not attempted here.
+- **Blast radius if wrong:** Confirmed by reading the code (not guessed): both
+  `MetricsService.recordEvents` (`src/metrics/metrics.service.ts:118-139`, unconditional
+  `eventCount += 1` etc. per event, no id-based dedup) and `ProjectionService.applyEvents`
+  (`src/projection/projection.service.ts:93-105`, unconditional `timeline.totalEvents += 1` per
+  event, no id-based dedup) would double-count a redelivered duplicate if they are re-invoked for
+  it — i.e. `run_metrics` counters (`eventCount`, `messageCount`, `signalCount`, token/cost totals)
+  and `run_projections.timeline` inflate for the affected run, and any dashboard/export aggregate
+  built from those tables inherits the inflation. What this analysis could **not** cheaply confirm:
+  whether metrics specifically double-counts in the exact failure ordering exercised by this path
+  (if `recordEvents` itself is the call that throws, its own write may not have landed the first
+  time, so the redelivery's successful `recordEvents` call could be the *only* one that counts that
+  batch — the double-count risk is clearest when `publishEvent`/`publishSnapshot` is the one that
+  throws *after* `recordEvents` already succeeded) — this would need a live/integration
+  reproduction to pin down precisely, and none was run. Scope is one affected run per occurrence;
+  this is not a systemic corruption path.
+- **Caveat (raised by the phase verifier):** "the runtime redelivers" is specifically the
+  **resubscribe** path (`stream-consumer.service.ts:244-256`). If `STREAM_RESUME_ENABLED=false`, or
+  the stream retry budget (`STREAM_MAX_RETRIES`) is exhausted, the consumer degrades to poll-only
+  (`:230,239`) instead of resubscribing — the poll path re-fetches a `getSession` snapshot, not the
+  missed envelope, so in that case the envelope is **not** redelivered and the pre-P3 loss outcome
+  can still occur.
+- **Status:** UNCONFIRMED
+
 ## P2 — the RESOURCE_EXHAUSTED halving ladder is capped at 2 retries
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 2)
 - **Assumed:** A size-probe sequence must not be able to trip the **shared** circuit breaker.
