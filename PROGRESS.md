@@ -10,7 +10,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | Phase | Status | Rounds | Verifier | Commit | PR |
 |---|---|---|---|---|---|
 | P1 live harness + ListSessions ground truth | **DONE** | 3 (GAPS→GAPS→PASS) | Opus | `716fa9b` | **merged #61** |
-| P2 truth-in-contract for `listSessions` | **DONE** | 2 (GAPS→PASS) | Opus | (head of `absorb-runtime-v0.7.0-p2`) | — |
+| P2 truth-in-contract for `listSessions` | **DONE** | 2 (GAPS→PASS) + ship-gate 1 (GAPS→fixed) | Opus | `f6702e2` | **merged #62** |
 | P3 ordinal correctness + invariant-6 comments | TODO | — | — | — | — |
 | P4 cross-process envelope-ordinal resume | TODO | — | — | — | — |
 | P5 live B2 re-verification | TODO | — | — | — | — |
@@ -142,3 +142,11 @@ _(one checkpoint per phase; `/implement` appends)_
 See `ASSUMPTIONS.md` (created by `/implement` as phases land) and `plans/absorb-runtime-v0.7.0.md` §8.
 
 PR #62 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/62 (pushed absorb-runtime-v0.7.0-p2 f2ed6be; CI all green incl. integration-test)
+merged #62 as `f6702e2` — all 11 checks green (test, typecheck, lint, build, audit,
+conventions, CodeQL, analyze, docker, check-env-secrets, **integration-test**).
+Ship gate returned GAPS on two record-level items (docs/INTEGRATION.md documented the
+pre-fix 'floor of 1' retry ladder; PROGRESS.md's repo map still pointed P3 at `:62` for a
+comment that moved to `:84`). Both fixed in `1cd9800` before merge, CI re-run green.
+**Next:** P3 — ordinal correctness + the two invariant-6-contradicting comments
+(`rust-runtime.provider.ts:84`, `rust-runtime.provider.spec.ts:11-12`), on branch
+`absorb-runtime-v0.7.0-p3`.
