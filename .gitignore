@@ -11,6 +11,8 @@ coverage/
 CLAUDE.md
 /plans/
 .claude/
+# Session-scratch lock written by /drive; never belongs in a commit.
+.drive.lock
 
 # Secrets / environment
 .env
