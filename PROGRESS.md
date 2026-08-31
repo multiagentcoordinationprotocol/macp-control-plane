@@ -20,11 +20,11 @@ _(one checkpoint per phase; `/implement` appends)_
 ## Repo map (gathered during planning — do not re-scan)
 
 ### Runtime / gRPC boundary
-- `src/runtime/rust-runtime.provider.ts` — the gRPC provider. `listSessions` at **:484+** (rewritten in P2; `MAX_PAGE_SIZE_HALVINGS` at **:72**, `buildCircuitBreaker()` at **:158-171**); `subscribeSession` at **:199-355** (handle gate in consumeLoop at `stream-consumer.service.ts:209`) (single frame written at **:285-288**, session filter at **:257**, no `.end()` anywhere in the file, rationale comment at **:274-283**); `unary()` helper at **:866-900** (per-call deadline at **:876**, circuit breaker at **:874**; already accepted an optional `GrpcCallOptions` on `main` — P2 did **not** change its signature); proto-loader options at **:110-124** (`keepCase: false`); Initialize response version read at **:189**. **Stale comment at :62** claims the write side is closed (P3 fixes).
-- `src/contracts/runtime.ts` — `RuntimeProvider` interface. `listSessions` declared **:279**, returning `RuntimeListSessionsResult` (**:107-112**); the false "fully drains" comment was corrected in P2. Policy types from **:280**.
+- `src/runtime/rust-runtime.provider.ts` — the gRPC provider. `listSessions` at **:484+** (rewritten in P2; `MAX_PAGE_SIZE_HALVINGS` at **:72**, `buildCircuitBreaker()` at **:158-168**); `subscribeSession` at **:231-392** (handle gate in consumeLoop at `stream-consumer.service.ts:209`) (single frame written at **:317-320**, session filter at **:289**, no `.end()` anywhere in the file, rationale comment at **:306-315**); `unary()` helper at **:866-901** (per-call deadline at **:876**, circuit breaker at **:874**; already accepted an optional `GrpcCallOptions` on `main` — P2 did **not** change its signature); proto-loader options at **:125-139** (`keepCase: false` at **:132**); Initialize response version read at **:221**. **Stale comment at :84** claims the write side is closed (P3 fixes) — note this moved from `:62` when P2 added `MAX_PAGE_SIZE_HALVINGS`; `:62` is now part of that new comment. The *correct* rationale comment lives at **:310**.
+- `src/contracts/runtime.ts` — `RuntimeProvider` interface. `listSessions` declared **:279**, returning `RuntimeListSessionsResult` (**:107-112**); the false "fully drains" comment was corrected in P2. Policy types from **:300**.
 - `src/runtime/proto-registry.service.ts` — `MESSAGE_TYPE_MAP` at **:5-47** (`Commitment → macp.v1.CommitmentPayload` at :8); loads 8 protos at **:65-83** via raw protobufjs; `decodeMessage` at **:155-161**.
 - `src/runtime/observer-invariant.spec.ts` — grep-based invariant lint (90 lines). Forbidden patterns **:13-38**; walks `src/` at **:40-52**; comment stripping **:66-77**. **Must not be weakened.**
-- `src/runtime/rust-runtime.provider.spec.ts` — frame-semantics tests **:82-211** (`.end()` not called asserted at **:105**, again at **:156**); pagination tests **:214-252** (assert exact request bodies — will break when `pageSize` is added). **Stale file-doc comment at :11-12.**
+- `src/runtime/rust-runtime.provider.spec.ts` — frame-semantics tests **:103-233** (`.end()` not called asserted at **:126**, again at **:177**); pagination/bounds tests **:235-460**; the real-`CircuitBreaker` RESOURCE_EXHAUSTED-ladder regression test **:462+**. **Stale file-doc comment at :11-12.**
 - `src/runtime/runtime-credential-resolver.service.ts` — JWT mint → static bearer → dev bearer (**:53-58**).
 
 ### Stream / run orchestration
@@ -140,3 +140,5 @@ _(one checkpoint per phase; `/implement` appends)_
 ## Assumptions / decisions log
 
 See `ASSUMPTIONS.md` (created by `/implement` as phases land) and `plans/absorb-runtime-v0.7.0.md` §8.
+
+PR #62 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/62 (pushed absorb-runtime-v0.7.0-p2 f2ed6be; CI all green incl. integration-test)

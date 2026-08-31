@@ -154,7 +154,12 @@ prefix, not the whole set.
 | `RUNTIME_LIST_SESSIONS_TIMEOUT_MS` | 60000 | Bounds the whole drain (not each page). On expiry, returns `complete: false`. Must be a positive integer. |
 
 On `RESOURCE_EXHAUSTED` for a single page, the provider halves the page size and
-retries that page (floor of 1) before giving up. Any other gRPC error (or a
+retries that same page, capped at **2 halvings across the whole drain** (so 3
+attempts total at the default page size: 200 → 100 → 50), then rethrows. The cap
+is deliberately below the default `RUNTIME_CIRCUIT_BREAKER_THRESHOLD` of 5: an
+uncapped ladder down to a page size of 1 is 8 consecutive failures through the
+*shared* circuit breaker, which opens it and disables every unrelated runtime RPC
+until it resets. Any other gRPC error (or a
 circuit-breaker trip) propagates and discards the pages collected so far — a
 partial result from a *failing* runtime is not treated the same as a page-capped
 one.
