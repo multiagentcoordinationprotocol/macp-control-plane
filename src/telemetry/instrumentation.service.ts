@@ -89,6 +89,17 @@ export class InstrumentationService implements OnModuleInit {
     help: 'Total StreamSession resume attempts that hit a compacted-history gap (FAILED_PRECONDITION) and degraded to poll-only'
   });
 
+  readonly macpRuntimeListSessionsTruncatedTotal = new client.Counter({
+    name: 'macp_runtime_list_sessions_truncated_total',
+    help: 'Total listSessions() drains that stopped early (page cap or overall timeout) and returned a partial result'
+  });
+
+  readonly macpRuntimeListSessionsPages = new client.Histogram({
+    name: 'macp_runtime_list_sessions_pages',
+    help: 'Number of pages fetched per listSessions() drain',
+    buckets: [1, 2, 5, 10, 25, 50, 100, 200]
+  });
+
   readonly recoveryTotal = new client.Counter({
     name: 'macp_recovery_total',
     help: 'Total recovery attempts by status',

@@ -30,6 +30,7 @@ import {
   RuntimeUnregisterPolicyResult,
   RuntimeGetPolicyRequest,
   RuntimeListPoliciesRequest,
+  RuntimeListSessionsResult,
   RuntimePolicyDescriptor,
   SessionLifecycleEvent
 } from '../contracts/runtime';
@@ -48,6 +49,27 @@ import { RuntimeCredentialResolverService } from './runtime-credential-resolver.
 export interface GrpcCallOptions {
   deadline?: Date;
 }
+
+/**
+ * Bound on how many times `listSessions()` will halve `pageSize` and retry the
+ * same page after a RESOURCE_EXHAUSTED response, across the *whole* drain (not
+ * per page). Every retry goes through `unary()` → the shared `CircuitBreaker`,
+ * and `isExpectedError` does NOT exempt RESOURCE_EXHAUSTED (see the comment on
+ * `onModuleInit()` — exempting it would silence a genuine backpressure/
+ * rate-limit signal for every other caller, not just this drain). With the
+ * default `runtimeCircuitBreakerThreshold` of 5, a ladder of N consecutive
+ * RESOURCE_EXHAUSTED responses trips the breaker on attempt 5 — poisoning
+ * unrelated calls (GetSession polling, /runtime/health, cancel/suspend/resume)
+ * for `runtimeCircuitBreakerResetMs` (30s default). 2 is chosen so the ladder
+ * makes at most 3 attempts total, comfortably under that default threshold.
+ *
+ * Honesty check: an operator who sets `RUNTIME_CIRCUIT_BREAKER_THRESHOLD`
+ * below 3 can still trip the breaker via this ladder. That is correct, not a
+ * bug — 3 consecutive genuine runtime errors *should* open a threshold-2
+ * breaker; this constant only protects the *default* configuration from a
+ * self-inflicted trip.
+ */
+const MAX_PAGE_SIZE_HALVINGS = 2;
 
 /**
  * Observer-only Rust runtime provider.
@@ -96,15 +118,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   }
 
   onModuleInit(): void {
-    this.circuitBreaker = new CircuitBreaker({
-      failureThreshold: this.config.runtimeCircuitBreakerThreshold,
-      resetTimeoutMs: this.config.runtimeCircuitBreakerResetMs,
-      instrumentation: this.instrumentation,
-      isExpectedError: (error: unknown) => {
-        const code = (error as grpc.ServiceError)?.code;
-        return code === grpc.status.NOT_FOUND || code === grpc.status.PERMISSION_DENIED;
-      }
-    });
+    this.circuitBreaker = this.buildCircuitBreaker();
 
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { protoDir } = require('@multiagentcoordinationprotocol/proto');
@@ -133,6 +147,24 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   /** Create a fresh gRPC channel to the runtime. */
   private createClient(): any {
     return new this.serviceConstructor(this.runtimeAddress, this.channelCreds);
+  }
+
+  /**
+   * Build the shared circuit breaker wrapping every unary gRPC call. Extracted
+   * from `onModuleInit()` so unit tests can install a real `CircuitBreaker`
+   * (identical to production) without running proto loading / opening a real
+   * gRPC channel — see `rust-runtime.provider.spec.ts`'s GAP-1 regression test.
+   */
+  private buildCircuitBreaker(): CircuitBreaker {
+    return new CircuitBreaker({
+      failureThreshold: this.config.runtimeCircuitBreakerThreshold,
+      resetTimeoutMs: this.config.runtimeCircuitBreakerResetMs,
+      instrumentation: this.instrumentation,
+      isExpectedError: (error: unknown) => {
+        const code = (error as grpc.ServiceError)?.code;
+        return code === grpc.status.NOT_FOUND || code === grpc.status.PERMISSION_DENIED;
+      }
+    });
   }
 
   async initialize(req: RuntimeInitializeRequest, opts?: GrpcCallOptions): Promise<RuntimeInitializeResult> {
@@ -449,29 +481,143 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
 
   // ── Session lifecycle observation ─────────────────────────────────
 
-  async listSessions(): Promise<RuntimeSessionSnapshot[]> {
-    // 0.1.6 ListSessions is paginated: the response carries `next_page_token`
-    // when more results exist; pass it back verbatim as `page_token`. Against
-    // v0.5.0 (no server-side capping yet) `next_page_token` comes back empty and
-    // this loops exactly once — identical to the old single-call behavior — but
-    // it is forward-correct once the runtime starts capping page size.
+  async listSessions(): Promise<RuntimeListSessionsResult> {
+    // ListSessions is paginated: the response carries `next_page_token` when
+    // more results exist; pass it back verbatim as `page_token`. Phase 1 of
+    // the runtime v0.7.0 absorption proved live that the multi-page path is
+    // real against a real runtime: against a 150-session store, page 1
+    // returned 100 sessions with a NON-EMPTY token and page 2 returned the
+    // remaining 50 with an empty token (see
+    // test/integration/list-sessions-pagination.integration.spec.ts). The old
+    // comment here claiming the token "always comes back empty against
+    // v0.5.0" was never re-verified after that landed and is corrected.
+    //
+    // The drain is bounded two ways: `RUNTIME_LIST_SESSIONS_MAX_PAGES` (guards
+    // a buggy/looping server that never clears next_page_token) and
+    // `RUNTIME_LIST_SESSIONS_TIMEOUT_MS` (bounds the *whole* drain — without
+    // it, maxPages pages each with their own fresh per-call deadline is an
+    // unbounded worst case). Either limit being hit returns a truthful
+    // `complete: false` with the collected prefix rather than throwing or
+    // silently truncating — see `RuntimeListSessionsResult`.
     const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
     const metadata = buildMetadata(creds.metadata);
     const snapshots: RuntimeSessionSnapshot[] = [];
     let pageToken = '';
-    // Guard against a buggy/looping server that never clears next_page_token.
-    const MAX_PAGES = 50;
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const response = await this.unary('ListSessions', { pageToken }, metadata);
+    let pageSize = this.config.runtimeListSessionsPageSize;
+    const maxPages = this.config.runtimeListSessionsMaxPages;
+    const deadlineAt = Date.now() + this.config.runtimeListSessionsTimeoutMs;
+    let pagesFetched = 0;
+    let pageSizeHalvings = 0;
+
+    while (pagesFetched < maxPages) {
+      // Single check for both the "budget already gone between pages" case
+      // and the once-cheap-to-miss race where Date.now() ticks past
+      // deadlineAt between an earlier check and here: remainingMs <= 0 is the
+      // one truthful condition, computed once, so there's no gap in which a
+      // call could be issued with an already-past deadline.
+      const remainingMs = deadlineAt - Date.now();
+      if (remainingMs <= 0) {
+        return this.finishListSessions(snapshots, false, pagesFetched, 'overall timeout exceeded');
+      }
+
+      // Per-call deadline is the smaller of the usual gRPC request timeout
+      // and whatever remains of the overall drain budget.
+      const deadline = new Date(Date.now() + Math.min(remainingMs, this.config.runtimeRequestTimeoutMs));
+
+      let response: any;
+      try {
+        response = await this.unary('ListSessions', { pageToken, pageSize }, metadata, { deadline });
+      } catch (error) {
+        // A DEADLINE_EXCEEDED that surfaces *after* the overall drain budget
+        // has expired is the CP's own per-call deadline clamp (above) firing,
+        // not a runtime failure — the runtime may have been about to reply.
+        // Returning the truthful complete:false prefix here (instead of
+        // rethrowing and discarding every page collected so far) is what
+        // makes the "overall timeout" guarantee hold in the more likely case
+        // where the budget expires *during* a page rather than between pages.
+        // If the budget has NOT expired, this DEADLINE_EXCEEDED came from
+        // `runtimeRequestTimeoutMs` instead (a genuinely slow runtime) and
+        // must still propagate like any other hard failure.
+        if (this.isDeadlineExceeded(error) && Date.now() >= deadlineAt) {
+          return this.finishListSessions(snapshots, false, pagesFetched, 'overall timeout exceeded (mid-page)');
+        }
+
+        // RESOURCE_EXHAUSTED is the other error worth special-casing: it
+        // means this specific page was too large to receive (see the
+        // page-size comment on AppConfigService.runtimeListSessionsPageSize),
+        // and retrying identically will fail identically. Halve the page
+        // size and retry the SAME page (down to a floor of 1), bounded by
+        // MAX_PAGE_SIZE_HALVINGS for the whole drain — see that constant's
+        // comment for why the bound exists (the shared CircuitBreaker) and
+        // what it does and doesn't guarantee. Once the halving budget (or the
+        // floor) is exhausted, rethrow. Every other gRPC error (and a
+        // circuit-breaker trip) propagates unchanged and discards the
+        // collected pages — a partial result from a *failing* runtime is not
+        // trustworthy the way a page-capped result is, so this asymmetry
+        // (special-case two errors, propagate the rest) is deliberate, not an
+        // oversight.
+        if (this.isResourceExhausted(error) && pageSize > 1 && pageSizeHalvings < MAX_PAGE_SIZE_HALVINGS) {
+          pageSizeHalvings++;
+          pageSize = Math.max(1, Math.floor(pageSize / 2));
+          this.logger.warn(`ListSessions page too large (RESOURCE_EXHAUSTED); retrying with pageSize=${pageSize}`);
+          continue;
+        }
+        throw error;
+      }
+
+      pagesFetched++;
       for (const s of response.sessions ?? []) {
         snapshots.push(fromSessionMetadata(s));
       }
       const nextPageToken: string = response.nextPageToken ?? response.next_page_token ?? '';
-      if (!nextPageToken) return snapshots;
+      if (!nextPageToken) {
+        return this.finishListSessions(snapshots, true, pagesFetched);
+      }
       pageToken = nextPageToken;
     }
-    this.logger.warn(`ListSessions exceeded ${MAX_PAGES} pages; returning ${snapshots.length} sessions (truncated)`);
-    return snapshots;
+
+    return this.finishListSessions(snapshots, false, pagesFetched, `exceeded ${maxPages} pages`);
+  }
+
+  /** Narrow a thrown listSessions() error down to a RESOURCE_EXHAUSTED gRPC status. */
+  private isResourceExhausted(error: unknown): boolean {
+    const grpcCode =
+      (error as { metadata?: { grpcCode?: number } })?.metadata?.grpcCode ?? (error as { code?: number })?.code;
+    return grpcCode === grpc.status.RESOURCE_EXHAUSTED;
+  }
+
+  /**
+   * Narrow a thrown listSessions() error down to a DEADLINE_EXCEEDED gRPC
+   * status. Mirrors `isResourceExhausted()`: `unary()` throws
+   * `mapGrpcError(error, method) ?? error`, and `mapGrpcError` DOES map
+   * DEADLINE_EXCEEDED (to an `AppException` with HTTP 504 / `RUNTIME_TIMEOUT`
+   * and `metadata.grpcCode` set to the original gRPC status — see
+   * `grpc-helpers.ts` `GRPC_STATUS_TO_HTTP`), so `metadata.grpcCode` is the
+   * real, post-translation shape this needs to match. The `.code` fallback
+   * covers a raw, untranslated `grpc.ServiceError` reaching here directly.
+   */
+  private isDeadlineExceeded(error: unknown): boolean {
+    const grpcCode =
+      (error as { metadata?: { grpcCode?: number } })?.metadata?.grpcCode ?? (error as { code?: number })?.code;
+    return grpcCode === grpc.status.DEADLINE_EXCEEDED;
+  }
+
+  /** Finalize a listSessions() drain: record metrics/logs and build the result. */
+  private finishListSessions(
+    sessions: RuntimeSessionSnapshot[],
+    complete: boolean,
+    pagesFetched: number,
+    truncationReason?: string
+  ): RuntimeListSessionsResult {
+    this.instrumentation.macpRuntimeListSessionsPages.observe(pagesFetched);
+    if (!complete) {
+      this.instrumentation.macpRuntimeListSessionsTruncatedTotal.inc();
+      this.logger.warn(
+        `ListSessions drain stopped early (${truncationReason}); returning ${sessions.length} sessions ` +
+          `(pagesFetched=${pagesFetched}, complete=false)`
+      );
+    }
+    return { sessions, complete, pagesFetched };
   }
 
   watchSessions(): AsyncIterable<SessionLifecycleEvent> {

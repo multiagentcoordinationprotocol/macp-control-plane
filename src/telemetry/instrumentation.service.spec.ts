@@ -154,6 +154,16 @@ describe('InstrumentationService', () => {
       assertMetricShape(service.streamReconnectsTotal, 'counter');
     });
 
+    it('macpRuntimeListSessionsTruncatedTotal is a counter and increments', () => {
+      assertMetricShape(service.macpRuntimeListSessionsTruncatedTotal, 'counter');
+      expect(() => service.macpRuntimeListSessionsTruncatedTotal.inc()).not.toThrow();
+    });
+
+    it('macpRuntimeListSessionsPages is a histogram and observes', () => {
+      assertMetricShape(service.macpRuntimeListSessionsPages, 'histogram');
+      expect(() => service.macpRuntimeListSessionsPages.observe(3)).not.toThrow();
+    });
+
     it('recoveryTotal is a counter with status label', () => {
       assertMetricShape(service.recoveryTotal, 'counter');
       expect(() => service.recoveryTotal.inc({ status: 'success' })).not.toThrow();
@@ -186,6 +196,18 @@ describe('InstrumentationService', () => {
 
     it('should register activeStreams with correct name', () => {
       expect(client.Gauge).toHaveBeenCalledWith(expect.objectContaining({ name: 'active_runtime_streams' }));
+    });
+
+    it('should register macpRuntimeListSessionsTruncatedTotal with correct name', () => {
+      expect(client.Counter).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'macp_runtime_list_sessions_truncated_total' })
+      );
+    });
+
+    it('should register macpRuntimeListSessionsPages with correct name', () => {
+      expect(client.Histogram).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'macp_runtime_list_sessions_pages' })
+      );
     });
 
     it('should register circuitBreakerState with correct name', () => {

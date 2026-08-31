@@ -9,8 +9,8 @@ _(one checkpoint per phase; `/implement` appends)_
 
 | Phase | Status | Rounds | Verifier | Commit | PR |
 |---|---|---|---|---|---|
-| P1 live harness + ListSessions ground truth | **DONE** | 3 (GAPS→GAPS→PASS) | Opus | see `git log` | ship now |
-| P2 truth-in-contract for `listSessions` | TODO | — | — | — | — |
+| P1 live harness + ListSessions ground truth | **DONE** | 3 (GAPS→GAPS→PASS) | Opus | `716fa9b` | **merged #61** |
+| P2 truth-in-contract for `listSessions` | **DONE** | 2 (GAPS→PASS) | Opus | (head of `absorb-runtime-v0.7.0-p2`) | — |
 | P3 ordinal correctness + invariant-6 comments | TODO | — | — | — | — |
 | P4 cross-process envelope-ordinal resume | TODO | — | — | — | — |
 | P5 live B2 re-verification | TODO | — | — | — | — |
@@ -20,8 +20,8 @@ _(one checkpoint per phase; `/implement` appends)_
 ## Repo map (gathered during planning — do not re-scan)
 
 ### Runtime / gRPC boundary
-- `src/runtime/rust-runtime.provider.ts` — the gRPC provider. `listSessions` at **:452-475**; `subscribeSession` at **:199-355** (handle gate in consumeLoop at `stream-consumer.service.ts:209`) (single frame written at **:285-288**, session filter at **:257**, no `.end()` anywhere in the file, rationale comment at **:274-283**); `unary()` helper at **:720-753** (per-call deadline at **:730**, circuit breaker at **:728**); proto-loader options at **:110-124** (`keepCase: false`); Initialize response version read at **:189**. **Stale comment at :62** claims the write side is closed (P3 fixes).
-- `src/contracts/runtime.ts` — `RuntimeProvider` interface. `listSessions` declared **:259** with the "fully drains" comment at **:257-258**. Policy types from **:280**.
+- `src/runtime/rust-runtime.provider.ts` — the gRPC provider. `listSessions` at **:484+** (rewritten in P2; `MAX_PAGE_SIZE_HALVINGS` at **:72**, `buildCircuitBreaker()` at **:158-171**); `subscribeSession` at **:199-355** (handle gate in consumeLoop at `stream-consumer.service.ts:209`) (single frame written at **:285-288**, session filter at **:257**, no `.end()` anywhere in the file, rationale comment at **:274-283**); `unary()` helper at **:866-900** (per-call deadline at **:876**, circuit breaker at **:874**; already accepted an optional `GrpcCallOptions` on `main` — P2 did **not** change its signature); proto-loader options at **:110-124** (`keepCase: false`); Initialize response version read at **:189**. **Stale comment at :62** claims the write side is closed (P3 fixes).
+- `src/contracts/runtime.ts` — `RuntimeProvider` interface. `listSessions` declared **:279**, returning `RuntimeListSessionsResult` (**:107-112**); the false "fully drains" comment was corrected in P2. Policy types from **:280**.
 - `src/runtime/proto-registry.service.ts` — `MESSAGE_TYPE_MAP` at **:5-47** (`Commitment → macp.v1.CommitmentPayload` at :8); loads 8 protos at **:65-83** via raw protobufjs; `decodeMessage` at **:155-161**.
 - `src/runtime/observer-invariant.spec.ts` — grep-based invariant lint (90 lines). Forbidden patterns **:13-38**; walks `src/` at **:40-52**; comment stripping **:66-77**. **Must not be weakened.**
 - `src/runtime/rust-runtime.provider.spec.ts` — frame-semantics tests **:82-211** (`.end()` not called asserted at **:105**, again at **:156**); pagination tests **:214-252** (assert exact request bodies — will break when `pageSize` is added). **Stale file-doc comment at :11-12.**
@@ -51,7 +51,7 @@ _(one checkpoint per phase; `/implement` appends)_
 - Unit: `jest.config.ts`, `rootDir: src`, colocated `*.spec.ts`. `npm test`.
 - Integration: `test/integration/*.integration.spec.ts` (21 files), `test/jest.integration.config.ts`, Postgres on **5433**, `maxWorkers: 1`, 60s timeout.
 - `test/helpers/test-app.ts` — `INTEGRATION_RUNTIME` read at **:68**; mock override **:106-108** *and* registry register **:112** (both needed); real-runtime address **:87**.
-- `test/helpers/scripted-mock-runtime.provider.ts` — the only mock. `listSessions` stub returns `[]` at **:332**; re-implements the `after_sequence` skip rule at **:150-161** (so resume tests validate the CP against the CP's own model, not the runtime).
+- `test/helpers/scripted-mock-runtime.provider.ts` — the only mock. `listSessions` stub returns `{sessions: [], complete: true, pagesFetched: 0}` at **:333**; re-implements the `after_sequence` skip rule at **:150-161** (so resume tests validate the CP against the CP's own model, not the runtime).
 - `test/integration/stream-gap.integration.spec.ts` — gap path, mock-only, skipped when `INTEGRATION_RUNTIME` is docker/remote.
 - `src/runs/stream-consumer.service.spec.ts:338-484` — the 4 ordinal/resume unit tests.
 - `src/projection/projection.service.spec.ts:436-468` — the supersedes tests.
@@ -91,7 +91,51 @@ _(one checkpoint per phase; `/implement` appends)_
   CP's own `listSessions()`, spec passes remote / skips mock.
 - **Blocked:** `npm run test:integration` cannot complete on this host (corrupted Docker storage;
   Postgres 5433 accepts TCP but hangs). Not repaired — see `ASSUMPTIONS.md`.
-- **Next:** P2 (truth-in-contract `listSessions`).
+- **PR:** #61 — https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/61
+  — all CI green (test, typecheck, lint, build, audit, conventions, CodeQL, docker,
+  **integration-test**), squash-merged as `716fa9b`. Note `integration-test` passed in CI,
+  where Postgres works — the blocker is local-only.
+- **Next:** P2 (truth-in-contract `listSessions`), on branch `absorb-runtime-v0.7.0-p2`.
+
+### P2 — DONE (2026-08-31)
+- **Verdict:** PASS. Rounds: round 1 **GAPS** (6 items) → round 2 **PASS**.
+- **Verifier tier:** Opus both rounds (no one-way door — the interface change has zero
+  production callers, independently verified twice, so it is cheaply reversible).
+- **Round 1 gap summary:** (1) the RESOURCE_EXHAUSTED page-size-halving ladder ran up to 8
+  consecutive attempts through the **shared** circuit breaker (default threshold 5), tripping
+  it OPEN on attempt 5 and disabling every unrelated runtime RPC for 30s — with zero coverage,
+  because every existing test stubbed `unary()` and bypassed the breaker; (2) a mid-page
+  `DEADLINE_EXCEEDED` from the CP's own clamped deadline discarded all collected pages,
+  breaking AC3; (3) `RUNTIME_LIST_SESSIONS_TIMEOUT_MS` had no startup validation, so `0` (or a
+  blank `.env` entry) yielded a permanently empty result with zero RPCs; (4) "positive integer"
+  was only enforced as `> 0`, admitting floats into a proto `int32`; (5) `docs/TROUBLESHOOTING.md`
+  stale and actively misleading post-P2; (6) the plan's AC6 wording was factually false.
+- **Round 2:** all six CLOSED. The re-verifier proved the new GAP-1 regression test is
+  discriminating by raising `MAX_PAGE_SIZE_HALVINGS` back to 8 and confirming it fails with
+  5 client calls and the breaker OPEN, then restoring the file.
+- **Notable non-finding:** the `isResourceExhausted` predicate was suspected of matching only a
+  raw grpc error rather than the post-`mapGrpcError` `AppException`. Verified correct — the real
+  thrown error carries `.metadata.grpcCode`, which is exactly the first arm of the predicate.
+- **Files:** `src/contracts/runtime.ts`, `src/runtime/rust-runtime.provider.ts`(+spec),
+  `src/config/app-config.service.ts`(+spec), `src/telemetry/instrumentation.service.ts`(+spec),
+  `test/helpers/scripted-mock-runtime.provider.ts`,
+  `test/integration/list-sessions-pagination.integration.spec.ts`, `.env.example`,
+  `docs/INTEGRATION.md`, `docs/TROUBLESHOOTING.md`, `CLAUDE.md` (untracked — gitignored at
+  `.gitignore:11`, so its env-table update does not ship; `docs/INTEGRATION.md` is the tracked
+  equivalent), plus `plans/`, `PROGRESS.md`, `ASSUMPTIONS.md`.
+- **Tests:** 55 suites / **752** tests green (from 725 at P1). Lint, build, and both tsc
+  projects clean. `observer-invariant.spec.ts` untouched, 4/4.
+- **Live-verified** against a real macp-runtime v0.7.0 on `127.0.0.1:50051`: multi-page drain
+  with `pagesFetched > 1` and `complete === true`, unique + ascending IDs; skips correctly under
+  `INTEGRATION_RUNTIME=mock`. Re-run *after* the gap fixes, not only before.
+- **Static-only (not live-verified):** the RESOURCE_EXHAUSTED halving ladder and the mid-page
+  timeout conversion — both are unit-tested (the ladder against the real `CircuitBreaker`), but
+  no live runtime was made to emit either condition.
+- **Blocked:** `npm run test:integration` still cannot complete on this host (corrupted Docker
+  storage; Postgres 5433 hangs). Live specs were run through an equivalent config with a no-op
+  globalSetup — see `ASSUMPTIONS.md`. CI runs the suite normally.
+- **Next:** ship P2 as its own PR (both verifiers called it independently shippable — a
+  signature change is cheapest to land before P3–P7 pile onto the same files), then P3.
 
 ## Assumptions / decisions log
 

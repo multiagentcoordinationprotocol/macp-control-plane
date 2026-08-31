@@ -1,6 +1,6 @@
 # Absorb macp-runtime v0.7.0 (and 0.6.x) + macp-proto 0.1.9
 
-Status: **in progress** (P1 DONE; P2–P7 TODO)
+Status: **in progress** (P1–P2 DONE; P3–P7 TODO)
 Owner: control-plane maintainers
 Upstream inputs: `macp-runtime` v0.7.0 (`CHANGELOG.md` `[0.7.0] — 2026-08-31`, PRs #116 / #108, `docs/change-review-phases-a-e.md`), `@multiagentcoordinationprotocol/proto` 0.1.8 → 0.1.9.
 
@@ -183,7 +183,7 @@ Legend: **IMPACT** = change required here; **NO IMPACT** = verified no change ne
 
 ### Phase 2 — Truth-in-contract for `listSessions`
 
-- **Status:** TODO
+- **Status:** DONE
 - **Delivers:** `listSessions` can no longer return a truncated list that looks complete; a bounded, configurable, observable drain.
 - **Depends on:** P1.
 - **Files:** `src/contracts/runtime.ts`, `src/runtime/rust-runtime.provider.ts`, `src/runtime/rust-runtime.provider.spec.ts`, `test/helpers/scripted-mock-runtime.provider.ts`, `src/config/app-config.service.ts`, `src/config/app-config.service.spec.ts` (startup validation of the new knobs), `src/telemetry/instrumentation.service.ts`, `src/telemetry/instrumentation.service.spec.ts`, `.env.example`, `docs/INTEGRATION.md` (its Environment Variables section, `:139`), `CLAUDE.md` (local-only — see P7).
@@ -216,10 +216,34 @@ Legend: **IMPACT** = change required here; **NO IMPACT** = verified no change ne
   3. Exceeding the overall timeout sets `complete: false`.
   4. The request carries an explicit `pageSize` from config.
   5. Both `RuntimeProvider` implementations compile and the interface comment no longer claims an unconditional full drain.
-  6. A live re-run of P1's test returns multi-page results with `complete: true`. **Note the interaction:** once P2 raises the page size to 200, a ~150-session store fits in ONE page and the multi-page assertion becomes vacuous. So the live re-run must either seed >200 sessions, or set `RUNTIME_LIST_SESSIONS_PAGE_SIZE` low (e.g. 50) so multiple pages are still exercised. P1's spec already reads that variable, so no test change is needed — only the env.
+  6. A live re-run of P1's test returns multi-page results with `complete: true`. **Note the interaction:** once P2 raises the page size to 200, a ~150-session store fits in ONE page and the multi-page assertion becomes vacuous. So the live re-run must either seed >200 sessions, or set `RUNTIME_LIST_SESSIONS_PAGE_SIZE` low (e.g. 50) so multiple pages are still exercised. ~~P1's spec already reads that variable, so no test change is needed — only the env.~~ **CORRECTED during implementation — this sentence was false on two counts.** (a) P1's spec builds its `config` fixture as an object literal; without the three new knobs added to it, `this.config.runtimeListSessionsMaxPages` is `undefined` and `while (pagesFetched < undefined)` is `false` on the first check, so the drain loop never executes at all and the spec returns `{sessions: [], complete: false, pagesFetched: 0}` having issued zero RPCs. (b) The `EXPECTED_PAGE_SIZE` floor (100) became actively wrong once the CP sends its own `pageSize`: at the default 200 a **single** 150-session page satisfies `length > 100`, which is exactly the false green the floor existed to prevent. The spec was therefore rewritten to assert `pagesFetched > 1` directly (a real assertion on the loop branch rather than an inference from length) plus a new `complete === true`, keeping the uniqueness and ascending-order checks. This executes the TODO P1's own comment left for P2.
   7. `npm run lint` clean; no `new Counter(...)` outside `instrumentation.service.ts`; no `process.env` outside `app-config.service.ts`.
 - **Tests:** unit — updated multi-page test asserting the new request shape incl. `pageSize`; **new** MAX_PAGES-exhaustion test (currently zero coverage of that branch) asserting `complete: false` + counter bump; new overall-timeout test; single-page test asserting `complete: true`. Live — P1's gated spec re-run.
 - **Docs:** `CLAUDE.md` env table (3 new vars), `.env.example`, the `RuntimeProvider` contract comment.
+- **Divergence from the planned approach (recorded at phase close):**
+  1. **The halving ladder had to be capped.** The plan specified "halve the page size and retry
+     that page (down to a floor of 1)". Implemented as written, that is up to 8 consecutive
+     attempts from the default page size of 200 — and every attempt runs through the **shared**
+     circuit breaker, whose default threshold is 5. The phase verifier reproduced this against
+     the real `CircuitBreaker`: the breaker opened on attempt 5, the drain aborted with
+     `Circuit breaker is OPEN` instead of the intended rethrow, and the breaker stayed OPEN for
+     30s, failing every unrelated runtime RPC process-wide. Fixed with
+     `MAX_PAGE_SIZE_HALVINGS = 2` (3 attempts total, deliberately under the breaker threshold),
+     plus a regression test that runs the real breaker instead of stubbing `unary()`. The plan
+     reasoned about the retry in isolation and never considered the breaker.
+  2. **Mid-page `DEADLINE_EXCEEDED` now returns `complete: false`.** The plan's AC3 promised
+     "exceeding the overall timeout sets `complete: false`", but the per-call deadline is clamped
+     to the remaining drain budget, so a budget that expires *during* a page (the likelier case)
+     surfaced as `DEADLINE_EXCEEDED` and discarded every collected page. The CP induces that
+     failure itself, so it is now converted to a truthful partial result; a `DEADLINE_EXCEEDED`
+     with budget still remaining (a genuinely slow runtime) still throws.
+  3. **`RUNTIME_LIST_SESSIONS_TIMEOUT_MS` validation and integrality enforcement** were not in the
+     plan. `0` — including a blank `.env` entry, since `Number('') === 0` — produced a permanently
+     empty `complete: false` result having issued zero RPCs, which is the exact silent-degradation
+     class this phase exists to remove.
+  4. **`docs/TROUBLESHOOTING.md` was not in the Files list** but was made stale by this phase (it
+     described the runtime's server-side 100/page default, which the CP now overrides, and its
+     prescribed command no longer made the live spec pass). Updated.
 
 ### Phase 3 — Stream-consumer ordinal correctness + invariant-6 comment fixes
 
