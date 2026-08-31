@@ -376,16 +376,34 @@ export class StreamConsumerService implements OnModuleDestroy {
       marker.connected = true;
     }
 
+    const canonical = this.normalizer.normalize(runId, raw, context);
+    const emitted = await this.eventService.persistRawAndCanonical(runId, raw, canonical);
+
     // Count accepted envelopes delivered on the per-session StreamSession — this
     // is the runtime's `after_sequence` ordinal used for stream resume (T7).
     // Only real envelopes count; snapshots / stream-status / inline errors and
     // ambient signals (handled by SignalConsumerService) must not increment it.
+    // Incremented only after persistRawAndCanonical resolves — a persist
+    // failure throws above and this line never runs, so the in-memory marker
+    // (and the in-process resubscribe it feeds) stays at the pre-failure
+    // ordinal. This fixes drift in the live in-process reconnect path only;
+    // it has no effect on the persisted `last_envelope_ordinal` column, which
+    // already only advances after a successful persist via
+    // updateStreamCursor below.
+    //
+    // "Persist failure" here also covers a *post-commit* failure inside
+    // persistRawAndCanonical — the DB transaction (raw + canonical rows +
+    // projection) commits first, and metrics recording / StreamHub publish run
+    // after it, outside the transaction. If either of those throws, the events
+    // are already durable but this line is never reached, so the ordinal does
+    // not advance and the runtime redelivers the same envelope on resubscribe.
+    // That redelivery appends duplicate rows (fresh id + seq, so
+    // onConflictDoNothing cannot dedup it) rather than being lost. This is
+    // deliberate: duplication is the intentionally-chosen failure mode here,
+    // preferred over the silent loss the pre-fix ordinal advancement produced.
     if (raw.kind === 'stream-envelope' && raw.envelope) {
       marker.envelopeOrdinal += 1;
     }
-
-    const canonical = this.normalizer.normalize(runId, raw, context);
-    const emitted = await this.eventService.persistRawAndCanonical(runId, raw, canonical);
 
     for (const event of emitted) {
       if (event.seq <= marker.lastProcessedSeq) continue;

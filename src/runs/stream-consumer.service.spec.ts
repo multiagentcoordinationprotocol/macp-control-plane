@@ -442,6 +442,56 @@ describe('StreamConsumerService', () => {
       expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
     });
 
+    it('leaves the envelope ordinal unchanged when persistRawAndCanonical throws (increment happens only after a successful persist)', async () => {
+      eventService.persistRawAndCanonical.mockRejectedValueOnce(new Error('db unavailable'));
+
+      const marker = newMarker();
+      const handleRawEventInner = (service as any).handleRawEventInner.bind(service);
+      const ctx = { knownParticipants: new Set<string>(), execution: {}, runtimeSessionId: 'session-1' };
+
+      await expect(handleRawEventInner('run-1', envelope('m1'), ctx, 'session-1', marker)).rejects.toThrow(
+        'db unavailable'
+      );
+
+      expect(marker.envelopeOrdinal).toBe(0);
+      expect(runtimeSessionRepository.updateStreamCursor).not.toHaveBeenCalled();
+    });
+
+    it('resubscribes from the pre-failure envelope ordinal after a persist failure, not a corrupted post-increment value', async () => {
+      (config as any).streamBackoffBaseMs = 1; // fast backoff for the test
+      let seq = 0;
+      eventService.persistRawAndCanonical.mockImplementation(async (_runId: string, raw: any) => {
+        if (raw.kind === 'stream-envelope' && raw.envelope?.messageId === 'm2') {
+          throw new Error('db unavailable');
+        }
+        if (raw.kind === 'session-snapshot' && raw.sessionSnapshot?.state === 'SESSION_STATE_RESOLVED') {
+          return [{ seq: ++seq, type: 'session.state.changed', data: { state: 'SESSION_STATE_RESOLVED' } }] as any;
+        }
+        if (raw.kind === 'stream-envelope') return [{ seq: ++seq, type: 'message.received', data: {} }] as any;
+        return [] as any;
+      });
+
+      // m1 persists successfully (ordinal -> 1); m2 fails to persist, which must
+      // NOT bump the ordinal past 1 before the resubscribe reads it.
+      const handle1 = makeHandle([envelope('m1'), envelope('m2')]);
+      const handle2 = makeHandle([
+        { kind: 'session-snapshot', receivedAt: 't', sessionSnapshot: { sessionId: 'session-1', mode: '', state: 'SESSION_STATE_RESOLVED' } }
+      ]);
+      const mockProvider = { subscribeSession: jest.fn().mockReturnValueOnce(handle2), getSession: jest.fn() };
+      runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+      const marker = newMarker();
+      await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+      expect(mockProvider.subscribeSession).toHaveBeenCalledWith({
+        runId: 'run-1',
+        runtimeSessionId: 'session-1',
+        afterSequence: 1
+      });
+      expect(marker.envelopeOrdinal).toBe(1);
+      expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
+    });
+
     it('emits session.stream.gap and degrades to poll-only on a compacted-history FAILED_PRECONDITION', async () => {
       const gapError = Object.assign(new Error('session history before ordinal 5 was compacted'), { code: 9 });
       const handle1 = makeHandle([envelope('m1')], gapError);

@@ -81,7 +81,9 @@ const MAX_PAGE_SIZE_HALVINGS = 2;
  *  - `subscribeSession()` attaches a read-only bidi `StreamSession`. Per RFC-MACP-0006 §3.2
  *    the control-plane writes exactly one passive-subscribe frame
  *    (`{subscribeSessionId, afterSequence}`, no envelope) to bind the stream to the
- *    session's broadcast channel and request history replay, then closes the write side.
+ *    session's broadcast channel and request history replay, then deliberately keeps
+ *    the write side open for the session's lifetime (README invariant 6) — half-closing
+ *    would signal "client is done" and stop live-envelope broadcast.
  *    It never writes an envelope (no SessionStart, no SessionWatch).
  *
  * The previously-shipped `openSession()` / `startSession()` / `send()` / `chooseInitiator()`
@@ -283,10 +285,24 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
           const rawEnvelope = responseBody.envelope ?? chunk.envelope;
           if (!rawEnvelope) return;
 
-          // Filter to the session we're observing. Runtime may broadcast across sessions
-          // on a shared stream; we only care about `req.runtimeSessionId`.
+          // Filter to the session we're observing. The runtime binds this stream to a
+          // single session's broadcast channel, so a foreign or empty `sessionId` here
+          // indicates a protocol violation, not routine cross-session traffic. Still,
+          // an envelope with an empty/absent sessionId is dropped here too — it cannot
+          // belong to this subscription and, if yielded, would silently advance the
+          // envelope ordinal used for stream resume. This drop is local to
+          // StreamSession: it does not touch `fromEnvelope()` or `watchSignals()`,
+          // whose ambient Signal envelopes always carry an empty sessionId by design
+          // (correlated instead via `correlation_session_id` — see SignalConsumerService).
           const envelope = fromEnvelope(rawEnvelope);
-          if (envelope.sessionId && envelope.sessionId !== req.runtimeSessionId) return;
+          if (!envelope.sessionId || envelope.sessionId !== req.runtimeSessionId) {
+            this.logger.warn(
+              `Dropping StreamSession envelope with mismatched or empty sessionId ` +
+                `(subscribed=${req.runtimeSessionId}, envelopeSessionId="${envelope.sessionId}", ` +
+                `messageType=${envelope.messageType}, messageId=${envelope.messageId})`
+            );
+            return;
+          }
 
           buffer.push({ kind: 'stream-envelope', receivedAt, envelope });
           notify();

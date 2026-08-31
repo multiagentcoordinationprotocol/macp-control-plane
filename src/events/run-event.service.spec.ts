@@ -17,6 +17,12 @@ describe('RunEventService', () => {
   let metricsService: jest.Mocked<MetricsService>;
   let streamHub: jest.Mocked<StreamHubService>;
   let mockTx: Record<string, unknown>;
+  // Shared lifecycle log used to prove commit-before-side-effects ordering.
+  // The transaction mock only pushes 'tx:committed' after its callback resolves
+  // (and 'tx:rolled-back' if it throws), while the repository/metrics/streamHub
+  // mocks push their own markers — so tests can assert the *actual* relative
+  // order of commit vs. metrics vs. publish, not just call counts.
+  let callOrder: string[];
 
   const fakeProjection: RunStateProjection = {
     run: { runId: 'run-1', status: 'running' },
@@ -37,10 +43,24 @@ describe('RunEventService', () => {
 
   beforeEach(() => {
     mockTx = {};
+    callOrder = [];
 
     database = {
       db: {
-        transaction: jest.fn(async (cb: (tx: any) => Promise<any>) => cb(mockTx))
+        // Models real commit/rollback semantics well enough to prove ordering:
+        // the marker only lands once the callback has actually settled, and
+        // rollback is distinguished from commit so a mutation that moves
+        // post-commit work back inside the callback is observable.
+        transaction: jest.fn(async (cb: (tx: any) => Promise<any>) => {
+          try {
+            const result = await cb(mockTx);
+            callOrder.push('tx:committed');
+            return result;
+          } catch (err) {
+            callOrder.push('tx:rolled-back');
+            throw err;
+          }
+        })
       }
     } as unknown as jest.Mocked<DatabaseService>;
 
@@ -49,21 +69,35 @@ describe('RunEventService', () => {
     } as unknown as jest.Mocked<RunRepository>;
 
     eventRepository = {
-      appendRaw: jest.fn().mockResolvedValue(undefined),
-      appendCanonical: jest.fn().mockResolvedValue(undefined)
+      appendRaw: jest.fn(async () => {
+        callOrder.push('repo:appendRaw');
+      }),
+      appendCanonical: jest.fn(async () => {
+        callOrder.push('repo:appendCanonical');
+      })
     } as unknown as jest.Mocked<EventRepository>;
 
     projectionService = {
-      applyAndPersist: jest.fn().mockResolvedValue(fakeProjection)
+      applyAndPersist: jest.fn(async () => {
+        callOrder.push('projection:applyAndPersist');
+        return fakeProjection;
+      })
     } as unknown as jest.Mocked<ProjectionService>;
 
     metricsService = {
-      recordEvents: jest.fn().mockResolvedValue({})
+      recordEvents: jest.fn(async () => {
+        callOrder.push('metrics:recordEvents');
+        return {};
+      })
     } as unknown as jest.Mocked<MetricsService>;
 
     streamHub = {
-      publishEvent: jest.fn(),
-      publishSnapshot: jest.fn()
+      publishEvent: jest.fn(() => {
+        callOrder.push('publish:event');
+      }),
+      publishSnapshot: jest.fn(() => {
+        callOrder.push('publish:snapshot');
+      })
     } as unknown as jest.Mocked<StreamHubService>;
 
     service = new RunEventService(
@@ -302,6 +336,55 @@ describe('RunEventService', () => {
       // Second event with empty string id should get a new UUID assigned
       expect(result[1].id).toBeDefined();
       expect(result[1].id).not.toBe('');
+    });
+
+    it('rejects on a post-commit metrics failure even though the transaction already committed (duplication-over-loss window)', async () => {
+      // The DB transaction (allocateSequence/appendRaw/appendCanonical/applyAndPersist)
+      // commits before metricsService.recordEvents and streamHub.publish* run. If
+      // recordEvents throws, the caller (StreamConsumerService.handleRawEventInner)
+      // sees a rejected promise and never bumps its envelope ordinal, so the runtime
+      // redelivers this envelope — appending duplicate rows, since the redelivered
+      // event gets a fresh id/seq and onConflictDoNothing cannot dedup it.
+      //
+      // Unlike a plain "does the promise reject" check, this asserts the actual
+      // commit-before-side-effects ordering via the shared `callOrder` log: the
+      // transaction mock only records 'tx:committed' after its callback resolves
+      // (and 'tx:rolled-back' if the callback throws — see beforeEach). If
+      // metrics/publish were moved inside the transaction callback (which would
+      // invert the durability guarantee this test protects — see
+      // src/events/run-event.service.ts persistRawAndCanonical), the callback
+      // would throw, the mock would record 'tx:rolled-back' instead of
+      // 'tx:committed', and the ordering assertions below would fail.
+      runRepository.allocateSequence.mockResolvedValue(1);
+      metricsService.recordEvents.mockImplementationOnce(async () => {
+        callOrder.push('metrics:recordEvents');
+        throw new Error('metrics backend unavailable');
+      });
+
+      await expect(service.persistRawAndCanonical('run-1', rawEvent, canonicalEvents)).rejects.toThrow(
+        'metrics backend unavailable'
+      );
+
+      // The transaction (and everything inside it) already ran and resolved —
+      // the events are durably persisted before the rejection surfaces.
+      expect(eventRepository.appendRaw).toHaveBeenCalled();
+      expect(eventRepository.appendCanonical).toHaveBeenCalled();
+      expect(projectionService.applyAndPersist).toHaveBeenCalled();
+
+      // Commit happened, rollback did not — and metrics ran strictly after commit.
+      expect(callOrder).toContain('tx:committed');
+      expect(callOrder).not.toContain('tx:rolled-back');
+      const commitIndex = callOrder.indexOf('tx:committed');
+      const metricsIndex = callOrder.indexOf('metrics:recordEvents');
+      expect(commitIndex).toBeGreaterThanOrEqual(0);
+      expect(metricsIndex).toBeGreaterThan(commitIndex);
+
+      // The failure happened after the commit, so downstream publish (which
+      // runs after metrics in source order) never fires for this call.
+      expect(streamHub.publishEvent).not.toHaveBeenCalled();
+      expect(streamHub.publishSnapshot).not.toHaveBeenCalled();
+      expect(callOrder).not.toContain('publish:event');
+      expect(callOrder).not.toContain('publish:snapshot');
     });
   });
 });
