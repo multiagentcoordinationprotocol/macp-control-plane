@@ -137,6 +137,39 @@ docker build --secret id=npm_token,env=GITHUB_TOKEN -t macp-control-plane .
 **"Test suite failed to run" even though every assertion passed:**
 - Teardown leak — background observation services (`StreamConsumerService`, `SignalConsumerService`, `SessionDiscoveryService`) had in-flight `persistRawAndCanonical` work when the DB pool closed. Fixed by `test/helpers/test-app.ts` → `drainBackgroundWork()` which awaits each service's bounded drain before Nest's own `onModuleDestroy` sweep. If you see this in a *new* test, make sure you created the app via `createTestApp(...)` so the `app.close()` wrapper is in place.
 
+## Running a local macp-runtime for verification
+
+Some behavior (e.g. `ListSessions` pagination across a large session store) can only be verified against a real macp-runtime — the mock runtime used by default in `npm run test:integration` never returns a paginated response. To run one locally:
+
+1. Build the runtime binary (there is no prebuilt binary; the toolchain is pinned in `../macp-runtime/rust-toolchain.toml`):
+   ```bash
+   cd ../macp-runtime && cargo build --bin macp-runtime
+   ```
+2. Start it against its persisted session store:
+   ```bash
+   MACP_ALLOW_INSECURE=1 MACP_BIND_ADDR=127.0.0.1:50051 RUST_LOG=info \
+     ./target/debug/macp-runtime
+   ```
+   - `MACP_ALLOW_INSECURE=1` is **mandatory** — without auth configured the runtime refuses to start — and it also waives the TLS requirement. In this mode the runtime accepts any `Authorization: Bearer <v>` as sender `<v>`, so the control-plane's existing dev-bearer fallback (`RUNTIME_USE_DEV_HEADER`) works unchanged.
+   - Omit `MACP_MEMORY_ONLY` if you want the persisted `.macp-data` store loaded at boot, but **that store is not sufficient by itself for pagination testing**: as of this writing it holds 131 persisted sessions, and *all* of them are terminal (Resolved/Expired/Cancelled). On startup the runtime logs `evicted stale sessions from memory (registry + log cache + stream bus) count=131` — it evicts terminal sessions older than a cutoff (`../macp-runtime/src/runtime.rs:1200-1237`) — and `ListSessions`/`GetSession` return nothing for them afterward. Verify this yourself before trusting a persisted-store session count (the runtime does not support gRPC reflection, so use `grpcurl` with the checked-in proto):
+     ```bash
+     grpcurl -plaintext \
+       -import-path node_modules/@multiagentcoordinationprotocol/proto/proto \
+       -proto macp/v1/core.proto \
+       -H 'Authorization: Bearer macp-control-plane' \
+       -d '{}' 127.0.0.1:50051 macp.v1.MACPRuntimeService/ListSessions
+     ```
+   - To actually exceed a 100-session `ListSessions` page you must **seed live (OPEN) sessions** using an agent-role client — the control-plane must never emit envelopes itself (see the observer-only invariant above), so seeding has to go through `macp-sdk-python`/`macp-sdk-typescript` or a raw gRPC client acting as an agent, calling `SessionStart` directly against the runtime. Gotchas that cost real debugging time when doing this:
+     - The mode id is `macp.mode.decision.v1` — **not** `macp.mode.decision`.
+     - `SessionStartPayload.configuration_version` **and** `mode_version` are both mandatory and must be non-empty strings (`../macp-runtime/crates/macp-core/src/session.rs:344-346`); an empty string is rejected, it is not treated as "use default".
+     - The ack success field on the response is `ok` — **not** `accepted`.
+     - `MACP_SESSION_START_LIMIT_PER_MINUTE` defaults to 60 **per sender**, so seeding more than 60 sessions in a minute requires spreading the `SessionStart` calls across distinct sender identities (distinct Bearer values), not just looping as one sender.
+3. Run the control-plane's integration suite against it:
+   ```bash
+   INTEGRATION_RUNTIME=remote RUNTIME_ADDRESS=127.0.0.1:50051 npm run test:integration
+   ```
+   Specs gated with `test/helpers/real-runtime-gate.ts` (`describeWithRealRuntime`) — e.g. `test/integration/list-sessions-pagination.integration.spec.ts` — only run in this mode; they are skipped, not failed, under the default mock runtime.
+
 ## Common Error Codes
 
 | Code | HTTP | Meaning |
