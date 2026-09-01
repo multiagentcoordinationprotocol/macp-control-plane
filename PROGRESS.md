@@ -346,3 +346,26 @@ comment that moved to `:84`). Both fixed in `1cd9800` before merge, CI re-run gr
 **Next:** P3 — ordinal correctness + the two invariant-6-contradicting comments
 (`rust-runtime.provider.ts:84`, `rust-runtime.provider.spec.ts:11-12`), on branch
 `absorb-runtime-v0.7.0-p3`.
+
+## Plan closed — 2026-09-01
+
+`plans/absorb-runtime-v0.7.0.md` is COMPLETE. Every phase merged, every reconcile entry resolved.
+
+| PR | Phase | Merge |
+|----|-------|-------|
+| #61 | P1 live pagination spec | merged |
+| #62 | P2 listSessions truncation visible to callers | merged `f6702e2` |
+| #63 | P3 ordinal advances only after a successful persist | merged |
+| #64 | P4+P5 stream resume across restart | merged |
+| #65 | P6 badge non-canonical supersedes hashes | merged `43ea166` |
+| #76 | P7 observer authorization contract + known limitations | merged |
+| #77 | reconcile entry 16 — read-time `canonical` derive | merged `6ff0cf4` |
+
+Also merged ahead of the phases: #60 (proto 0.1.9 bump).
+
+Follow-ups filed rather than folded into a phase: #67-#75 (nine issues).
+
+Final regression on `main`: 56 suites / 786 unit tests, 21 suites / 103 integration
+(mock, isolated cluster), observer-invariant 4/4, lint + build + tsc clean.
+The observer invariant was never weakened — `src/runtime/observer-invariant.spec.ts` is
+byte-identical to its pre-plan state across all seven phases.
