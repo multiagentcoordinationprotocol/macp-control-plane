@@ -286,3 +286,34 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
 - **Blast radius if wrong:** Anyone running the whole suite against a live auth-configured runtime
   sees 8 confusing failures. Documented here and in the live spec's header.
 - **Status:** UNCONFIRMED
+
+## P5 — follow-ups the ship gate raised, deliberately deferred to P6/P7
+- **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phases 4/5)
+- **Assumed:** Four items surfaced by the PR #64 ship gate are real but non-blocking, and are
+  better handled as tracked follow-ups than as further churn on an already-verified PR.
+  1. **`STREAM_RESUME_ENABLED=false` skips the gap event.** The `!streamResumeEnabled` break in
+     `stream-consumer.service.ts` runs *before* the `gapDetected` check, so with resume disabled an
+     inline compaction frame degrades to poll-only without emitting `session.stream.gap` or
+     flagging `historyGap`. Narrow to reach (flag-off recovery never subscribes), and the outcome
+     is legacy-equivalent and still better than the pre-fix silent open stream — but the gap goes
+     unrecorded in a case where history genuinely was not replayed. The gate's suggestion is right:
+     check `gapDetected` first, since a history gap is a property of the history, not of the flag.
+  2. **Over-match vector via `PolicyDenied`.** Detection matches `/compact/i` against inline frame
+     text, and `PolicyDenied` frames interpolate operator-authored policy reasons
+     (`macp-runtime/src/server.rs:767-773`). A deny reason containing "compact" would be misrouted
+     into a gap + poll degrade + false `historyGap`. Tighten to the actual message shape
+     (`/history before ordinal \d+ was compacted/`). Every other runtime `MacpError` string is a
+     constant, so this is the only interpolation vector.
+  3. **`policy.denied` enrichment can never fire against a real runtime** — a latent bug the decode
+     fix newly *exposed*. `event-normalizer.service.ts` keys it on `err.code === 'POLICY_DENIED'`,
+     but the runtime sets inline-frame `code` to `status.message()`, i.e. `"PolicyDenied"` or
+     `"PolicyDenied: <reasons>"`. Pre-existing and out of P4/P5's scope, but it is exactly the
+     downstream-assumption class this absorption keeps finding.
+  4. `docs/ARCHITECTURE.md` — **fixed in this PR**, not deferred.
+- **Chose:** Fix (4) immediately since it was written in this PR and omitted the PR's own headline
+  finding; record (1)-(3) for P6/P7 rather than expanding a PR that is already verified, CI-green,
+  and carrying its live evidence.
+- **Blast radius if wrong:** (1) lost observability on an opt-out path; (2) a false `historyGap` and
+  an unnecessary poll degrade for a policy-denied run; (3) `policy.denied` projection events never
+  materialize from inline frames — error visibility only, no data loss.
+- **Status:** UNCONFIRMED

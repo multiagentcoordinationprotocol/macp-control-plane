@@ -208,7 +208,23 @@ from `RunRecoveryService`'s cross-process resume) is what protects a resume poin
 and flags the projection `historyGap: true` (idempotent per run via `marker.historyGap`),
 and the consumer degrades to poll-only **without ever resubscribing from 0** — the gap is
 made visible instead of silently skipped. `test/integration/stream-gap.integration.spec.ts`
-covers this path live against a scripted mock runtime.
+covers this path against a scripted mock runtime.
+
+**How the rejection actually arrives against runtime 0.7.0 — not as a stream error.** Live
+re-verification found that the runtime does *not* end the stream for a compacted-history
+resume: `is_stream_terminal_error` (`macp-runtime/src/server.rs:745-755`) omits
+`FailedPrecondition`, so the rejection is delivered as a **non-terminal inline `MACPError`
+frame with the stream left open** (`server.rs:608-628`). The consumer therefore also
+classifies the inline frame, not just the stream-error path — without that, the gap event
+never fired at all and the consumer sat on an open stream that had replayed nothing.
+
+Two caveats a maintainer should know. First, detection matches on the message text, because
+the runtime sets the inline frame's `code` to `status.message()` rather than a status name —
+so there is no machine-readable code to key on, and a future rewording of that string breaks
+detection silently. Second, the classification runs *after* the `STREAM_RESUME_ENABLED` check,
+so with resume disabled an inline compaction frame still degrades to poll-only but does not
+record the gap. `test/integration/stream-resume-live.integration.spec.ts` proves the whole
+path end to end against a real runtime; it is gated and skips under the mock runtime CI pins.
 
 **Known residual gap (accepted, not fixed):** the cursor write in
 `RunEventService.persistRawAndCanonical` happens outside the same DB transaction as the

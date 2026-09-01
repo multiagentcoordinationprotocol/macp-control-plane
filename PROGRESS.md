@@ -254,8 +254,18 @@ Fable's one un-runnable P4 check (the `GREATEST` SQL executing against real Post
 **Tests:** 56 suites / **772** unit (from 757 at P3); integration 21 suites / 103 green in mock;
 lint, build, both tsc projects clean; `observer-invariant.spec.ts` 4/4 and unmodified throughout.
 
-**Next:** ship P4+P5 as one PR, then P6 (RFC-MACP-0013 supersedes) and P7 (docs sweep, now carrying
-the observer-auth findings above).
+**Ship gate (Fable):** PASS, 5 non-blocking findings. It independently grepped every proto to
+confirm `StreamSessionResponse.response` is the **only** `oneof` in the package (so there is no
+third instance of the decode bug in `watchSignals`/`watchSessions`), reproduced all three mutation
+checks exactly, and cite-checked every runtime claim in the tracked prose against `macp-runtime`
+source. It also surfaced a **new latent bug the decode fix just made reachable**: the normalizer
+keys `policy.denied` enrichment on `err.code === 'POLICY_DENIED'`, but the runtime sets inline-frame
+`code` to `status.message()` (`"PolicyDenied"`), so that companion event can never fire against a
+real runtime. Findings recorded in `ASSUMPTIONS.md`; the stale `docs/ARCHITECTURE.md` section was
+fixed in this PR since it was written here and omitted this PR's own headline finding.
+
+**Next:** P6 (RFC-MACP-0013 supersedes) and P7 (docs sweep — now carrying the observer-auth
+findings above, plus the three deferred gate findings).
 
 ## Assumptions / decisions log
 
