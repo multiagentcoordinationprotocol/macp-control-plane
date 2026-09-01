@@ -64,8 +64,9 @@ long past by the time a mid-session commitment is rejected.)
 commitment whose `supersedes.commitment_hash` is not canonical — exactly `sha256:` +
 64 **lowercase** hex characters — is **hard-rejected on accept, with no dual-read
 window**. Because the control-plane only sees *accepted* envelopes via its read-only
-`StreamSession`, and the rejection surfaces on the **sending agent's** ack (not on the
-observer stream), the control-plane's view is a **silent absence**: the commitment
+`StreamSession`, and the rejection is delivered as an inline `MACPError` frame on the
+**sending agent's own bidi stream** — not on the observer stream, and not as a negative
+ack — the control-plane's view is a **silent absence**: the commitment
 carrying the malformed `supersedes` ref simply never appears. There is no
 `message.send_failed` or other error event to grep for — the symptom is purely "the run
 stopped progressing." Any agent still emitting a pre-0013 placeholder hash (`"abc123"`,
@@ -78,12 +79,16 @@ not retroactively accept the old one.
 1. Confirm the stalled run has a commitment step expected to carry `supersedes`
    (cross-session commitment reference, RFC-MACP-0001 §7.3.1) and that no
    `decision.finalized` ever landed for it.
-2. Ask the sending agent's own logs/ack handling for a rejected `CommitmentPayload` send
-   — the control-plane never observes this rejection, only the agent does.
+2. Ask the sending agent's own logs for the inline `MACPError` frame it received for the
+   rejected `CommitmentPayload` send — the control-plane never observes this rejection,
+   only the sending agent does.
 3. If a *prior* supersedes ref did make it into the projection (e.g. from before the
    runtime was upgraded), check `GET /runs/{id}/state` → `decision.current.supersedes`:
    `canonical: false` confirms a legacy/malformed hash is in play and flags the agent
-   code that needs to move to canonical hashes.
+   code that needs to move to canonical hashes. Note projections written before this
+   field shipped **omit `canonical` entirely** rather than reporting `false` — it is
+   derived only when a new `decision.finalized` is applied, so rebuild the projection
+   (`POST /runs/{id}/projection/rebuild`) if the key is absent.
 4. Verify the agent computes `commitment_hash` via the runtime's canonical algorithm
    (RFC-MACP-0013 §3–4) rather than a hand-rolled placeholder — see
    [INTEGRATION.md § Commitment `supersedes.commitment_hash` must be canonical](INTEGRATION.md#commitment-supersedescommitment_hash-must-be-canonical-runtime-v070--rfc-macp-0013-9).

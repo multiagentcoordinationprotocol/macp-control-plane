@@ -327,7 +327,14 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   history as suspect.
 - **Chose:** Keep it required. `canonical?: boolean` would be worse for new writes — every consumer
   would have to handle a third state that never occurs going forward — and **no consumer reads the
-  field today** (verified by grep across `src/`, `test/`, `docs/`, and `../macp-ui-console/src`).
+  field today**. *Correction: an earlier version of this entry cited a grep across
+  `../macp-ui-console/src`, which does not exist (that repo is a Next.js app with `app/`,
+  `components/`, `lib/`), so that leg matched nothing. Re-run properly against the real
+  directories, the conclusion still holds — nothing reads `canonical` anywhere. But the correct
+  grep also names the consumer this entry should have: `macp-ui-console/components/runs/
+  decision-panel.tsx:173-178` renders `supersedes.commitmentHash` and `sessionId`, backed by its
+  own mirrored `CommitmentSupersedes` in `macp-ui-console/lib/types.ts:45-48` that has no
+  `canonical` field. That component is exactly where the blast radius below would land.*
   The phase verifier flagged this as a judgment call it would have made differently rather than a
   defect, and I am taking the opposite side deliberately.
 - **Alternatives:** Make it optional (the verifier's preference); or backfill it on projection load
