@@ -170,3 +170,150 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   can still trip the breaker with this ladder. That is judged **correct** — 3 consecutive
   genuine runtime errors *should* open a threshold-2 breaker — and is documented in-code.
 - **Status:** UNCONFIRMED
+
+## P4 — monotonic (GREATEST) stream-cursor persist instead of a blind set
+- **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 4)
+- **Assumed:** `last_stream_cursor` and `last_envelope_ordinal` are both strictly monotonic per run
+  by their own semantics (the CP seq comes from `allocateSequence`; the runtime ordinal is 1-based,
+  exclusive and compaction-stable — verified in `../macp-runtime/crates/macp-storage/src/log_store.rs`),
+  so flooring the write with `GREATEST` is a no-op on the happy path.
+- **Chose:** Make `RuntimeSessionRepository.updateStreamCursor` monotonic in SQL. This was chosen
+  over relying on the (true but incidental) proof that no envelope normalizes to zero canonical
+  events: that proof rests on the normalizer and the stream consumer's increment predicate staying
+  in lockstep across two separate files, and any future normalizer filter would silently break it.
+  A SQL floor makes the entire clobber class structurally impossible instead.
+- **Alternatives:** Persist the two columns independently (unnecessary — one monotonic write covers
+  both). Remove the `lastProcessedSeq > 0` guard (buys nothing; the marker is always >0 by the first
+  persist because the provider synthesizes a `stream-status: 'opened'` frame first). Fold the cursor
+  write into `persistRawAndCanonical`'s transaction (larger change; deferred — see below).
+- **Blast radius if wrong:** If either value were ever legitimately non-monotonic, the floor would
+  silently refuse to move it backwards and the stored resume point would stick high — which is the
+  *silent* failure direction (a too-high resume returns `Ok(empty)` from the runtime with no gap
+  event and live envelopes still flowing). Mitigation: the values are monotonic by construction, and
+  `recoverRun` already treats the cursor as a floor via `Math.max`.
+- **Status:** UNCONFIRMED
+
+## P4 — deliberate bias toward duplicate events over silent loss
+- **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 4)
+- **Assumed:** Resuming too LOW (duplicates into an append-only log) is strictly preferable to
+  resuming too HIGH (silent loss). Verified in the runtime: `get_incoming_after` returns `Ok(empty)`
+  for both an out-of-range ordinal and a missing/evicted log, and the live broadcast is attached
+  before replay — so a too-high resume has **no observable symptom even in principle**.
+- **Chose:** Bias the design toward too-low everywhere (the `GREATEST` floor, seeding the ordinal on
+  every recovery path). Duplicates are at least detectable after the fact — duplicate `messageId`s in
+  the raw log, inflated `run_metrics` and `timeline.totalEvents` — and this matches the choice
+  already made in P3 (duplication over loss).
+- **Alternatives:** Add message-id dedup so a resume-from-0 is safe — rejected as a much larger
+  change (new index, new column, ingest-path rewrite) that this absorption does not need; the
+  ordinal path is what the runtime's B2 contract was designed for.
+- **Blast radius if wrong:** Duplicate canonical/raw rows inflate per-run aggregates. Not cleanly
+  reversible per-run.
+- **Status:** UNCONFIRMED
+
+## P4 — cursor write remains outside the persist transaction
+- **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 4)
+- **Assumed:** A crash in the window between `persistRawAndCanonical`'s commit and the
+  `updateStreamCursor` write lags the stored ordinal by exactly 1, causing exactly one duplicated
+  envelope on restart.
+- **Chose:** Leave it. Folding a `runtime_sessions` update into the hot-path event transaction is a
+  larger change than Phase 4 needs, and the failure is bounded at one envelope and lands on the
+  preferred (duplicate, not loss) side.
+- **Alternatives:** Move the cursor write inside the transaction — deferred, not rejected on merit.
+- **Blast radius if wrong:** One duplicate envelope per crash in a narrow window. **Consequence for
+  P5:** its exactly-once assertion must target a *clean* stream break; a `kill -9` mid-persist can
+  legitimately produce one duplicate and the live test must not be written to flake on that.
+- **Status:** UNCONFIRMED
+
+## P4 — legacy `last_envelope_ordinal = 0` rows are seeded as-is, not reconstructed
+- **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 4)
+- **Assumed:** Production databases already contain `runtime_sessions` rows whose
+  `last_envelope_ordinal` was clobbered to 0 by a pre-P4 restart (pre-P4 `recoverRun` seeded the
+  marker at 0 and the blind `.set()` wrote it back). After this phase deploys, the **first** restart
+  while such a run is still active resubscribes with `afterSequence: 0` — which the runtime accepts
+  as legitimate, being indistinguishable from a fresh run — and replays the whole session history as
+  duplicate rows.
+- **Chose:** Seed them as-is and **document the exposure** rather than reconstruct the ordinal.
+  Rejected the obvious reconstruction — flooring the seed with
+  `count(*) FROM run_events_raw WHERE run_id = ? AND kind = 'stream-envelope'` — because that count
+  includes any duplicate rows already written (by the P3 post-commit window, or by an earlier
+  re-ingest), so it can **overshoot** the true delivered ordinal. Overshooting resumes too high,
+  and a too-high resume is the one failure this phase exists to prevent: the runtime returns
+  `Ok(empty)` and attaches the live broadcast anyway, so the skipped range vanishes with no error,
+  no gap event, and no symptom even in principle. Trading detectable duplication for undetectable
+  loss is the wrong direction, and a `count(DISTINCT message_id)` variant is a larger change than
+  this phase warrants.
+- **Alternatives:** A one-off backfill migration reconstructing ordinals from distinct raw
+  message ids — deferred; it needs its own verification and is not required for correctness, only
+  to avoid a bounded one-time duplication.
+- **Blast radius if wrong:** Bounded to runs that are (a) active across the deploy boundary **and**
+  (b) had already survived at least one restart. Those re-ingest their history once, inflating
+  `run_metrics` and `timeline.totalEvents` for the affected runs. Lands on the detectable side of
+  the deliberate duplicate-over-loss bias. Steady state is unaffected — the `GREATEST` floor plus
+  seeding means the clobber cannot recur after this deploys.
+- **Status:** UNCONFIRMED
+
+## P5 — inline compacted-history detection matches on message text
+- **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 4/5)
+- **Assumed:** There is no machine-readable way to identify a compacted-history rejection on the
+  stream. The runtime builds the inline frame with `code: status.message().to_string()`
+  (`../macp-runtime/src/server.rs:608-628`), so `code` carries the prose message, not a status
+  name — and `FailedPrecondition` is deliberately absent from `is_stream_terminal_error`
+  (`:745-755`), so it never arrives as a typed gRPC status either.
+- **Chose:** Reuse the existing `isCompactedHistoryError` predicate, which matches `/compact/i`
+  against the message text (live text: `session history before ordinal N was compacted; resume
+  with after_sequence >= N or re-read state via GetSession`), and comment the fragility at both
+  the call site and the predicate.
+- **Alternatives:** Ask upstream for a stable machine-readable code on inline frames — the right
+  long-term fix, but it needs a runtime change and this absorption cannot block on one.
+- **Blast radius if wrong:** If the runtime reworks that string, detection silently stops matching
+  and the gap path goes quiet again — back to an open stream that replayed nothing. The live spec
+  `test/integration/stream-resume-live.integration.spec.ts` asserts the end-to-end behavior against
+  a real runtime, so it fails loudly if the contract drifts — but only when run against a live
+  runtime, which CI does not do (CI pins `INTEGRATION_RUNTIME=mock`).
+- **Status:** UNCONFIRMED
+
+## P5 — full integration suite under a live runtime needs per-spec auth
+- **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 5)
+- **Assumed:** Running the *entire* integration suite with `INTEGRATION_RUNTIME=remote` against an
+  auth-configured runtime fails 8 unrelated suites with `UNAUTHENTICATED`, because those specs were
+  written for a dev-mode runtime that accepts any bearer, while only the new live spec knows to set
+  `RUNTIME_BEARER_TOKEN` to a configured observer token.
+- **Chose:** Leave those specs alone. They are green in their intended mode (`INTEGRATION_RUNTIME=mock`,
+  which is what CI pins), and the failure is an environment mismatch, not a regression — verified by
+  running the full suite in mock mode (21 suites / 103 tests green) after the change.
+- **Alternatives:** Teach every integration spec to resolve a configured token — real work, and it
+  belongs with a decision about whether the live suite should run in CI at all, not with this phase.
+- **Blast radius if wrong:** Anyone running the whole suite against a live auth-configured runtime
+  sees 8 confusing failures. Documented here and in the live spec's header.
+- **Status:** UNCONFIRMED
+
+## P5 — follow-ups the ship gate raised, deliberately deferred to P6/P7
+- **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phases 4/5)
+- **Assumed:** Four items surfaced by the PR #64 ship gate are real but non-blocking, and are
+  better handled as tracked follow-ups than as further churn on an already-verified PR.
+  1. **`STREAM_RESUME_ENABLED=false` skips the gap event.** The `!streamResumeEnabled` break in
+     `stream-consumer.service.ts` runs *before* the `gapDetected` check, so with resume disabled an
+     inline compaction frame degrades to poll-only without emitting `session.stream.gap` or
+     flagging `historyGap`. Narrow to reach (flag-off recovery never subscribes), and the outcome
+     is legacy-equivalent and still better than the pre-fix silent open stream — but the gap goes
+     unrecorded in a case where history genuinely was not replayed. The gate's suggestion is right:
+     check `gapDetected` first, since a history gap is a property of the history, not of the flag.
+  2. **Over-match vector via `PolicyDenied`.** Detection matches `/compact/i` against inline frame
+     text, and `PolicyDenied` frames interpolate operator-authored policy reasons
+     (`macp-runtime/src/server.rs:767-773`). A deny reason containing "compact" would be misrouted
+     into a gap + poll degrade + false `historyGap`. Tighten to the actual message shape
+     (`/history before ordinal \d+ was compacted/`). Every other runtime `MacpError` string is a
+     constant, so this is the only interpolation vector.
+  3. **`policy.denied` enrichment can never fire against a real runtime** — a latent bug the decode
+     fix newly *exposed*. `event-normalizer.service.ts` keys it on `err.code === 'POLICY_DENIED'`,
+     but the runtime sets inline-frame `code` to `status.message()`, i.e. `"PolicyDenied"` or
+     `"PolicyDenied: <reasons>"`. Pre-existing and out of P4/P5's scope, but it is exactly the
+     downstream-assumption class this absorption keeps finding.
+  4. `docs/ARCHITECTURE.md` — **fixed in this PR**, not deferred.
+- **Chose:** Fix (4) immediately since it was written in this PR and omitted the PR's own headline
+  finding; record (1)-(3) for P6/P7 rather than expanding a PR that is already verified, CI-green,
+  and carrying its live evidence.
+- **Blast radius if wrong:** (1) lost observability on an opt-out path; (2) a false `historyGap` and
+  an unnecessary poll degrade for a policy-denied run; (3) `policy.denied` projection events never
+  materialize from inline frames — error visibility only, no data loss.
+- **Status:** UNCONFIRMED

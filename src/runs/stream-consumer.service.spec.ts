@@ -530,6 +530,121 @@ describe('StreamConsumerService', () => {
       expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
       expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
     });
+
+    describe('inline compacted-history detection (live finding: runtime 0.7.0 does not end the stream)', () => {
+      function inlineCompactionError(): any {
+        return {
+          kind: 'stream-inline-error',
+          receivedAt: '2026-01-01T00:00:00.000Z',
+          inlineError: {
+            // The real runtime sets BOTH fields to status.message() — no
+            // machine-readable code is available on the inline frame.
+            code: 'session history before ordinal 5 was compacted; resume with after_sequence >= 5 or re-read state via GetSession',
+            message:
+              'session history before ordinal 5 was compacted; resume with after_sequence >= 5 or re-read state via GetSession',
+            sessionId: 'session-1',
+            messageId: ''
+          }
+        };
+      }
+
+      function inlineNonCompactionError(): any {
+        return {
+          kind: 'stream-inline-error',
+          receivedAt: '2026-01-01T00:00:00.000Z',
+          inlineError: {
+            code: 'INVALID_PAYLOAD',
+            message: 'payload failed schema validation',
+            sessionId: 'session-1',
+            messageId: 'm-err-1'
+          }
+        };
+      }
+
+      it('emits session.stream.gap, flags historyGap, degrades to poll-only, and never resubscribes on an inline compaction error', async () => {
+        // A second item after the inline error must never be consumed — the
+        // consumer is expected to stop pulling from this stream entirely.
+        const handle1 = makeHandle([inlineCompactionError(), envelope('should-not-process')]);
+        const mockProvider = {
+          subscribeSession: jest.fn(),
+          getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
+        };
+        runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+        const marker = newMarker();
+        await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+        expect(marker.historyGap).toBe(true);
+        expect(mockProvider.subscribeSession).not.toHaveBeenCalled(); // never resubscribe from 0
+        const gapEmitted = eventService.emitControlPlaneEvents.mock.calls.some((call) =>
+          (call[1] as any[]).some((e) => e.type === 'session.stream.gap')
+        );
+        expect(gapEmitted).toBe(true);
+        // The envelope queued behind the inline error must never have been
+        // persisted — proof the consumer stopped relying on the open stream
+        // instead of continuing to read from it.
+        expect(eventService.persistRawAndCanonical).not.toHaveBeenCalledWith(
+          'run-1',
+          expect.objectContaining({ envelope: expect.objectContaining({ messageId: 'should-not-process' }) }),
+          expect.anything()
+        );
+        // Poll fallback took over and observed the terminal state.
+        expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
+      });
+
+      it('still normalizes a non-compaction inline error to message.send_failed and does not emit a gap', async () => {
+        (config as any).streamMaxRetries = 0; // break to poll fallback immediately after one pass
+        const handle1 = makeHandle([inlineNonCompactionError()]);
+        const mockProvider = {
+          subscribeSession: jest.fn(),
+          getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
+        };
+        runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+        const marker = newMarker();
+        await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+        // Went through the normal handleRawEvent path (over-matching guard).
+        expect(normalizer.normalize).toHaveBeenCalledWith(
+          'run-1',
+          expect.objectContaining({
+            kind: 'stream-inline-error',
+            inlineError: expect.objectContaining({ code: 'INVALID_PAYLOAD' })
+          }),
+          expect.anything()
+        );
+        expect(marker.historyGap).toBeFalsy();
+        const gapEmitted = eventService.emitControlPlaneEvents.mock.calls.some((call) =>
+          (call[1] as any[]).some((e) => e.type === 'session.stream.gap')
+        );
+        expect(gapEmitted).toBe(false);
+        expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
+      });
+
+      it('is idempotent — an inline compaction error does not emit a duplicate gap once historyGap is already flagged', async () => {
+        const handle1 = makeHandle([inlineCompactionError()]);
+        const mockProvider = {
+          subscribeSession: jest.fn(),
+          getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
+        };
+        runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+        // Simulate the gap having already been recorded once (e.g. a prior
+        // inline compaction error observed earlier in this run's lifecycle).
+        const marker = newMarker();
+        marker.historyGap = true;
+
+        await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+        expect(marker.historyGap).toBe(true);
+        const gapEmitted = eventService.emitControlPlaneEvents.mock.calls.some((call) =>
+          (call[1] as any[]).some((e) => e.type === 'session.stream.gap')
+        );
+        expect(gapEmitted).toBe(false); // no duplicate gap event
+        expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
+        expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
+      });
+    });
   });
 
   describe('SESSION_STATE_CANCELLED terminal detection (T10, matrix #7)', () => {

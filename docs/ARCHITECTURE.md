@@ -132,6 +132,128 @@ chain entries have resolved, rather than under them. The integration-test helper
 (`test/helpers/test-app.ts`) also wires `drainBackgroundWork()` into `app.close()` to
 force-terminate in-progress runs before the drain.
 
+## Stream Resume & Cross-Process Recovery (runtime v0.5.0, T7)
+
+Every `runtime_sessions` row tracks two independent markers, both written together in a
+single `updateStreamCursor` call after each processed raw item once `lastProcessedSeq > 0`
+(session snapshots and stream-status frames included — for those the monotonic floor simply
+makes the write a no-op):
+
+- **`last_stream_cursor`** — the control-plane's own canonical event `seq` for the run.
+  Purely a CP-side bookkeeping value (e.g. used to compute `resumeFromSeq` for the
+  poll-only fallback); the runtime has no notion of it.
+- **`last_envelope_ordinal`** — the runtime's 1-based, **exclusive**, **compaction-stable**
+  count of accepted envelopes delivered on this run's per-session `StreamSession`. This is
+  the value passed back to the runtime as `after_sequence` on `StreamSession` to resume
+  a subscription without re-replaying history already ingested. Only session-stream
+  envelopes increment it — ambient signals, snapshots, and stream-status frames do not.
+
+Both values are strictly monotonic per run by their own semantics, so
+`RuntimeSessionRepository.updateStreamCursor` writes them as a **`GREATEST` floor** in a
+single UPDATE (`GREATEST(COALESCE(last_stream_cursor, 0), $cursor)` /
+`GREATEST(last_envelope_ordinal, $ordinal)`) rather than a blind `.set()`. This is not a
+read-then-write — there is no race window — it simply makes an entire class of clobber
+bugs (an unseeded resume marker, a stale caller value, a race between writers) structurally
+impossible: on the happy path the floor is a no-op, since a real value is always ≥ what's
+already stored.
+
+**In-process resume** (no restart): on a stream disconnect, `StreamConsumerService`
+resubscribes from the in-memory `marker.envelopeOrdinal` it has been incrementing as
+envelopes are durably persisted (`stream-consumer.service.ts`, gated on
+`STREAM_RESUME_ENABLED`).
+
+**Cross-process resume** (control-plane restart): `RunRecoveryService` re-derives the
+resume point from the *persisted* `last_envelope_ordinal` on `onApplicationBootstrap`,
+since the in-memory marker is gone.
+
+- With `STREAM_RESUME_ENABLED=true` (default), recovery resolves the run's runtime
+  provider and calls `subscribeSession({ runId, runtimeSessionId, afterSequence:
+  session.lastEnvelopeOrdinal })` to reattach the per-session `StreamSession` directly,
+  seeding `StreamConsumerService.start()` with that handle and `pollOnly: false`.
+- With the flag off, or if resolving the provider / calling `subscribeSession` fails,
+  recovery falls back to the poll-only path (`GetSession` polling) — but **still** seeds
+  `resumeFromEnvelopeOrdinal` from the persisted value. A failed subscribe never fails
+  recovery; the run is still recovered, just via poll-only.
+- The ordinal is a property of the session's history, not of the transport mode, so it is
+  seeded identically on every path (resume-enabled, resume-disabled, subscribe-failure
+  fallback). The historical bug this guards against: seeding only `resumeFromSeq` and
+  leaving the envelope-ordinal marker at its zero default caused the very first poll
+  cycle's `session-snapshot` (which always normalizes to a positive `seq`) to pass the
+  `lastProcessedSeq > 0` persistence guard and write `0` back over the real stored
+  ordinal — destroying the resume point within one poll cycle of every restart, so a run
+  surviving a second restart (or any flag-off recovery) would resume from 0 and
+  re-ingest its entire session history as duplicates. The `GREATEST` floor above closes
+  this class of bug structurally; seeding the ordinal on every recovery path closes the
+  specific instance of it.
+
+**Bias toward resuming too low, never too high.** There is no message-id dedup in the
+control-plane — a redelivered envelope inserts a genuinely duplicate row (fresh
+`randomUUID()`, freshly allocated `seq`; only the unique index on `(run_id, seq)` prevents
+literal double-processing of the *same* seq, not duplicate ingestion of the same envelope
+under a new one). A too-low resume is therefore recoverable in principle (duplicates are
+at least detectable). A too-high resume is not: the runtime's `get_incoming_after` returns
+`Ok(empty)` both for an out-of-range ordinal *and* for a missing/evicted session log, and
+attaches the live broadcast either way — so a skipped range of history disappears with no
+error, no gap event, and live envelopes still flowing normally. This is why recovery never
+invents an ordinal and never resubscribes from `0` as a fallback strategy — 0 is only ever
+the correct value for a session with no prior persisted ordinal (a genuinely fresh run),
+never a substitute for a marker that failed to seed.
+
+**The `FAILED_PRECONDITION` → `session.stream.gap` → poll-only safety net** (already in
+`stream-consumer.service.ts`, exercised whether the handle came from initial `start()` or
+from `RunRecoveryService`'s cross-process resume) is what protects a resume point that
+*was* valid when persisted but has since been compacted out of the runtime's log:
+`isCompactedHistoryError` recognizes gRPC `FAILED_PRECONDITION` (code 9) or a
+"compacted"-flavored message, `emitStreamGap` emits a `session.stream.gap` canonical event
+and flags the projection `historyGap: true` (idempotent per run via `marker.historyGap`),
+and the consumer degrades to poll-only **without ever resubscribing from 0** — the gap is
+made visible instead of silently skipped. `test/integration/stream-gap.integration.spec.ts`
+covers this path against a scripted mock runtime.
+
+**How the rejection actually arrives against runtime 0.7.0 — not as a stream error.** Live
+re-verification found that the runtime does *not* end the stream for a compacted-history
+resume: `is_stream_terminal_error` (`macp-runtime/src/server.rs:745-755`) omits
+`FailedPrecondition`, so the rejection is delivered as a **non-terminal inline `MACPError`
+frame with the stream left open** (`server.rs:608-628`). The consumer therefore also
+classifies the inline frame, not just the stream-error path — without that, the gap event
+never fired at all and the consumer sat on an open stream that had replayed nothing.
+
+Two caveats a maintainer should know. First, detection matches on the message text, because
+the runtime sets the inline frame's `code` to `status.message()` rather than a status name —
+so there is no machine-readable code to key on, and a future rewording of that string breaks
+detection silently. Second, the classification runs *after* the `STREAM_RESUME_ENABLED` check,
+so with resume disabled an inline compaction frame still degrades to poll-only but does not
+record the gap. `test/integration/stream-resume-live.integration.spec.ts` proves the whole
+path end to end against a real runtime; it is gated and skips under the mock runtime CI pins.
+
+**Known residual gap (accepted, not fixed):** the cursor write in
+`RunEventService.persistRawAndCanonical` happens outside the same DB transaction as the
+canonical-event insert, so a crash between that commit and the cursor write lags the
+stored ordinal by exactly one envelope — the next resume (in-process or cross-process)
+re-ingests that one envelope as a duplicate. This is a bounded, single-envelope duplicate
+on an unclean crash, not a gap; folding the cursor write into the hot-path transaction
+would be a larger change than this trade-off currently justifies.
+
+
+### Operational note: sessions restarted before this feature shipped
+
+`last_envelope_ordinal` was write-only before cross-process resume landed, and worse, every
+restart overwrote it with `0` (recovery seeded the in-memory marker at 0 and the cursor write was
+a blind `SET`). Rows carrying that clobbered `0` may still exist for runs that were active across
+an upgrade.
+
+For such a run, the first restart after this feature deploys resubscribes with `after_sequence: 0`,
+which the runtime cannot distinguish from a genuinely fresh subscription — so it replays the full
+session history and the control-plane re-ingests it as duplicate events. This is a **bounded,
+one-time** effect: it only touches runs that were active across the deploy *and* had already
+survived an earlier restart, and the monotonic floor means the clobber cannot recur afterwards.
+
+It is deliberately not "fixed" by reconstructing the ordinal from the raw event count: that count
+includes any duplicates already present, so it can overshoot the true delivered ordinal — and
+overshooting resumes *too high*, which the runtime answers with an empty replay plus a live
+broadcast, losing the skipped range with no error and no gap event. Duplicated events are
+detectable after the fact; silently skipped ones are not.
+
 ## Message / Signal / Context — removed (direct-agent-auth CP-5/6/7)
 
 The `POST /runs/:id/{messages,signal,context}` endpoints were removed 2026-04-15 and now

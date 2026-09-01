@@ -331,6 +331,105 @@ describe('RustRuntimeProvider.subscribeSession — passive-subscribe frame (RFC-
   });
 });
 
+describe('RustRuntimeProvider.subscribeSession — StreamSessionResponse oneof discriminant (`response`) decode', () => {
+  const baseReq: RuntimeSubscribeSessionRequest = {
+    runId: 'run-1',
+    runtimeSessionId: 'sess-abc'
+  };
+
+  // StreamSessionResponse declares `oneof response { Envelope envelope = 1; MACPError
+  // error = 2; }`. proto-loader with `oneofs: true` (onModuleInit) adds a virtual
+  // `chunk.response` property holding the STRING name of whichever field is set — the
+  // real payload sits flat on `chunk.error` / `chunk.envelope`. This is the wire shape a
+  // real gRPC channel actually delivers (confirmed live against the runtime).
+  it('surfaces an inline error frame delivered in the oneofs:true wire shape ({ response: "error", error: {...} }) as stream-inline-error', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream);
+
+    const handle = provider.subscribeSession(baseReq);
+    await new Promise((r) => setImmediate(r));
+
+    stream.emit('data', {
+      response: 'error',
+      error: {
+        code: 'session history before ordinal 1 was compacted; resume with after_sequence >= 1 or re-read state via GetSession',
+        message:
+          'session history before ordinal 1 was compacted; resume with after_sequence >= 1 or re-read state via GetSession',
+        sessionId: 'sess-abc',
+        messageId: 'm-err-1'
+      }
+    });
+    stream.emit('end');
+
+    const events = await drain(handle.events);
+    const inlineErrors = events.filter((e) => e.kind === 'stream-inline-error');
+    expect(inlineErrors).toHaveLength(1);
+    expect(inlineErrors[0].inlineError).toEqual({
+      code: 'session history before ordinal 1 was compacted; resume with after_sequence >= 1 or re-read state via GetSession',
+      message:
+        'session history before ordinal 1 was compacted; resume with after_sequence >= 1 or re-read state via GetSession',
+      sessionId: 'sess-abc',
+      messageId: 'm-err-1'
+    });
+  });
+
+  it('surfaces an inline error frame delivered in a nested-object shape ({ response: { error: {...} } }) as stream-inline-error', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream);
+
+    const handle = provider.subscribeSession(baseReq);
+    await new Promise((r) => setImmediate(r));
+
+    stream.emit('data', {
+      response: {
+        error: {
+          code: 'POLICY_DENIED',
+          message: 'commitment rejected by policy.default',
+          sessionId: 'sess-abc',
+          messageId: 'm-err-2'
+        }
+      }
+    });
+    stream.emit('end');
+
+    const events = await drain(handle.events);
+    const inlineErrors = events.filter((e) => e.kind === 'stream-inline-error');
+    expect(inlineErrors).toHaveLength(1);
+    expect(inlineErrors[0].inlineError).toEqual({
+      code: 'POLICY_DENIED',
+      message: 'commitment rejected by policy.default',
+      sessionId: 'sess-abc',
+      messageId: 'm-err-2'
+    });
+  });
+
+  it('still delivers an envelope frame in the oneofs:true wire shape ({ response: "envelope", envelope: {...} })', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream);
+
+    const handle = provider.subscribeSession(baseReq);
+    await new Promise((r) => setImmediate(r));
+
+    stream.emit('data', {
+      response: 'envelope',
+      envelope: {
+        sessionId: 'sess-abc',
+        messageType: 'Decision',
+        messageId: 'm3',
+        sender: 'agent-1',
+        payload: Buffer.from(''),
+        timestampUnixMs: 3
+      }
+    });
+    stream.emit('end');
+
+    const events = await drain(handle.events);
+    const envelopeEvents = events.filter((e) => e.kind === 'stream-envelope');
+    expect(envelopeEvents).toHaveLength(1);
+    expect(envelopeEvents[0].envelope?.messageId).toBe('m3');
+  });
+});
+
 describe('RustRuntimeProvider.listSessions — pagination, bounds, and truth-in-contract (Phase 2, 0.7.0)', () => {
   function spyUnary(provider: RustRuntimeProvider) {
     return jest.spyOn(provider as unknown as { unary: (...a: unknown[]) => Promise<unknown> }, 'unary');

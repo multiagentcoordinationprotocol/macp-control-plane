@@ -265,7 +265,20 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         grpcCall.on('data', (chunk: any) => {
           const receivedAt = new Date().toISOString();
 
-          const responseBody = chunk.response ?? chunk;
+          // StreamSessionResponse declares `oneof response { Envelope envelope = 1;
+          // MACPError error = 2; }`. With `oneofs: true` (see onModuleInit), proto-loader
+          // adds a *virtual discriminant* property `chunk.response` whose value is the
+          // STRING name of whichever field is set — e.g. the string 'error' or the string
+          // 'envelope' — NOT a nested object containing the payload. The real payloads sit
+          // at the flat `chunk.error` / `chunk.envelope` properties. `chunk.response ?? chunk`
+          // therefore evaluated to the *string* `'error'`, and `('error').error` is
+          // `undefined` — silently dropping every inline error frame (confirmed live: a raw
+          // client with the same `oneofs: true` options reads the frame at `chunk.error`,
+          // with `typeof chunk.response === 'string'`). Only treat `chunk.response` as the
+          // payload holder when it is a genuine object (in case proto-loader options ever
+          // change); a string discriminant must fall through to reading the flat `chunk`
+          // shape instead. Do not "simplify" this back to `chunk.response ?? chunk`.
+          const responseBody = chunk.response && typeof chunk.response === 'object' ? chunk.response : chunk;
           if (responseBody.error) {
             const inlineError = responseBody.error;
             buffer.push({

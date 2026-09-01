@@ -1,9 +1,11 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { RunDescriptor } from '../contracts/control-plane';
+import { RuntimeSessionHandle } from '../contracts/runtime';
 import { AppConfigService } from '../config/app-config.service';
 import { DatabaseService } from '../db/database.service';
 import { RunEventService } from '../events/run-event.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
+import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
 import { RunManagerService } from './run-manager.service';
@@ -21,7 +23,8 @@ export class RunRecoveryService implements OnApplicationBootstrap {
     private readonly runManager: RunManagerService,
     private readonly streamConsumer: StreamConsumerService,
     private readonly eventService: RunEventService,
-    private readonly instrumentation: InstrumentationService
+    private readonly instrumentation: InstrumentationService,
+    private readonly runtimeRegistry: RuntimeProviderRegistry
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -119,6 +122,40 @@ export class RunRecoveryService implements OnApplicationBootstrap {
 
     // Use the persisted stream cursor if available, otherwise fall back to run's lastEventSeq
     const resumeFromSeq = Math.max(session?.lastStreamCursor ?? 0, run.lastEventSeq);
+    // The envelope ordinal is a property of the session's history, not of the
+    // transport mode — seed it on every path (resume-enabled, resume-disabled,
+    // and the subscribe-failure fallback below). Failing to do this is the
+    // clobber bug: an unseeded marker starts at 0 and the first poll-cycle
+    // snapshot writes that 0 over the real persisted ordinal.
+    const resumeFromEnvelopeOrdinal = session?.lastEnvelopeOrdinal ?? 0;
+
+    // When stream resume is enabled, attempt to reattach the per-session
+    // StreamSession from the persisted ordinal instead of degrading straight
+    // to polling. `subscribeSession` does not throw synchronously (failures
+    // surface asynchronously through the returned handle's iterator, which
+    // `StreamConsumerService.consumeLoop` already handles — including the
+    // FAILED_PRECONDITION → `session.stream.gap` → poll-only safety net for a
+    // compacted resume point). The try/catch here guards the near-unreachable
+    // synchronous failure (e.g. an unregistered runtime kind); either way, a
+    // failed subscribe must never fail recovery — it only forces poll-only.
+    let sessionHandle: RuntimeSessionHandle | undefined;
+    if (this.config.streamResumeEnabled) {
+      try {
+        const provider = this.runtimeRegistry.get(run.runtimeKind);
+        sessionHandle = provider.subscribeSession({
+          runId: run.id,
+          runtimeSessionId,
+          afterSequence: resumeFromEnvelopeOrdinal
+        });
+      } catch (error) {
+        this.logger.warn(
+          `subscribeSession failed during recovery for run ${run.id}; falling back to poll-only: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        sessionHandle = undefined;
+      }
+    }
 
     await this.streamConsumer.start({
       runId: run.id,
@@ -127,9 +164,15 @@ export class RunRecoveryService implements OnApplicationBootstrap {
       runtimeSessionId,
       subscriberId,
       resumeFromSeq,
-      pollOnly: true
+      resumeFromEnvelopeOrdinal,
+      sessionHandle,
+      pollOnly: !sessionHandle
     });
 
-    this.logger.log(`recovered run ${run.id} from seq ${run.lastEventSeq}`);
+    this.logger.log(
+      `recovered run ${run.id} from seq ${run.lastEventSeq} (envelope ordinal ${resumeFromEnvelopeOrdinal}, ${
+        sessionHandle ? 'stream-resume' : 'poll-only'
+      })`
+    );
   }
 }

@@ -1,6 +1,6 @@
 # Absorb macp-runtime v0.7.0 (and 0.6.x) + macp-proto 0.1.9
 
-Status: **in progress** (P1–P3 DONE; P4–P7 TODO)
+Status: **in progress** (P1–P5 DONE; P6–P7 TODO)
 Owner: control-plane maintainers
 Upstream inputs: `macp-runtime` v0.7.0 (`CHANGELOG.md` `[0.7.0] — 2026-08-31`, PRs #116 / #108, `docs/change-review-phases-a-e.md`), `@multiagentcoordinationprotocol/proto` 0.1.8 → 0.1.9.
 
@@ -288,7 +288,7 @@ Legend: **IMPACT** = change required here; **NO IMPACT** = verified no change ne
 
 ### Phase 4 — Cross-process envelope-ordinal resume
 
-- **Status:** TODO
+- **Status:** DONE
 - **Delivers:** `last_envelope_ordinal` stops being write-only — a control-plane restart resumes the stream from the last durably-ingested envelope instead of degrading to poll-only.
 - **Depends on:** nothing structurally (see P3's corrected scope — the *persisted* ordinal is already persist-gated). P3 is **sequenced** before it because both touch the same resume machinery and landing them together keeps one mental model, not because P4 is unsafe without it.
 - **Files:** `src/runs/run-recovery.service.ts`, `src/runs/stream-consumer.service.ts`, `src/runs/run-recovery.service.spec.ts`, `src/runs/stream-consumer.service.spec.ts`, `test/integration/stream-gap.integration.spec.ts` (must stay green — it covers the FAILED_PRECONDITION → gap → poll-only path this phase touches), `docs/ARCHITECTURE.md`.
@@ -307,11 +307,70 @@ Legend: **IMPACT** = change required here; **NO IMPACT** = verified no change ne
   3. A `FAILED_PRECONDITION` on the resumed subscribe emits `session.stream.gap`, sets `historyGap`, and falls back to poll-only without resubscribing from 0.
   4. No canonical event is duplicated or lost across the restart in the live test (P5).
 - **Tests:** unit — recovery passes the persisted ordinal; disabled-flag path unchanged; compacted-resume path. Live — covered by P5.
+- **REVISED BEFORE IMPLEMENTATION — Fable one-way-door analysis (this phase is the plan's riskiest,
+  so it was routed to Fable before any code was written). Three corrections:**
+  1. **The stated mechanism for the lag hazard is FALSE.** A zero-canonical-event envelope is
+     unreachable: `EventNormalizerService.normalize()` pushes `message.received` unconditionally for
+     any `kind === 'stream-envelope'` raw with an envelope present (decode failure falls back to
+     `payloadBase64`; an unmapped type only suppresses the *derived* event), and the consumer's
+     increment predicate `raw.kind === 'stream-envelope' && raw.envelope` is the exact complement of
+     the normalizer's early return. They are lockstep. Moreover the guard tests the **cumulative**
+     `marker.lastProcessedSeq`, and the provider synthesizes a `stream-status: 'opened'` frame as the
+     first item of every subscription, which normalizes to `session.stream.opened` with a positive
+     seq — so `lastProcessedSeq > 0` before any envelope can arrive.
+  2. **The real hazard, which this plan never identified: the poll path clobbers the ordinal to 0.**
+     `updateStreamCursor` is a blind `.set()`, and `RunRecoveryService` passes `resumeFromSeq` but
+     **not** `resumeFromEnvelopeOrdinal`, so the marker seeds `envelopeOrdinal: 0`. The first poll
+     cycle's `session-snapshot` normalizes to a positive seq, the guard passes, and `0` is written
+     over the real ordinal — destroying the resume point within one poll cycle of **every** restart.
+     The impact matrix's "write-only, discarded across restart" understates it. A run surviving two
+     restarts (or any flag-off recovery, which AC2 as written would enshrine) then resumes from 0 —
+     which the runtime accepts as legitimate — and re-ingests the entire session as duplicates.
+  3. **A too-high resume is completely silent**, worse than "no gap event": `get_incoming_after`
+     returns `Ok(empty)` both for an out-of-range ordinal and for a missing/evicted session log, and
+     the live broadcast is attached before replay regardless — so the skipped range disappears with
+     no error, no gap, and live envelopes still flowing. There is no observable symptom even in
+     principle. This is why the implementation must bias deliberately toward too-low.
+- **REVISED approach (supersedes the guard bullet above):** do **both**, neither alone is sufficient.
+  1. **Make the persist monotonic in SQL** in `RuntimeSessionRepository.updateStreamCursor`:
+     `last_stream_cursor = GREATEST(COALESCE(last_stream_cursor, 0), $cursor)` and
+     `last_envelope_ordinal = GREATEST(last_envelope_ordinal, $ordinal)`. Both values are strictly
+     monotonic per run by their own semantics, so a floor is a no-op on the happy path and makes the
+     whole clobber class — unseeded markers, future caller mistakes, races — structurally impossible.
+     It does not change `last_stream_cursor`'s semantics: `recoverRun` already treats it as a floor
+     via `Math.max`. Still one UPDATE, no extra hot-path write. Keep the `lastProcessedSeq > 0` guard
+     (harmless; removing it buys nothing). Rejected: relying on the zero-event proof alone — it is
+     real but *incidental*, resting on two separate files staying in lockstep, and any future
+     normalizer filter would silently break it.
+  2. **Seed `resumeFromEnvelopeOrdinal: session.lastEnvelopeOrdinal` on EVERY recovery path** —
+     flag-on, flag-off, and the subscribe-failure fallback. The ordinal is a property of the
+     session's history, not of the transport mode.
+- **AC2 is AMENDED:** with `STREAM_RESUME_ENABLED=false`, recovery still calls `start()` with
+  `pollOnly: true` and no `sessionHandle` — but **now also with `resumeFromEnvelopeOrdinal` seeded**.
+  "Identical to today" was wrong: today's behavior is the clobber bug.
+- **AC1b is NARROWED:** `subscribeSession` never throws synchronously (`launch()` catches into
+  `streamFailure` and surfaces it through the iterator), so the try/catch guards a near-unreachable
+  branch. Keep it, but the meaningful assertions are that the seeded ordinal reaches the subscribe
+  frame and that an async failure lands in poll-only with the run still recovered.
+- **SEQUENCING DECISION:** do **not** reorder P5 before P4 (P5's cross-restart assertion exercises
+  P4's code; run earlier it can only test the in-process path), and do **not** flip the
+  `STREAM_RESUME_ENABLED` default to false as a hedge — the flag also gates the already-shipped
+  in-process resume, so flipping it would regress working v0.5.0 behavior for everyone in order to
+  de-risk an unshipped feature. **Instead: implement P4 and P5 together on one branch, run the live
+  spec against a real 0.7.0 runtime, and merge them atomically.** That makes this plan's own rule —
+  "P4 should not ship without P5's live evidence" — literal rather than aspirational. If no live
+  runtime can be run, **hold P4 unmerged** rather than merge behind a flipped default.
+- **Deferred, recorded not fixed:** the cursor write sits outside `persistRawAndCanonical`'s
+  transaction, so a crash between commit and cursor write lags the stored ordinal by exactly 1 → one
+  duplicated envelope on restart. Folding it into the hot-path transaction is a larger change than
+  this phase needs. Consequence for P5: its exactly-once assertion must target a **clean** stream
+  break — a `kill -9` mid-persist can legitimately produce one duplicate, and the live test must not
+  be written to flake on that.
 - **Docs:** `docs/ARCHITECTURE.md` — **add** a stream-resume/recovery section. There is no existing one to correct (the only nearby text is `:102`, "persists a stream cursor for lossless resume").
 
 ### Phase 5 — Live B2 re-verification against a real 0.7.0 runtime
 
-- **Status:** TODO
+- **Status:** DONE
 - **Delivers:** The re-test the runtime's own change review explicitly asks for, and the empirical evidence P3/P4 depend on. Closes the 0.5.0 plan's never-completed T11.
 - **Depends on:** P1 (harness), P3, P4.
 - **Files:** `test/integration/stream-resume-live.integration.spec.ts` (new, gated), `plans/absorb-runtime-v0.7.0.md` (results), `PROGRESS.md`.
@@ -326,6 +385,63 @@ Legend: **IMPACT** = change required here; **NO IMPACT** = verified no change ne
   4. The final report states plainly which of these ran against a live runtime and which remained static-only.
 - **Tests:** the new gated spec.
 - **Docs:** results recorded in this plan's §7 and in the `/drive` report.
+
+- **LIVE FINDING (blocking for P4) — the compacted-resume safety net does not exist against
+  runtime 0.7.0.** This is exactly what P5 was mandated to catch, and it contradicts both this
+  plan and the repo README.
+  - **What we believed** (README "Stream resume", P4's edge-case reasoning, and the Fable design
+    analysis, which read this statically and got it wrong): a resume below the compacted base
+    yields a stream-ending `FAILED_PRECONDITION`, which `isCompactedHistoryError` classifies,
+    emitting `session.stream.gap`, flagging `historyGap`, and degrading to poll-only.
+  - **What actually happens:** `../macp-runtime/src/server.rs:608-628` routes a subscribe error two
+    ways — `Err(status) if is_stream_terminal_error(&status) => Err(status)?` (ends the stream)
+    versus `Err(status) => yield inline PbMacpError` (**stream stays open**). And
+    `is_stream_terminal_error` (`server.rs:745-755`) matches only `Unauthenticated | Internal |
+    ResourceExhausted | InvalidArgument | NotFound | AlreadyExists` — **`FailedPrecondition` is not
+    in the list.** So the compacted-resume error is delivered as a *non-terminal inline frame*.
+  - **Consequence for the CP:** `isCompactedHistoryError` is only consulted from the stream-error
+    `catch` (`stream-consumer.service.ts:223`). No stream error ever occurs, so that catch never
+    runs: **no `session.stream.gap`, no `historyGap`, no poll fallback.** The inline frame instead
+    normalizes to `message.send_failed`, and the consumer sits on an open stream that replayed
+    nothing — a silent history hole. That is the precise failure mode this absorption exists to
+    eliminate, and P4's risk model assumed the loud path was there.
+  - **Fix (in scope for P4, since it is P4's safety net):** classify the inline
+    `kind: 'stream-inline-error'` carrying the compaction error (provider `rust-runtime.provider.ts:269-272`)
+    and route it to the same `emitStreamGap` + poll-only degrade. Note the runtime sets the inline
+    frame's `code` to `status.message()` rather than a status name, so matching is on the message
+    text (`session history before ordinal N was compacted`) — fragile, and worth raising upstream.
+  - **Verification status:** criteria 1+2 **proven live** (exactly-once ingestion and invariant-6
+    delivery across a real forced runtime restart). Criterion 3 is what surfaced this finding.
+
+- **SECOND LIVE FINDING (pre-existing production bug, deeper than the first) — every inline
+  error frame was silently dropped.** Fixing the gap classifier alone would NOT have worked: the
+  frame never reached `StreamConsumerService` at all.
+  - `StreamSessionResponse` declares `oneof response { Envelope envelope = 1; MACPError error = 2; }`.
+    The proto-loader runs with `oneofs: true` (`rust-runtime.provider.ts:138`), which makes
+    proto-loader set `chunk.response` to the **discriminant string** naming the set field
+    (`'error'` / `'envelope'`), with the payloads flat on `chunk.error` / `chunk.envelope`.
+  - The handler did `const responseBody = chunk.response ?? chunk`, so `responseBody` became the
+    truthy **string** `'error'`, `('error').error` was `undefined`, and the frame was dropped
+    before becoming a `RawRuntimeEvent`. Envelope frames survived only by accident, rescued by the
+    `?? chunk.envelope` fallback on the following line.
+  - **Blast radius beyond this plan:** the inline-error path documented in `CLAUDE.md` ("normalizer
+    maps to `message.send_failed` canonical events") had therefore **never fired in production**.
+  - Fixed at `rust-runtime.provider.ts:268-280` by treating `chunk.response` as the payload holder
+    only when it is a genuine object. Mutation-verified (reverting fails the new regression test
+    with `Expected length: 1, Received length: 0`). Only `StreamSessionResponse` uses a `oneof` —
+    `watchSignals`/`watchSessions` read plain fields and were confirmed unaffected.
+  - **Lesson worth keeping:** the first fix was correct, unit-tested, and mutation-verified, and
+    would still have been inert in production because the layer beneath it discarded the input.
+    Only driving real frames through the real provider surfaced that. This is precisely the
+    re-test the runtime's `docs/change-review-phases-a-e.md` asks of this repo.
+- **FINAL LIVE STATUS — all three criteria proven against a real macp-runtime v0.7.0:**
+  1. Exactly-once ingestion across a forced runtime restart. ✅ live
+  2. Invariant 6 — envelopes emitted after the subscribe frame still delivered. ✅ live
+  3. Compacted-base resume → non-terminal inline frame → correctly decoded → `session.stream.gap`
+     emitted, projection `historyGap` set, poll-only degrade, and `subscribeSession` called with
+     exactly `[0, 1]` — never a second resubscribe from 0, with the run still reaching its true
+     terminal state through the fallback. ✅ live
+
 
 ### Phase 6 — RFC-MACP-0013 supersedes alignment
 

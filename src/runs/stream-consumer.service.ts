@@ -145,6 +145,11 @@ export class StreamConsumerService implements OnModuleDestroy {
    * `after_sequence` below the compacted base. Resubscribing from 0 after this
    * would double-ingest history (the CP has no message-id dedup), so callers
    * degrade to poll-only instead.
+   *
+   * Also reused (message-text branch only — `code` is never numeric there) to
+   * classify the *inline* `stream-inline-error` frame macp-runtime 0.7.0 emits
+   * for the same condition instead of ending the stream. See the call site in
+   * the consume loop for why that path exists and why it is fragile.
    */
   private isCompactedHistoryError(error: unknown): boolean {
     const code = (error as { code?: number })?.code;
@@ -213,6 +218,49 @@ export class StreamConsumerService implements OnModuleDestroy {
         try {
           for await (const raw of this.withIdleTimeout(handle.events, this.config.streamIdleTimeoutMs)) {
             if (marker.aborted) return;
+
+            // Inline compacted-history detection (live-finding follow-up to T7).
+            // macp-runtime 0.7.0 does NOT surface a compacted resume point as a
+            // terminal gRPC stream error: server.rs's stream loop only ends the
+            // stream for Unauthenticated | Internal | ResourceExhausted |
+            // InvalidArgument | NotFound | AlreadyExists (server.rs:745-755,
+            // is_stream_terminal_error) — FailedPrecondition is excluded, so a
+            // compacted resume is instead delivered as a non-terminal inline
+            // `Response::Error` frame while the bidi stream stays open
+            // (server.rs:608-628). The `catch` below — which drives gap
+            // detection for a genuine stream error — never runs for this case,
+            // so it has to be detected here, before we normalize the frame.
+            //
+            // There is no machine-readable signal to key off: the runtime sets
+            // both `code` and `message` on the inline frame to
+            // `status.message()`, i.e. the human-readable "session history
+            // before ordinal {N} was compacted; resume with after_sequence >=
+            // {N} or re-read state via GetSession" string (server.rs:512-519).
+            // We reuse `isCompactedHistoryError`'s existing /compact/i text
+            // match against that string rather than inventing a second
+            // detector. This is inherently fragile: if the runtime ever
+            // reword this message, detection silently stops firing with no
+            // compiler or test signal short of the live-runtime suite —
+            // that fragility is deliberate to call out, not accidental.
+            if (
+              raw.kind === 'stream-inline-error' &&
+              raw.inlineError &&
+              (this.isCompactedHistoryError(raw.inlineError.message) ||
+                this.isCompactedHistoryError(raw.inlineError.code))
+            ) {
+              gapDetected = true;
+              marker.connected = false;
+              this.logger.warn(
+                `inline compacted-history error for run ${params.runId}: ` +
+                  `${raw.inlineError.message || raw.inlineError.code}`
+              );
+              // The stream replayed nothing but is left open by the runtime —
+              // stop relying on it (this closes the underlying gRPC call via
+              // withIdleTimeout's iterator.return()) and fall through to the
+              // same poll-only degrade used for a terminal stream error.
+              break;
+            }
+
             await this.handleRawEvent(params.runId, raw, context, params.runtimeSessionId, marker);
             if (marker.finalized) return;
             // Healthy delivery resets the reconnect budget.

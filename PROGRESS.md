@@ -12,8 +12,8 @@ _(one checkpoint per phase; `/implement` appends)_
 | P1 live harness + ListSessions ground truth | **DONE** | 3 (GAPS→GAPS→PASS) | Opus | `716fa9b` | **merged #61** |
 | P2 truth-in-contract for `listSessions` | **DONE** | 2 (GAPS→PASS) + ship-gate 1 (GAPS→fixed) | Opus | `f6702e2` | **merged #62** |
 | P3 ordinal correctness + invariant-6 comments | **DONE** | 1 (PASS + 4 findings closed) | Opus | (head of `absorb-runtime-v0.7.0-p3`) | — |
-| P4 cross-process envelope-ordinal resume | TODO | — | — | — | — |
-| P5 live B2 re-verification | TODO | — | — | — | — |
+| P4 cross-process envelope-ordinal resume | **DONE** | 1 (PASS) + 2 live-driven prod fixes | **Fable** (one-way door) | (head of `absorb-runtime-v0.7.0-p4`) | — |
+| P5 live B2 re-verification | **DONE** | live, 3/3 criteria proven | — | (same branch — ships with P4) | — |
 | P6 RFC-MACP-0013 supersedes alignment | TODO | — | — | — | — |
 | P7 docs accuracy sweep (proto bump landed via #60) | TODO | — | — | — | — |
 
@@ -192,6 +192,80 @@ _(one checkpoint per phase; `/implement` appends)_
 - **Next:** P4 (cross-process envelope-ordinal resume) — the plan's riskiest phase. Note the
   `lastProcessedSeq > 0` guard on `updateStreamCursor` can make the *persisted* ordinal lag; that
   is P4's central hazard.
+
+### P4 + P5 — DONE (2026-08-31), shipping together
+
+**Why together:** Fable's one-way-door analysis rejected both hedges — reordering P5 first is
+incoherent (its cross-restart assertion *exercises* P4's code), and flipping the
+`STREAM_RESUME_ENABLED` default to false would regress the already-shipped in-process resume for
+everyone to de-risk an unshipped feature. So P4 merges only with P5's live evidence attached.
+
+**P4 verdict:** PASS from **Fable** (one-way door: changes production restart behavior by default;
+failure modes are duplicate or silently-lost events in an append-only log with no message-id dedup).
+Fable verified by execution, not inspection: it rendered the actual SQL to confirm the column
+interpolates as a real column reference rather than a stale bound parameter, checked `afterSequence`
+off-by-one against the runtime's own log store, and mutation-tested both changes (reverting the SQL
+fails 3 tests, reverting the seeding fails 4, disjoint).
+
+**What P4 actually fixed** — note the plan's stated mechanism was wrong for the *third* time in this
+absorption: zero-canonical-event envelopes are unreachable (the normalizer always emits
+`message.received`, and the consumer's increment predicate is its exact complement). The real bug
+Fable found instead: recovery never seeded the envelope ordinal, so the marker started at 0 and the
+first poll cycle blind-wrote that 0 over the stored value — `last_envelope_ordinal` was not merely
+unread across restarts, it was **destroyed on every one**, and AC2 as written would have enshrined
+it. Fixed with a `GREATEST` floor in SQL plus seeding on every recovery path.
+
+**Two production bugs that only live testing could find.** This is the phase's most important
+outcome and the whole justification for the runtime's change-review request:
+1. **The compacted-resume safety net did not exist.** `is_stream_terminal_error`
+   (`../macp-runtime/src/server.rs:745-755`) omits `FailedPrecondition`, so the runtime delivers a
+   compacted-history rejection as a **non-terminal inline frame** with the stream left open — not
+   the stream-ending error our README, the plan, and Fable's *static* read all assumed. Our
+   detection lived only in the stream-error catch, so it never fired.
+2. **Underneath that, every inline frame was silently dropped.** With `oneofs: true`, proto-loader
+   sets `chunk.response` to a discriminant **string**; `chunk.response ?? chunk` therefore yielded
+   `'error'` and `('error').error` was `undefined`. Envelopes survived only by an accidental
+   `?? chunk.envelope` fallback. Consequence beyond this plan: the inline-error →
+   `message.send_failed` path documented in `CLAUDE.md` had **never fired in production**.
+
+   The lesson worth keeping: fix #1 was correct, unit-tested and mutation-verified, and would still
+   have been inert in production because the layer beneath it discarded the input. Static reading
+   (including Fable's) got #1 backwards; only real frames through the real provider found either.
+
+**Live evidence (all against a real macp-runtime v0.7.0, independently re-run by the orchestrator,
+exit 0):** exactly-once ingestion across a forced runtime restart; invariant 6 (envelopes emitted
+after the subscribe frame still delivered); and the full compacted-resume path — inline frame
+decoded, `session.stream.gap` emitted, projection `historyGap` set, poll-only degrade, with
+`subscribeSession` called exactly `[0, 1]` and the run still reaching its true terminal state.
+
+**Getting there required environment work the plan never anticipated**, all of it real deployment
+contract for the observer role: `GetSession` requires `is_observer` (or initiator/participant);
+`is_observer: true` comes **only** from a configured token, and the dev-auth path hardcodes it
+`false`; a configured bearer's identity must equal every envelope's `sender`; and compaction runs
+only on **terminal** sessions, reachable via the `CancelSession` **RPC** (a `SessionCancel`
+envelope returns `Forbidden`). Queued for P7's docs sweep.
+
+**Also unblocked:** the local integration suite, dead all session (corrupted Docker, hung Postgres
+on 5433). Rather than `chown` the user's own Postgres data dir with sudo, stood up an isolated
+throwaway cluster on port 5455 with the same Homebrew binaries and the repo's programmatic
+migrator. Full suite now green locally — 21 suites / 103 tests — which also retroactively closed
+Fable's one un-runnable P4 check (the `GREATEST` SQL executing against real Postgres).
+
+**Tests:** 56 suites / **772** unit (from 757 at P3); integration 21 suites / 103 green in mock;
+lint, build, both tsc projects clean; `observer-invariant.spec.ts` 4/4 and unmodified throughout.
+
+**Ship gate (Fable):** PASS, 5 non-blocking findings. It independently grepped every proto to
+confirm `StreamSessionResponse.response` is the **only** `oneof` in the package (so there is no
+third instance of the decode bug in `watchSignals`/`watchSessions`), reproduced all three mutation
+checks exactly, and cite-checked every runtime claim in the tracked prose against `macp-runtime`
+source. It also surfaced a **new latent bug the decode fix just made reachable**: the normalizer
+keys `policy.denied` enrichment on `err.code === 'POLICY_DENIED'`, but the runtime sets inline-frame
+`code` to `status.message()` (`"PolicyDenied"`), so that companion event can never fire against a
+real runtime. Findings recorded in `ASSUMPTIONS.md`; the stale `docs/ARCHITECTURE.md` section was
+fixed in this PR since it was written here and omitted this PR's own headline finding.
+
+**Next:** P6 (RFC-MACP-0013 supersedes) and P7 (docs sweep — now carrying the observer-auth
+findings above, plus the three deferred gate findings).
 
 ## Assumptions / decisions log
 
