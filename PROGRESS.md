@@ -15,7 +15,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | P4 cross-process envelope-ordinal resume | **DONE** | 1 (PASS) + 2 live-driven prod fixes | **Fable** (one-way door) | (head of `absorb-runtime-v0.7.0-p4`) | — |
 | P5 live B2 re-verification | **DONE** | live, 3/3 criteria proven | — | (same branch — ships with P4) | — |
 | P6 RFC-MACP-0013 supersedes alignment | **DONE** | 2 (GAPS→fixed) | Opus | (head of `absorb-runtime-v0.7.0-p6`) | — |
-| P7 docs accuracy sweep (proto bump landed via #60) | TODO | — | — | — | — |
+| P7 docs accuracy sweep (proto bump landed via #60) | **DONE** | 2 (GAPS→fixed) | Opus | (head of `absorb-runtime-v0.7.0-p7`) | — |
 
 ## Repo map (gathered during planning — do not re-scan)
 
@@ -294,6 +294,41 @@ findings above, plus the three deferred gate findings).
 - **Next:** ship P6 alone (both verifiers agree it is independently shippable and P7 lists it as a
   dependency), then P7 — the docs sweep, now carrying the observer-auth contract findings and the
   three deferred ship-gate items from P4/P5.
+
+### P7 — DONE (2026-09-01) — plan COMPLETE
+- **Verdict:** GAPS (**5 blocking**, 7 non-blocking) → all closed. Verifier: Opus. Docs-only diff
+  (4 tracked files, +156/-2); `npm test` unchanged at 56 suites / 780 tests throughout.
+- **Every blocking finding was a factually false operator-facing claim**, which for a docs phase is
+  a defect, not a nit. The worst was the billed payoff of the observer-auth section: it described a
+  misconfigured credential being swallowed at debug level, retried to `SESSION_POLL_TIMEOUT_MS`,
+  and surfacing as a generic `RUNTIME_TIMEOUT`. The truth is the opposite *and better* —
+  `mapGrpcError` maps `PERMISSION_DENIED` to an `AppException`, `pollForOpenSession:414` rethrows on
+  the **first** attempt, and the run's failure reason reads `FORBIDDEN: session access denied`. The
+  doc invented a debugging nightmare that does not exist and would have taught operators to
+  distrust an accurate error message.
+- Also corrected: `is_observer` is **not** configured-token-only (it also comes from the
+  `macp_scopes` claim on a minted JWT — the repo's *preferred* auth mode, so the error pointed at
+  the wrong config surface); `StreamSession` does **not** use `authenticate_session_access` (it
+  authorizes inline in `process_subscribe_frame`, different denial string); and two false claims
+  about what is projected for `policy.denied`.
+- **Tooling trap worth remembering:** this shell's `grep` is a ugrep shim that silently skips
+  gitignored paths — exactly `plans/` and `CLAUDE.md`, the files this phase audits. The verifier's
+  own first sweep returned clean because it scanned nothing, and was redone with `/usr/bin/grep`.
+  Second time this run a "verified by grep" claim checked empty air.
+
+### Plan closeout
+- **Merged:** #61 (P1), #62 (P2), #63 (P3), #64 (P4+P5), #65 (P6), #76 (P7). Six PRs, seven phases.
+- **Reconcile:** 15 `ASSUMPTIONS.md` entries → **12 CONFIRMED, 3 NEEDS-CHANGE, 1 DEFER**; none a
+  one-way door, no migration written by any phase, so every choice stays reversible. Outcomes in
+  `DECISIONS.md`. Reconcile also corrected **two of my own entries**: the
+  `STREAM_RESUME_ENABLED=false` gap-skip is *not* narrow (it is reachable on the normal run path
+  for every run, since `run-executor.service.ts:348` subscribes independent of the flag), and the
+  P3 post-commit duplication is ×(`STREAM_MAX_RETRIES`+1), not one row.
+- **Nine follow-ups filed:** #67-#75.
+- **Open decision left for the human:** `ASSUMPTIONS.md` entry 16 — reconcile proposed a third
+  option better than either side of the original debate (derive `canonical` at read time in
+  `ProjectionService.get()`, keeping the type required and honest for legacy rows). Recorded in
+  `DECISIONS.md`; not implemented.
 
 ## Assumptions / decisions log
 

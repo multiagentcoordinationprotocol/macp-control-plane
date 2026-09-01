@@ -134,6 +134,88 @@ repair or replay a rejected send.
 3. Confirm the runtime echoes envelopes back on the stream (some runtimes only echo certain message types). `signal.emitted` and `message.sent` canonical events require `stream-envelope` entries on the observer stream. See [macp-runtime/docs/API.md#message-transport](../../macp-runtime/docs/API.md#message-transport) for StreamSession semantics and [macp-runtime/docs/sdk-guide.md#streaming](../../macp-runtime/docs/sdk-guide.md#streaming) for the observer lifecycle.
 4. For session discovery, verify `SESSION_DISCOVERY_ENABLED=true` so externally-launched sessions auto-create runs. Concepts: [macp-sdk-python/docs/guides/session-discovery.md](../../macp-sdk-python/docs/guides/session-discovery.md).
 
+## Inline `PolicyDenied` stream errors never produce a `policy.denied` event (known bug)
+
+**Symptom:** A `message.send_failed` canonical event lands with `errorMessage` containing
+`"PolicyDenied"`, but no companion `policy.denied` canonical event is emitted for it.
+Under the observer invariant the control-plane never calls `Send`, so the **ack** path
+below is dead in production — the genuinely live producer of `policy.denied` in this
+deployment is the `PolicyDenied` **messageType** path
+(`event-normalizer.service.ts:434`, `if (messageType === 'PolicyDenied') return
+'policy.denied';`), which fires when the runtime's own `PolicyDenied` message arrives on
+the observer stream as a normal envelope (not an inline error frame). That path works
+correctly; the inline stream-error path described below does not.
+
+**Root cause (confirmed against runtime v0.7.0, not yet fixed):** `event-normalizer.service.ts`
+uses two different code paths for `policy.denied`:
+
+- The **Ack path** (`event-normalizer.service.ts:83`, `rawEvent.ack.error?.code ===
+  'POLICY_DENIED'`) is implemented correctly — the runtime's `make_error_ack`
+  (`macp-runtime/src/server.rs:193-210`) sets `Ack.error.code` from
+  `MacpError::error_code()` (`macp-runtime/crates/macp-core/src/error.rs:55-75`), which
+  returns the literal string `"POLICY_DENIED"` for `MacpError::PolicyDenied`
+  (`error.rs:75`) — but no `kind: 'send-ack'` raw event is ever produced in this
+  deployment: it requires a `Send` response, and under the observer invariant the
+  control-plane never calls `Send` (only specs and `test/helpers/scripted-mock-runtime.provider.ts`
+  construct one). So this branch is correct but dead code in production.
+- The **inline stream-error path** (`event-normalizer.service.ts:140`, `err.code ===
+  'POLICY_DENIED'`) — the non-terminal `MACPError` frame the runtime sends while the
+  `StreamSession` stays open for application-level validation errors like `InvalidPayload`
+  or `PolicyDenied` (normalized to `message.send_failed`) — can never match. The runtime's stream loop constructs that frame's
+  `code` field from `status.message().to_string()`, not `error_code()`
+  (`macp-runtime/src/server.rs:619` and `:711`), and `status_from_error`
+  (`macp-runtime/src/server.rs:767-774`) sets a `PolicyDenied` status's message to
+  `"PolicyDenied"` or `"PolicyDenied: <reasons>"` — never the machine code
+  `"POLICY_DENIED"`. So `err.code` on an inline frame is always the human-readable string,
+  and the `=== 'POLICY_DENIED'` check is unreachable for this path.
+
+**Why this is newly visible:** earlier control-plane versions dropped inline `MACPError`
+stream frames entirely, so this branch was effectively dead code with no observable
+symptom. It became reachable once the decode path for inline frames was fixed (see
+[ARCHITECTURE.md § Stream Resume & Cross-Process Recovery](ARCHITECTURE.md#stream-resume--cross-process-recovery-runtime-v050-t7)),
+making the missing `policy.denied` event a real, live gap rather than a theoretical one.
+
+**Workaround:** treat `message.send_failed` events whose `errorMessage` starts with
+`"PolicyDenied"` as a policy denial in any UI/consumer that only looks for
+`policy.denied` — the structured reasons are still present in `errorMessage` (as
+`"PolicyDenied: reason1; reason2"`). Note that **neither path** projects into a
+policy-evaluation history — `src/projection/projection.service.ts` has no
+`case 'policy.denied'` at all, so an acked denial isn't projected either. The
+policy-evaluation history that does exist (`commitmentEvaluations` on
+`PolicyProjection`, `src/contracts/control-plane.ts:372-377`, surfaced as
+`state.policy`, not as part of `decision.current`) is fed only by
+`policy.commitment.evaluated` (`projection.service.ts:518`) — a distinct event
+type unrelated to policy denials. A UI consumer must key off the
+`message.send_failed`/`policy.denied` canonical events directly; `state.policy`
+will never reflect a denial.
+
+**Fix (not yet done):** either match `err.code` against a prefix (`/^PolicyDenied/`)
+instead of strict equality against `'POLICY_DENIED'`, or have the normalizer fall back to
+checking `errorMessage` when `errorCode` doesn't match a known machine code.
+
+## Compacted-history detection can false-positive on `PolicyDenied` reasons mentioning "compact"
+
+**Symptom:** A run's history has an unexpected `session.stream.gap` event and
+`historyGap: true` in its projection, even though the runtime never actually compacted
+history out from under the resume point.
+
+**Root cause:** `isCompactedHistoryError` (`src/runs/stream-consumer.service.ts:154-158`)
+has no machine-readable signal to key off for the inline-frame case (see the bug above —
+the runtime sets both `code` and `message` to `status.message()`), so it falls back to a
+loose `/compact/i` text match against the inline frame's message. That same inline-frame
+mechanism also carries `PolicyDenied` rejections, whose `message` interpolates
+operator-authored policy reasons verbatim (`"PolicyDenied: {reasons.join("; ")}"`,
+`macp-runtime/src/server.rs:772`). If an operator's policy rule text happens to
+contain the word "compact" (e.g. a reason like "request violates compact-mode
+restriction"), the control-plane misclassifies an ordinary policy denial as a compacted-
+history resume gap: it emits a false `session.stream.gap`, sets `historyGap: true`, and
+degrades the stream to poll-only — none of which is warranted.
+
+**Mitigation:** avoid the word "compact" in policy-rule denial reasons until the detector
+is hardened. There is no config flag to disable text-based compaction detection
+independent of `STREAM_RESUME_ENABLED` (turning that off changes behavior more broadly —
+see [ARCHITECTURE.md § Stream Resume & Cross-Process Recovery](ARCHITECTURE.md#stream-resume--cross-process-recovery-runtime-v050-t7)).
+
 ## SSE Stream Drops
 
 **Symptom:** Live stream disconnects frequently

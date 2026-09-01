@@ -152,7 +152,7 @@ The control-plane has **exactly one** runtime identity with fixed scope `is_obse
 | Mode | Trigger | Control-plane env |
 | --- | --- | --- |
 | JWT mint (preferred) | `MACP_AUTH_SERVICE_URL` set | `MACP_AUTH_SERVICE_URL`, `MACP_AUTH_SERVICE_TIMEOUT_MS`, `MACP_AUTH_TOKEN_TTL_SECONDS`, `MACP_AUTH_TOKEN_SENDER` |
-| Static Bearer | JWT disabled or mint fails | `RUNTIME_BEARER_TOKEN` (must match an entry in the runtime's `MACP_AUTH_TOKENS_JSON` with `can_start_sessions: false`) |
+| Static Bearer | JWT disabled or mint fails | `RUNTIME_BEARER_TOKEN` (must match an entry in the runtime's `MACP_AUTH_TOKENS_JSON` with `can_start_sessions: false` **and `is_observer: true`** — the latter is required for `GetSession` to succeed on sessions the control-plane did not start; see [docs/INTEGRATION.md § Observer authorization contract](docs/INTEGRATION.md#observer-authorization-contract-is_observer-configured-token-or-jwt-scope)) |
 | Dev bearer *(deprecated)* | `RUNTIME_USE_DEV_HEADER=true`, local only | `RUNTIME_DEV_AGENT_ID` — sent as `Authorization: Bearer <id>`; runtime v0.5.0 dropped the `x-macp-agent-id` header, so the fallback now uses a bearer that a dev-mode runtime accepts as the sender |
 
 For the runtime-side token configuration, TLS, and the full production auth story, see:
