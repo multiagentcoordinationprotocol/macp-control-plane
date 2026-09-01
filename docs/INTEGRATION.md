@@ -30,6 +30,31 @@ For the agent-side bootstrap and how `sessionId` flows from `POST /runs` to the 
 - **TypeScript SDK** — [README.md § Agent Framework](../../macp-sdk-typescript/README.md#agent-framework) and [docs/guides/agent-framework.md](../../macp-sdk-typescript/docs/guides/agent-framework.md) (`fromBootstrap()` + strategies)
 - **Migration** — `../../macp-ui-console/plans/direct-agent-auth.md` (end-to-end story of the 2026-04-15 refactor)
 
+### Commitment `supersedes.commitment_hash` must be canonical (runtime v0.7.0 / RFC-MACP-0013 §9)
+
+A ≥0.7.0 runtime hard-rejects any `CommitmentPayload.supersedes.commitment_hash` that
+is not exactly `sha256:` followed by 64 **lowercase** hex characters — uppercase hex,
+an uppercase `SHA256:` prefix, the wrong length, or whitespace padding are all
+rejected. There is **no dual-read/transitional window**: this is checked unconditionally
+on accept, so a pre-0013 placeholder value (`"abc123"`, an uppercase digest, etc.) that
+used to be accepted will now be rejected outright.
+
+Agents building a `supersedes` reference must compute the hash with the runtime's
+`commitment_hash` function (`macp-core::commitment_hash`, RFC-MACP-0013 §3–4) rather
+than inventing a placeholder — the SDKs expose this so callers don't hand-roll it. The
+canonicalization algorithm (projection, RFC 8785/JCS key ordering, domain-separated
+SHA-256) is documented in the module doc comment at
+[`macp-runtime/crates/macp-core/src/commitment_hash.rs`](../../macp-runtime/crates/macp-core/src/commitment_hash.rs)
+if you need to reproduce it outside an SDK; the SDK mirrors are
+[`macp-sdk-python/src/macp_sdk/commitment_hash.py`](../../macp-sdk-python/src/macp_sdk/commitment_hash.py)
+and [`macp-sdk-typescript/src/commitment-hash.ts`](../../macp-sdk-typescript/src/commitment-hash.ts).
+
+The control-plane projects a derived `decision.current.supersedes.canonical: boolean`
+so an insight UI can badge a non-canonical value it observes in replayed pre-0013
+history — this is observational only, the control-plane never rejects or drops it. See
+[TROUBLESHOOTING.md § Run stalls with no `decision.finalized`](TROUBLESHOOTING.md#run-stalls-with-no-decisionfinalized-non-canonical-supersedes-hash)
+for the failure mode this causes when a legacy hash is sent against a ≥0.7.0 runtime.
+
 ## Authenticating to the runtime
 
 Per-gRPC-call credential resolution uses a three-step fallback chain:

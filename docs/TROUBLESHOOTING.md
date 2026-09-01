@@ -42,6 +42,60 @@
 3. Check `STREAM_MAX_RETRIES` (default 5) and `STREAM_IDLE_TIMEOUT_MS` (default 120s)
 4. Manually cancel: `POST /runs/{id}/cancel`
 5. If recovery is enabled (`RUN_RECOVERY_ENABLED=true`), the system auto-recovers orphaned runs on startup
+6. If the run includes a cross-session commitment step, see [§ Run stalls with no `decision.finalized`](#run-stalls-with-no-decisionfinalized-non-canonical-supersedes-hash) below
+
+## Run stalls with no `decision.finalized` (non-canonical supersedes hash)
+
+**Symptom:** No `decision.finalized` canonical event ever lands for the affected commitment
+step — that absence, not any error event, is the tell. The run does **not** hang forever:
+the stream goes quiet, `STREAM_IDLE_TIMEOUT_MS` (default 120s) ends the idle iteration,
+the consumer retries/backs off/resubscribes up to `STREAM_MAX_RETRIES` (default 5), then
+degrades to a `getSession` poll fallback, and once that poll budget is also exhausted the
+run is finalized `failed` with the message `polling exhausted without terminal session
+state` (`src/runs/stream-consumer.service.ts`). Along the way `GET /runs/{id}/events`
+**does** show `session.stream.opened` events with `status: reconnecting` and this terminal
+failure — but that message is a **red herring**: it describes the stream/poll mechanism
+timing out, not the real cause, which is the silently rejected commitment described below.
+(`SESSION_POLL_TIMEOUT_MS` cannot be the culprit here — it only governs the one-time wait
+for the *initiator* to open the session, before `bindSession`/`subscribeSession`, and is
+long past by the time a mid-session commitment is rejected.)
+
+**Cause:** RFC-MACP-0013 §9 (runtime v0.7.0) tightened the §7.3.1 supersedes check: a
+commitment whose `supersedes.commitment_hash` is not canonical — exactly `sha256:` +
+64 **lowercase** hex characters — is **hard-rejected on accept, with no dual-read
+window**. Because the control-plane only sees *accepted* envelopes via its read-only
+`StreamSession`, and the rejection is delivered as an inline `MACPError` frame on the
+**sending agent's own bidi stream** — not on the observer stream, and not as a negative
+ack — the control-plane's view is a **silent absence**: the commitment
+carrying the malformed `supersedes` ref simply never appears. There is no
+`message.send_failed` or other error event to grep for — the symptom is purely "the run
+stopped progressing." Any agent still emitting a pre-0013 placeholder hash (`"abc123"`,
+uppercase hex, an uppercase `SHA256:` prefix, or a whitespace-padded value) against a
+≥0.7.0 runtime hits this, and a supersession chain that crosses the version boundary is
+**permanently severed** — the sender must re-emit with a canonical hash; the runtime will
+not retroactively accept the old one.
+
+**Checks:**
+1. Confirm the stalled run has a commitment step expected to carry `supersedes`
+   (cross-session commitment reference, RFC-MACP-0001 §7.3.1) and that no
+   `decision.finalized` ever landed for it.
+2. Ask the sending agent's own logs for the inline `MACPError` frame it received for the
+   rejected `CommitmentPayload` send — the control-plane never observes this rejection,
+   only the sending agent does.
+3. If a *prior* supersedes ref did make it into the projection (e.g. from before the
+   runtime was upgraded), check `GET /runs/{id}/state` → `decision.current.supersedes`:
+   `canonical: false` confirms a legacy/malformed hash is in play and flags the agent
+   code that needs to move to canonical hashes. Note projections written before this
+   field shipped **omit `canonical` entirely** rather than reporting `false` — it is
+   derived only when a new `decision.finalized` is applied, so rebuild the projection
+   (`POST /runs/{id}/projection/rebuild`) if the key is absent.
+4. Verify the agent computes `commitment_hash` via the runtime's canonical algorithm
+   (RFC-MACP-0013 §3–4) rather than a hand-rolled placeholder — see
+   [INTEGRATION.md § Commitment `supersedes.commitment_hash` must be canonical](INTEGRATION.md#commitment-supersedescommitment_hash-must-be-canonical-runtime-v070--rfc-macp-0013-9).
+
+**Fix:** Update the sending agent to emit a canonical `sha256:` + 64-lowercase-hex value.
+There is no server-side remediation — the control-plane is observer-only and cannot
+repair or replay a rejected send.
 
 ## Auth-service unreachable / JWT mint failure
 
