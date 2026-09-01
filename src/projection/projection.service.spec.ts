@@ -451,7 +451,8 @@ describe('ProjectionService', () => {
 
       expect(result.decision.current!.supersedes).toEqual({
         sessionId: 'prior-session',
-        commitmentHash: 'sha256:abc'
+        commitmentHash: 'sha256:abc',
+        canonical: false
       });
     });
 
@@ -466,6 +467,86 @@ describe('ProjectionService', () => {
       const result = service.applyEvents(base, [event]);
 
       expect(result.decision.current!.supersedes).toBeUndefined();
+    });
+
+    // RFC-MACP-0013 §9: on a ≥0.7.0 runtime, every accepted commitment's
+    // supersedes.commitment_hash is guaranteed canonical (`sha256:` + 64
+    // lowercase hex); replayed pre-0013 history may carry legacy values.
+    // The projection must classify each case exactly like the runtime's
+    // `is_canonical_commitment_hash` (macp-runtime crates/macp-modes/src/mode/util.rs)
+    // — and must still surface non-canonical values, never drop them.
+    describe('supersedes.canonical classification (RFC-MACP-0013 §9)', () => {
+      const VALID_HASH = 'sha256:9f58e9d114d11860d48aa2bcb8cda458b9618b1cc8560595a802b68c4af85d41';
+
+      function finalizeWithHash(commitmentHash: string) {
+        const base = service.empty('run-1');
+        const event = makeEvent({
+          type: 'decision.finalized',
+          subject: { kind: 'decision', id: 'dec-1' },
+          data: {
+            decodedPayload: {
+              action: 'approve',
+              commitmentId: 'commit-2',
+              supersedes: { sessionId: 'prior-session', commitmentHash }
+            }
+          }
+        });
+        return service.applyEvents(base, [event]).decision.current!.supersedes!;
+      }
+
+      it('classifies a well-formed canonical hash as canonical: true', () => {
+        const supersedes = finalizeWithHash(VALID_HASH);
+        expect(supersedes.canonical).toBe(true);
+        expect(supersedes.commitmentHash).toBe(VALID_HASH);
+      });
+
+      it('classifies a legacy placeholder hash as canonical: false, still surfaced', () => {
+        const supersedes = finalizeWithHash('abc123');
+        expect(supersedes.canonical).toBe(false);
+        expect(supersedes.commitmentHash).toBe('abc123');
+      });
+
+      it('classifies uppercase hex as canonical: false', () => {
+        const upper = 'sha256:' + VALID_HASH.slice('sha256:'.length).toUpperCase();
+        const supersedes = finalizeWithHash(upper);
+        expect(supersedes.canonical).toBe(false);
+        expect(supersedes.commitmentHash).toBe(upper);
+      });
+
+      it('classifies an uppercase "SHA256:" prefix as canonical: false', () => {
+        const badPrefix = 'SHA256:' + VALID_HASH.slice('sha256:'.length);
+        const supersedes = finalizeWithHash(badPrefix);
+        expect(supersedes.canonical).toBe(false);
+        expect(supersedes.commitmentHash).toBe(badPrefix);
+      });
+
+      it('classifies a sha256: prefix with the wrong length as canonical: false', () => {
+        const tooShort = VALID_HASH.slice(0, -1);
+        const supersedes = finalizeWithHash(tooShort);
+        expect(supersedes.canonical).toBe(false);
+        expect(supersedes.commitmentHash).toBe(tooShort);
+      });
+
+      it('classifies a whitespace-padded hash as canonical: false', () => {
+        const padded = `${VALID_HASH} `;
+        const supersedes = finalizeWithHash(padded);
+        expect(supersedes.canonical).toBe(false);
+        expect(supersedes.commitmentHash).toBe(padded);
+      });
+
+      it('classifies a leading-whitespace-padded hash as canonical: false', () => {
+        const padded = ` ${VALID_HASH}`;
+        const supersedes = finalizeWithHash(padded);
+        expect(supersedes.canonical).toBe(false);
+        expect(supersedes.commitmentHash).toBe(padded);
+      });
+
+      it('classifies a hash with leading garbage before a valid tail as canonical: false', () => {
+        const prefixed = `x${VALID_HASH}`;
+        const supersedes = finalizeWithHash(prefixed);
+        expect(supersedes.canonical).toBe(false);
+        expect(supersedes.commitmentHash).toBe(prefixed);
+      });
     });
 
     it('decision.finalized infers true from approve-like actions (§1.3)', () => {

@@ -1,6 +1,6 @@
 # Absorb macp-runtime v0.7.0 (and 0.6.x) + macp-proto 0.1.9
 
-Status: **in progress** (P1–P5 DONE; P6–P7 TODO)
+Status: **in progress** (P1–P6 DONE; P7 TODO)
 Owner: control-plane maintainers
 Upstream inputs: `macp-runtime` v0.7.0 (`CHANGELOG.md` `[0.7.0] — 2026-08-31`, PRs #116 / #108, `docs/change-review-phases-a-e.md`), `@multiagentcoordinationprotocol/proto` 0.1.8 → 0.1.9.
 
@@ -445,7 +445,7 @@ Legend: **IMPACT** = change required here; **NO IMPACT** = verified no change ne
 
 ### Phase 6 — RFC-MACP-0013 supersedes alignment
 
-- **Status:** TODO
+- **Status:** DONE
 - **Delivers:** Confirmation that the CP needs no decode change, plus the one behavioral consequence made explicit where a UI consumer can see it.
 - **Depends on:** nothing.
 - **Files:** `src/projection/projection.service.ts`, `src/projection/projection.service.spec.ts`, `src/contracts/control-plane.ts`, `docs/INTEGRATION.md`, `docs/TROUBLESHOOTING.md`.
@@ -459,6 +459,31 @@ Legend: **IMPACT** = change required here; **NO IMPACT** = verified no change ne
   4. Documented: the runtime hard-rejects malformed refs with no dual-read window, so such a commitment never becomes accepted history — the CP sees it (if at all) as `message.send_failed`.
 - **Tests:** unit — canonical/legacy/uppercase/wrong-length classification; existing `projection.service.spec.ts:436-468` green.
 - **Docs:** `docs/INTEGRATION.md` — a note for agent authors that `supersedes.commitment_hash` must be canonical against a ≥0.7.0 runtime; `docs/TROUBLESHOOTING.md` — “run stalls, no decision.finalized” → check for a non-canonical supersedes hash.
+- **Divergence / notes at phase close:**
+  1. **AC4's prediction was wrong, and the docs record the fact instead.** The AC said the CP
+     "sees it (if at all) as `message.send_failed`". It does not see it at all: the inline error is
+     yielded only on the **sender's own** bidi stream (`../macp-runtime/src/server.rs:609-628`,
+     `:700-716`), while the session broadcast carries accepted envelopes only. So the CP's view is a
+     pure silent absence. Verified independently by the phase verifier.
+  2. **The runtime check applies everywhere and has no escape hatch** —
+     `validate_commitment_payload_for_session` is the single gate, called from all seven mode
+     handlers (decision, proposal, task, handoff, quorum, multi_round, passthrough), returning
+     `MacpError::InvalidPayload` immediately with no feature flag or version gate anywhere in the
+     crate. Confirms "no dual-read window" as more than a doc claim.
+  3. **The troubleshooting entry originally named a timeout that cannot fire.** It cited
+     `SESSION_POLL_TIMEOUT_MS`, which is read only inside `pollForOpenSession` — called once,
+     *before* `bindSession` — so it governs waiting for the initiator to open the session and is
+     long past by the time a commitment can be rejected. The real path is `STREAM_IDLE_TIMEOUT_MS`
+     → `STREAM_MAX_RETRIES` → poll fallback → `finalizeRun('failed', 'polling exhausted without
+     terminal session state')`. The run **does** terminalize, and that message is a red herring now
+     named as such. A doc confidently naming the wrong knob is worse than one naming none.
+  4. **Test hole closed:** the canonicality suite pinned the trailing `$` but not the leading `^` —
+     dropping `^` passed 60/60. Leading-whitespace and leading-garbage cases now fail it (2
+     failures), so the anchor is genuinely pinned.
+  5. **`canonical` is declared required, not optional** (`CommitmentSupersedes`). The verifier would
+     have made it optional so the type stays honest about projections persisted before this phase
+     (which deserialize `undefined`). Kept required deliberately: `canonical?: boolean` is worse for
+     new writes, and no consumer reads the field today. Logged in `ASSUMPTIONS.md`.
 
 ### Phase 7 — documentation accuracy sweep (proto bump already landed upstream)
 

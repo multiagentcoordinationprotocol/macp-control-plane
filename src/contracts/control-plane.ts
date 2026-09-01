@@ -284,6 +284,16 @@ export interface DecisionProposalContribution {
 export interface CommitmentSupersedes {
   sessionId: string;
   commitmentHash: string;
+  /**
+   * Derived (RFC-MACP-0013 §9): true when `commitmentHash` matches the
+   * canonical shape a ≥0.7.0 runtime enforces on accept — the literal
+   * prefix `sha256:` followed by exactly 64 lowercase hex characters.
+   * Against such a runtime every *accepted* commitment is canonical by
+   * construction; `false` marks a legacy/malformed value observed in
+   * pre-0013 replayed history. This is observed-only — the control-plane
+   * never rejects or drops a non-canonical hash, it only badges it.
+   */
+  canonical: boolean;
 }
 
 export interface DecisionProjection {

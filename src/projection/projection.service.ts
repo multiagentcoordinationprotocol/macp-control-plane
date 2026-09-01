@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
   CanonicalEvent,
+  CommitmentSupersedes,
   DecisionProposalContribution,
   GraphProjection,
   OutboundMessageSummary,
@@ -709,17 +710,40 @@ function safeOptionalNumber(val: unknown): number | undefined {
 }
 
 /**
+ * Canonical RFC-MACP-0013 §9 commitment hash shape: the literal prefix
+ * `sha256:` followed by exactly 64 lowercase hex characters. Mirrors
+ * `is_canonical_commitment_hash` in macp-runtime's
+ * `crates/macp-modes/src/mode/util.rs` exactly — no trimming, no
+ * case-folding. A ≥0.7.0 runtime hard-rejects (no dual-read window) any
+ * commitment whose `supersedes.commitment_hash` fails this check, so every
+ * *accepted* commitment observed against such a runtime is canonical by
+ * construction; a `false` classification here only ever comes from
+ * pre-0013 replayed history.
+ */
+const CANONICAL_COMMITMENT_HASH_RE = /^sha256:[0-9a-f]{64}$/;
+
+function isCanonicalCommitmentHash(hash: string): boolean {
+  return CANONICAL_COMMITMENT_HASH_RE.test(hash);
+}
+
+/**
  * Normalize a decoded `CommitmentPayload.supersedes` (CommitmentRef) into the
  * projection shape. Tolerates both camelCase (proto-loader) and snake_case forms.
  * Returns undefined when absent or structurally empty (RFC-MACP-0001 §7.3).
+ *
+ * `commitment_hash` is not a new wire field under RFC-MACP-0013 — it is
+ * passed through unchanged. The only addition is the derived `canonical`
+ * flag (see `isCanonicalCommitmentHash`). A non-canonical hash is still
+ * surfaced, never dropped or rejected: the control-plane observes, it does
+ * not adjudicate.
  */
-function extractSupersedes(raw: unknown): { sessionId: string; commitmentHash: string } | undefined {
+function extractSupersedes(raw: unknown): CommitmentSupersedes | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const ref = raw as Record<string, unknown>;
   const sessionId = String(ref.sessionId ?? ref.session_id ?? '');
   const commitmentHash = String(ref.commitmentHash ?? ref.commitment_hash ?? '');
   if (!sessionId && !commitmentHash) return undefined;
-  return { sessionId, commitmentHash };
+  return { sessionId, commitmentHash, canonical: isCanonicalCommitmentHash(commitmentHash) };
 }
 
 function inferContributionAction(messageType: string, payload?: Record<string, unknown>): string {

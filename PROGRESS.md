@@ -14,7 +14,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | P3 ordinal correctness + invariant-6 comments | **DONE** | 1 (PASS + 4 findings closed) | Opus | (head of `absorb-runtime-v0.7.0-p3`) | — |
 | P4 cross-process envelope-ordinal resume | **DONE** | 1 (PASS) + 2 live-driven prod fixes | **Fable** (one-way door) | (head of `absorb-runtime-v0.7.0-p4`) | — |
 | P5 live B2 re-verification | **DONE** | live, 3/3 criteria proven | — | (same branch — ships with P4) | — |
-| P6 RFC-MACP-0013 supersedes alignment | TODO | — | — | — | — |
+| P6 RFC-MACP-0013 supersedes alignment | **DONE** | 2 (GAPS→fixed) | Opus | (head of `absorb-runtime-v0.7.0-p6`) | — |
 | P7 docs accuracy sweep (proto bump landed via #60) | TODO | — | — | — | — |
 
 ## Repo map (gathered during planning — do not re-scan)
@@ -266,6 +266,34 @@ fixed in this PR since it was written here and omitted this PR's own headline fi
 
 **Next:** P6 (RFC-MACP-0013 supersedes) and P7 (docs sweep — now carrying the observer-auth
 findings above, plus the three deferred gate findings).
+
+### P6 — DONE (2026-08-31)
+- **Verdict:** GAPS (1 blocking + 4 non-blocking) → all closed. **Verifier tier:** Opus (additive,
+  reversible, no schema or behavioral change).
+- **What landed:** a derived `supersedes.canonical` badge mirroring the runtime's check exactly
+  (`/^sha256:[0-9a-f]{64}$/` ↔ `util.rs:76-89`, lowercase-hex only, no trim, no case-fold), with the
+  tolerant passthrough preserved — non-canonical refs are still surfaced, never dropped. The CP
+  observes; it does not adjudicate. `PROJECTION_SCHEMA_VERSION` deliberately **not** bumped (it is
+  dual-purpose and `3` is separately hardcoded in `db/schema.ts` and `event.repository.ts`).
+- **The blocking finding is the interesting one.** The troubleshooting entry — the phase's headline
+  deliverable — confidently named `SESSION_POLL_TIMEOUT_MS` as the timeout operators would see. That
+  variable is read only inside `pollForOpenSession`, called **once, before `bindSession`**, so it
+  cannot fire for this symptom at all. The entry also claimed no terminal transition and no
+  error-looking event; in fact the run reaches `failed` with `polling exhausted without terminal
+  session state`, which is a red herring pointing at the stream rather than the rejected commitment.
+  Rewritten around `STREAM_IDLE_TIMEOUT_MS` / `STREAM_MAX_RETRIES` and the real finalization path.
+- **AC4 was also wrong and the docs record the fact instead:** the CP does not see the rejection as
+  `message.send_failed` — it sees nothing, because the inline error goes only to the sender's own
+  stream while the session broadcast carries accepted envelopes only. Third time this plan's
+  premises have been wrong about runtime behavior; every instance was caught by source-level or
+  live checking, none by tests.
+- **Test hole closed:** the suite pinned the trailing `$` but not the leading `^` (dropping `^`
+  passed 60/60). Leading-whitespace and leading-garbage cases now fail it — verified by mutation.
+- **Tests:** 56 suites / **780** unit (from 772); integration 21 suites / 103 green; lint, build,
+  both tsc projects clean; `observer-invariant.spec.ts` 4/4 and unmodified.
+- **Next:** ship P6 alone (both verifiers agree it is independently shippable and P7 lists it as a
+  dependency), then P7 — the docs sweep, now carrying the observer-auth contract findings and the
+  three deferred ship-gate items from P4/P5.
 
 ## Assumptions / decisions log
 

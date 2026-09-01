@@ -317,3 +317,22 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   an unnecessary poll degrade for a policy-denied run; (3) `policy.denied` projection events never
   materialize from inline frames — error visibility only, no data loss.
 - **Status:** UNCONFIRMED
+
+## P6 — `supersedes.canonical` is a required field, not optional
+- **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 6)
+- **Assumed:** Projections persisted before this phase will deserialize with
+  `canonical === undefined` under a type that declares `boolean`, and an old projection's
+  `supersedes` is never rewritten (it is re-derived only when a *new* `decision.finalized` arrives).
+  So a consumer writing `if (!s.canonical) badge()` could badge legacy-but-actually-canonical
+  history as suspect.
+- **Chose:** Keep it required. `canonical?: boolean` would be worse for new writes — every consumer
+  would have to handle a third state that never occurs going forward — and **no consumer reads the
+  field today** (verified by grep across `src/`, `test/`, `docs/`, and `../macp-ui-console/src`).
+  The phase verifier flagged this as a judgment call it would have made differently rather than a
+  defect, and I am taking the opposite side deliberately.
+- **Alternatives:** Make it optional (the verifier's preference); or backfill it on projection load
+  — rejected as disproportionate for a cosmetic badge with no reader.
+- **Blast radius if wrong:** A future UI consumer mis-badges pre-P6 supersedes refs until those runs
+  produce a new `decision.finalized`. No data loss, no behavioral effect; reversible by making the
+  field optional or rebuilding projections.
+- **Status:** UNCONFIRMED
