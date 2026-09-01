@@ -766,6 +766,120 @@ describe('ProjectionService', () => {
   });
 
   // -----------------------------------------------------------------------
+  // get() — supersedes.canonical backfill for legacy rows (RFC-MACP-0013 §9)
+  // -----------------------------------------------------------------------
+
+  describe('get() — supersedes.canonical backfill for legacy rows (RFC-MACP-0013 §9)', () => {
+    const VALID_HASH = 'sha256:9f58e9d114d11860d48aa2bcb8cda458b9618b1cc8560595a802b68c4af85d41';
+
+    function mockRow(decision: Record<string, unknown>) {
+      return {
+        schemaVersion: 3,
+        runSummary: { id: 'run-1' },
+        participants: [],
+        graph: { nodes: [], edges: [] },
+        decision,
+        signals: { signals: [] },
+        timeline: { latestSeq: 0, totalEvents: 0, recent: [] },
+        traceSummary: { spanCount: 0, linkedArtifacts: [] },
+        progress: { entries: [] },
+        policy: { policyVersion: '', commitmentEvaluations: [] }
+      };
+    }
+
+    it('backfills canonical: true for a legacy row whose supersedes has a canonical hash and no canonical key', async () => {
+      mockProjectionRepository.get.mockResolvedValue(
+        mockRow({
+          current: {
+            action: 'approve',
+            finalized: true,
+            supersedes: { sessionId: 'prior-session', commitmentHash: VALID_HASH }
+          }
+        }) as any
+      );
+
+      const result = await service.get('run-1');
+
+      expect(result!.decision.current!.supersedes!.canonical).toBe(true);
+      expect(result!.decision.current!.supersedes!.sessionId).toBe('prior-session');
+      expect(result!.decision.current!.supersedes!.commitmentHash).toBe(VALID_HASH);
+    });
+
+    it('backfills canonical: false for a legacy row whose supersedes has a malformed hash and no canonical key', async () => {
+      mockProjectionRepository.get.mockResolvedValue(
+        mockRow({
+          current: {
+            action: 'approve',
+            finalized: true,
+            supersedes: { sessionId: 'prior-session', commitmentHash: 'legacy-placeholder' }
+          }
+        }) as any
+      );
+
+      const result = await service.get('run-1');
+
+      expect(result!.decision.current!.supersedes!.canonical).toBe(false);
+      expect(result!.decision.current!.supersedes!.sessionId).toBe('prior-session');
+      expect(result!.decision.current!.supersedes!.commitmentHash).toBe('legacy-placeholder');
+    });
+
+    it('leaves an already-classified canonical: false alone (does not "correct" it even though the hash is well-formed)', async () => {
+      mockProjectionRepository.get.mockResolvedValue(
+        mockRow({
+          current: {
+            action: 'approve',
+            finalized: true,
+            supersedes: { sessionId: 'prior-session', commitmentHash: VALID_HASH, canonical: false }
+          }
+        }) as any
+      );
+
+      const result = await service.get('run-1');
+
+      // The hash is canonical-shaped, but a persisted `canonical: false` must
+      // win — get() only fills in a *missing* value, it never recomputes one
+      // the reducer already derived.
+      expect(result!.decision.current!.supersedes!.canonical).toBe(false);
+    });
+
+    it('leaves an already-classified canonical: true alone', async () => {
+      mockProjectionRepository.get.mockResolvedValue(
+        mockRow({
+          current: {
+            action: 'approve',
+            finalized: true,
+            supersedes: { sessionId: 'prior-session', commitmentHash: VALID_HASH, canonical: true }
+          }
+        }) as any
+      );
+
+      const result = await service.get('run-1');
+
+      expect(result!.decision.current!.supersedes!.canonical).toBe(true);
+    });
+
+    it('reads a projection with no supersedes at all without crashing or adding a spurious field', async () => {
+      mockProjectionRepository.get.mockResolvedValue(
+        mockRow({
+          current: { action: 'approve', finalized: true }
+        }) as any
+      );
+
+      const result = await service.get('run-1');
+
+      expect(result!.decision.current!.supersedes).toBeUndefined();
+    });
+
+    it('reads a projection with no decision.current at all without crashing', async () => {
+      mockProjectionRepository.get.mockResolvedValue(mockRow({}) as any);
+
+      const result = await service.get('run-1');
+
+      expect(result!.decision.current).toBeUndefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // applyEvents — artifacts
   // -----------------------------------------------------------------------
 
