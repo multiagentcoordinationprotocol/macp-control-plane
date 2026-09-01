@@ -317,7 +317,7 @@ findings above, plus the three deferred gate findings).
   Second time this run a "verified by grep" claim checked empty air.
 
 ### Plan closeout
-- **Merged:** #61 (P1), #62 (P2), #63 (P3), #64 (P4+P5), #65 (P6), #66 (P7). Six PRs, seven phases.
+- **Merged:** #61 (P1), #62 (P2), #63 (P3), #64 (P4+P5), #65 (P6), #76 (P7). Six PRs, seven phases.
 - **Reconcile:** 15 `ASSUMPTIONS.md` entries → **12 CONFIRMED, 3 NEEDS-CHANGE, 1 DEFER**; none a
   one-way door, no migration written by any phase, so every choice stays reversible. Outcomes in
   `DECISIONS.md`. Reconcile also corrected **two of my own entries**: the
