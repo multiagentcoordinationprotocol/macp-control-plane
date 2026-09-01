@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { DatabaseService } from '../db/database.service';
 import { runtimeSessions } from '../db/schema';
 
@@ -48,11 +48,20 @@ export class RuntimeSessionRepository {
     // `cursor` is the CP-side canonical event seq; `envelopeOrdinal` (optional)
     // is the runtime's 1-based accepted-envelope ordinal used for stream resume
     // (T7). Written together so a single row update advances both markers.
+    //
+    // Both values are monotonic per run by their own semantics, so the write is
+    // a GREATEST floor rather than a blind `.set()`: a floor is a no-op on the
+    // happy path but makes an entire class of clobber bugs (unseeded markers,
+    // future caller mistakes, races between concurrent writers) structurally
+    // impossible. This is a single UPDATE — no read-then-write, so no race
+    // window between reading the current value and writing the new one.
     await this.database.db
       .update(runtimeSessions)
       .set({
-        lastStreamCursor: cursor,
-        ...(envelopeOrdinal !== undefined ? { lastEnvelopeOrdinal: envelopeOrdinal } : {}),
+        lastStreamCursor: sql`GREATEST(COALESCE(${runtimeSessions.lastStreamCursor}, 0), ${cursor})`,
+        ...(envelopeOrdinal !== undefined
+          ? { lastEnvelopeOrdinal: sql`GREATEST(${runtimeSessions.lastEnvelopeOrdinal}, ${envelopeOrdinal})` }
+          : {}),
         updatedAt: new Date().toISOString()
       })
       .where(eq(runtimeSessions.runId, runId));
