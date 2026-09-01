@@ -67,6 +67,145 @@ Per-gRPC-call credential resolution uses a three-step fallback chain:
 
 Mint behaviour: token cached until expiry minus 30s refresh buffer minus 10s clock-skew, concurrent refreshes deduped, mint failures log `auth_mint_failure` and fall through to the static Bearer. For the runtime-side token shape (`MACP_AUTH_TOKENS_JSON`), TLS/mTLS, and the JWT claim expectations, see [macp-runtime/docs/getting-started.md#authentication](../../macp-runtime/docs/getting-started.md#authentication) and [macp-runtime/docs/deployment.md#authentication](../../macp-runtime/docs/deployment.md#authentication).
 
+### Observer authorization contract (is_observer: configured token or JWT scope)
+
+This is the single most important fact for deploying the control-plane against a
+real runtime: **get it wrong and the control-plane cannot observe any session it
+did not itself start** (and it never starts any — it is observer-only).
+
+`GetSession` and `StreamSession`'s subscribe path both enforce the same three-way
+rule, but through two separate, independent code paths — the mechanism and the
+denial message differ:
+
+- **`GetSession`** authorizes via `authenticate_session_access`
+  (`macp-runtime/src/server.rs:261-291`; its only call site is the `get_session`
+  RPC handler, `macp-runtime/src/server.rs:900-906`). A denial returns
+  `PERMISSION_DENIED`, message `"FORBIDDEN: session access denied"`.
+- **`StreamSession`'s subscribe path** authorizes inline in
+  `process_subscribe_frame` (defined at `macp-runtime/src/server.rs:456`; the
+  authorization + policy-engine block is `:480-494`) — it duplicates the same
+  rule rather than calling `authenticate_session_access`. A denial returns a
+  **different** message: `PERMISSION_DENIED`, `"FORBIDDEN: caller is not a
+  declared participant or observer for this session"`. When grepping runtime
+  logs, use the string that matches the RPC you're diagnosing.
+
+Both paths allow the request only if the authenticated identity is **any one**
+of —
+
+1. `identity.is_observer == true`, **or**
+2. the session's `initiator_sender`, **or**
+3. a session participant.
+
+`identity.is_observer` is the *first* disjunct checked on both paths — it is
+always evaluated, never skipped. Both paths also apply a second, independent
+fail-closed gate immediately after this check: the optional E3 ingress policy
+engine (`server.rs:286-289` for `GetSession`, `server.rs:489-492` for the stream
+path), which can additionally restrict a read that already passed the three-way
+rule.
+
+The control-plane, being observer-only (it never calls `Send`, so it is never an
+initiator or participant — see "Adding a Runtime Provider" above), can satisfy
+**only condition 1** on either path. If `is_observer` is `false` on its
+credential, every `GetSession`/`StreamSession` call the control-plane makes for a
+session it did not start is rejected.
+
+**How this actually surfaces — fails fast, and correctly.**
+`RunExecutorService.pollForOpenSession`
+(`src/runs/run-executor.service.ts:391-430`) only swallows-and-retries an error
+that is **not** an `AppException` (`:414`, `if (pollError instanceof
+AppException) throw pollError;`) — the design intent being that a raw `NotFound`
+while the initiator hasn't opened the session yet is expected and gets logged at
+`debug` (`:415-418`). But `RustRuntimeProvider.unary` maps *every* gRPC failure
+through `mapGrpcError` before the poll loop ever sees it
+(`src/runtime/rust-runtime.provider.ts:928`, `throw mapGrpcError(error, method)
+?? error;`), and `mapGrpcError` maps `PERMISSION_DENIED` to
+`AppException(ErrorCode.FORBIDDEN, …, 403)` (`src/runtime/grpc-helpers.ts:147`,
+`GRPC_STATUS_TO_HTTP`), preserving the runtime's `details` string verbatim as the
+exception message. So a mis-scoped credential is **not** retried until
+`SESSION_POLL_TIMEOUT_MS` — it is rethrown on the *first* `GetSession` attempt.
+`handleExecuteError` (`:432`) falls through to `markFailed(runId, error)`
+(`:465`), and the run's failure reason is the runtime's own message (e.g.
+`FORBIDDEN: session access denied`), not a generic `RUNTIME_TIMEOUT`. This is the
+good case: it fails loudly, on the first attempt, and the failure reason names
+the real cause — when triaging, check the run's failure reason for the runtime's
+`FORBIDDEN` string before assuming the initiator agent never showed up.
+
+  > Out of scope here (a pre-existing code issue, not a docs issue): the
+  > `debug`-level comment at `run-executor.service.ts:415` ("`NotFound` ... is
+  > normal") is stale, because `NOT_FOUND` is *also* now mapped to an
+  > `AppException` by `mapGrpcError` and so takes the `throw pollError` branch
+  > above it rather than ever reaching the `debug` log below. Worth filing
+  > separately.
+
+**`is_observer: true` comes from a configured static token entry *or* the
+`macp_scopes` claim on a minted JWT — never from the runtime's dev-auth
+fallback.** `authenticate_metadata` (`security.rs:408-433`) tries, in order:
+
+1. **The auth resolver chain** (`auth_chain`, `security.rs:415-417`) — checked
+   first, before `self.identities` is ever consulted. This is the path a minted
+   JWT takes: the `jwt_bearer` resolver sets
+   `is_observer: scopes.is_observer.unwrap_or(false)` straight from the token's
+   **`macp_scopes` claim**
+   (`macp-runtime/crates/macp-auth/src/auth/resolvers/jwt_bearer.rs:314`) —
+   independent of the static token map below.
+2. **A configured static token map** (`self.identities`, populated from
+   `MACP_AUTH_TOKENS_FILE`/`MACP_AUTH_TOKENS_JSON`) — each entry carries its own
+   `is_observer` boolean (see schema below).
+3. **`dev_authenticate`** (`macp-runtime/crates/macp-auth/src/security.rs:136-148`)
+   — the path taken when the runtime is started with `MACP_ALLOW_INSECURE=1` and
+   neither of the above is configured. Accepts *any* bearer value as an identity
+   but hardcodes `is_observer: false` unconditionally (`security.rs:144`).
+
+Concretely:
+
+- **Local/dev** (`MACP_ALLOW_INSECURE=1`, no token file/JSON, no
+  `MACP_AUTH_SERVICE_URL`): the control-plane's `RUNTIME_USE_DEV_HEADER=true`
+  dev-bearer fallback reaches `dev_authenticate`, where `is_observer` is always
+  `false` — the runtime still checks `is_observer` on every call (condition 1
+  above is always evaluated, on both `GetSession` and the stream path); it just
+  always evaluates `false` for a dev-auth identity. The dev-bearer fallback only
+  *appears* to work when the dev bearer's value happens to equal the session's
+  `initiator_sender` (condition 2), which is coincidental, not a guarantee.
+- **Production**: a `RUNTIME_BEARER_TOKEN` must resolve, via a matching entry in
+  the runtime's configured token map, to `is_observer: true`; a JWT minted via
+  `MACP_AUTH_SERVICE_URL` must carry `macp_scopes.is_observer: true`. A
+  `RUNTIME_BEARER_TOKEN` that matches a configured entry with
+  `can_start_sessions: false` but no `is_observer: true` will authenticate
+  successfully yet fail every `GetSession`/`StreamSession` call for a session it
+  did not start — this fails silently at the auth layer (no config-time error)
+  and, per "How this actually surfaces" above, shows up immediately as the run's
+  failure reason rather than as a delayed timeout.
+
+**Token config schema** (`RawIdentity`, `macp-runtime/crates/macp-auth/src/security.rs:21-33`,
+loaded from `MACP_AUTH_TOKENS_FILE` or `MACP_AUTH_TOKENS_JSON`, either a bare list
+or `{"tokens": [...]}`, per `RawConfig` at `security.rs:35-40`):
+
+```jsonc
+{
+  "tokens": [
+    {
+      "token": "...",                 // the bearer value
+      "sender": "macp-control-plane", // see sender-match note below
+      "allowed_modes": [],            // optional, default: all modes
+      "can_start_sessions": false,    // default: true — set false for an observer
+      "max_open_sessions": null,      // optional
+      "can_manage_mode_registry": false, // default: false
+      "is_observer": true             // default: false — REQUIRED for the control-plane
+    }
+  ]
+}
+```
+
+**Sender-match enforcement (agent tokens, not the control-plane's).** For any RPC
+that carries an envelope with a non-empty `sender` field — `Send` (which agents
+call directly — the control-plane never does) and `StreamSession` envelope
+frames — `apply_authenticated_sender` (`macp-runtime/src/server.rs:223-232`,
+called at `:243` for `Send` and again at `:400` for the stream path) rejects the
+call `UNAUTHENTICATED` if `envelope.sender != identity.sender`. In dev-auth the
+bearer value literally *is* `identity.sender` (`security.rs:138-139`), so they
+match by construction and this never surfaces there; with configured tokens, an
+agent's `sender` field must equal the `sender` on its configured token entry.
+
 ## Consuming SSE Streams
 
 ```bash

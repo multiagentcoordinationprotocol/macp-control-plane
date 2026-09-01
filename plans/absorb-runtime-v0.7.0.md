@@ -1,6 +1,6 @@
 # Absorb macp-runtime v0.7.0 (and 0.6.x) + macp-proto 0.1.9
 
-Status: **in progress** (P1–P6 DONE; P7 TODO)
+Status: **COMPLETE** (P1–P7 DONE; reconciled — see `DECISIONS.md`)
 Owner: control-plane maintainers
 Upstream inputs: `macp-runtime` v0.7.0 (`CHANGELOG.md` `[0.7.0] — 2026-08-31`, PRs #116 / #108, `docs/change-review-phases-a-e.md`), `@multiagentcoordinationprotocol/proto` 0.1.8 → 0.1.9.
 
@@ -487,7 +487,7 @@ Legend: **IMPACT** = change required here; **NO IMPACT** = verified no change ne
 
 ### Phase 7 — documentation accuracy sweep (proto bump already landed upstream)
 
-- **Status:** TODO
+- **Status:** DONE
 - **Delivers:** Removal of several `CLAUDE.md`/README statements that are actively false. **The proto bump this phase originally owned is already done** — PR #60 (`0b5ceab`) landed `^0.1.9` on `main` mid-implementation, so P7 no longer bumps anything; it only records the outcome and fixes the docs.
 - **Depends on:** P2, P6 (so the docs sweep records their outcomes).
 - **Files:** `CLAUDE.md` (untracked — local only), `README.md`, `docs/INTEGRATION.md`, `plans/absorb-runtime-v0.7.0.md` (§7 ledger). **No dependency files** — `package.json`/`package-lock.json` were already updated by PR #60 on `main`.
@@ -502,6 +502,30 @@ Legend: **IMPACT** = change required here; **NO IMPACT** = verified no change ne
 - **Tests:** `npm test`, `npm run build`, `npm run lint`, the CI grep sweeps.
 - **Docs:** `CLAUDE.md`, `README.md`, `docs/INTEGRATION.md`.
 
+- **Divergence at phase close — the sweep grew well past its planned scope, and its first draft
+  was itself wrong.** The plan scoped four false statements in the untracked `CLAUDE.md`. Three
+  further things happened:
+  1. **The plan's own replacement number was stale.** It specified correcting "620 tests, 47
+     suites" to "725 / 55"; the real figure at execution was **780 / 56**. Copying the plan would
+     have substituted one wrong number for another.
+  2. **The phase absorbed the findings of P4-P6**, which are the more valuable half: the observer
+     authorization contract (undocumented anywhere, and fatal to a real deployment — see below),
+     and the three deferred ship-gate limitations.
+  3. **The first draft of the new docs shipped five factually false operator-facing claims**,
+     caught by the phase verifier. The worst was the "how this actually surfaces" paragraph — the
+     billed payoff of the observer-auth section — which described a misconfigured credential being
+     swallowed at debug level and surfacing as a generic `RUNTIME_TIMEOUT`. The truth is the
+     opposite and better: `mapGrpcError` turns `PERMISSION_DENIED` into an `AppException`,
+     `pollForOpenSession:414` rethrows it on the **first** attempt, and the run's failure reason
+     reads `FORBIDDEN: session access denied`. Also corrected: the claim that `is_observer` comes
+     *only* from a configured token (it also comes from the `macp_scopes` claim on a minted JWT —
+     and JWT minting is this repo's preferred auth mode, so that error pointed operators at the
+     wrong config surface entirely), and the claim that `StreamSession` uses
+     `authenticate_session_access` (it authorizes inline in `process_subscribe_frame`, with a
+     different denial string).
+  **The lesson is the same one the whole absorption keeps teaching:** a doc that names a real
+  variable in a fluent sentence reads as correct. Only tracing it to its call site shows it cannot
+  fire. Docs got the same verification standard as code here, and needed it.
 ---
 
 ## 4. Sequencing / dependencies
