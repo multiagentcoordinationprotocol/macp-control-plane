@@ -325,10 +325,13 @@ findings above, plus the three deferred gate findings).
   for every run, since `run-executor.service.ts:348` subscribes independent of the flag), and the
   P3 post-commit duplication is ×(`STREAM_MAX_RETRIES`+1), not one row.
 - **Nine follow-ups filed:** #67-#75.
-- **Open decision left for the human:** `ASSUMPTIONS.md` entry 16 — reconcile proposed a third
+- **Last open decision, now closed:** `ASSUMPTIONS.md` entry 16 — reconcile proposed a third
   option better than either side of the original debate (derive `canonical` at read time in
   `ProjectionService.get()`, keeping the type required and honest for legacy rows). Recorded in
-  `DECISIONS.md`; not implemented.
+  `DECISIONS.md` and **implemented** on branch `absorb-runtime-v0.7.0-canonical-derive` (PR #77):
+  `deriveMissingCanonical()` backfills `canonical` on read for projections persisted before P6.
+  `PROJECTION_SCHEMA_VERSION` untouched; no migration, no rebuild, no tri-state in the exported
+  contract. Opus ship gate: PASS (mutation-verified in both directions).
 
 ## Assumptions / decisions log
 

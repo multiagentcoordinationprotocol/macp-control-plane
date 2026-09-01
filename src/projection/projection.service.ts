@@ -43,7 +43,7 @@ export class ProjectionService {
       run: row.runSummary as unknown as RunSummaryProjection,
       participants: row.participants as unknown as ParticipantProjection[],
       graph: row.graph as unknown as GraphProjection,
-      decision: row.decision as unknown as RunStateProjection['decision'],
+      decision: deriveMissingCanonical(row.decision as unknown as RunStateProjection['decision']),
       signals: row.signals as unknown as RunStateProjection['signals'],
       progress: (row.progress as unknown as ProgressProjection) ?? { entries: [] },
       timeline: row.timeline as unknown as RunStateProjection['timeline'],
@@ -744,6 +744,33 @@ function extractSupersedes(raw: unknown): CommitmentSupersedes | undefined {
   const commitmentHash = String(ref.commitmentHash ?? ref.commitment_hash ?? '');
   if (!sessionId && !commitmentHash) return undefined;
   return { sessionId, commitmentHash, canonical: isCanonicalCommitmentHash(commitmentHash) };
+}
+
+/**
+ * Read-time backfill for projections persisted before RFC-MACP-0013 §9
+ * (Phase 6) shipped `canonical` on `CommitmentSupersedes`. Those rows still
+ * carry `supersedes.commitmentHash` — it was never a new wire field — but
+ * `canonical` is only computed when a *new* `decision.finalized` event is
+ * applied (`extractSupersedes`); an existing projection's `supersedes` is
+ * never rewritten. Since `canonical` is a pure function of `commitmentHash`,
+ * it is cheaper to recompute it here than to rebuild every stale projection,
+ * and doing so keeps the required `canonical: boolean` type honest for every
+ * row `ProjectionService.get()` returns — no optional/tri-state field leaks
+ * to consumers. A `canonical` the reducer already derived is left untouched
+ * (same result, avoids redundant work, keeps the intent explicit).
+ */
+function deriveMissingCanonical(decision: RunStateProjection['decision']): RunStateProjection['decision'] {
+  const supersedes = decision?.current?.supersedes;
+  if (!supersedes || supersedes.canonical !== undefined) {
+    return decision;
+  }
+  return {
+    ...decision,
+    current: {
+      ...decision.current!,
+      supersedes: { ...supersedes, canonical: isCanonicalCommitmentHash(supersedes.commitmentHash) }
+    }
+  };
 }
 
 function inferContributionAction(messageType: string, payload?: Record<string, unknown>): string {

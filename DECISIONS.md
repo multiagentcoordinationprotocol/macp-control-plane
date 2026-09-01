@@ -50,6 +50,8 @@ so `ProjectionService.get()` can recompute it at read time, right where it alrea
 consumers and no rebuild. **Decision: adopt the read-time derive**, keeping the type required.
 The live consumer (`macp-ui-console/.../decision-panel.tsx:172-179`) reads only
 `commitmentHash`/`sessionId` through a hand-written mirror, so there is no compile-time coupling.
+**Status: implemented** in PR #77 (`deriveMissingCanonical()` in `projection.service.ts`), not
+left open — the only entry on this list that produced code rather than an issue.
 
 ## DEFER
 
