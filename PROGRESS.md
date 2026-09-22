@@ -1194,12 +1194,23 @@ confirmed the test code itself is sound. Found 2 real gaps and 1 non-blocking ni
    calls `handoffAcceptScript()` directly (added to the existing `handoff-mode` import),
    removing the custom-fixture drift.
 
-**Re-verification after fixes:** full suite re-run clean — typecheck clean, `npm test`
-815/815 unchanged, `npm run build` clean, `npm run lint` clean, full mock-mode
-`npm run test:integration` **106/106** again (case 3's script swap caused no regression),
-and both mutation tests (line 791, line 792 of `projection.service.ts`) re-run against the
-updated case 3 with identical pass/fail results to round 1, `git diff` confirming zero
-residual change to `projection.service.ts` afterward.
+**Re-verification after fixes (executor's own re-run):** full suite re-run clean —
+typecheck clean, `npm test` 815/815 unchanged, `npm run build` clean, `npm run lint`
+clean, full mock-mode `npm run test:integration` **106/106** again (case 3's script swap
+caused no regression), and both mutation tests (line 791, line 792 of
+`projection.service.ts`) re-run against the updated case 3 with identical pass/fail
+results to round 1, `git diff` confirming zero residual change to `projection.service.ts`
+afterward.
+
+**Verify (round 2) — fresh Opus subagent: PASS.** Given the exact round-1 gap list (not
+reviewing cold). Confirmed all 3 items closed: the §7 ledger entry exists with both
+mutation-run blocks pasted verbatim and the divergence note's false claim removed; this
+checkpoint's premature-PASS line is gone and replaced with the real narrative; case 3 now
+calls `handoffAcceptScript()` directly. Independently re-ran typecheck/815-unit/build/lint
+clean; flagged one residual doc nit — the phase-log table's `Rounds` cell (`PROGRESS.md`
+line ~402) still read `1 (implement PASS)` — fixed in place. `npm run test:integration`
+not independently re-run (port 5433 held by an unrelated repo's container; not stopped).
+Verdict PASS on substance, with that one cell corrected before proceeding.
 
 `plans/absorb-runtime-v0.8.0.md`'s Phase 6 section marked `Status: DONE` with a corrected
 divergence note (one parameterized fixture function used instead of three separate ones;
@@ -1207,7 +1218,34 @@ case 3 reuses `handoffAcceptScript()` directly per the plan's literal instructio
 `ASSUMPTIONS.md` entries — the plan was fully prescriptive for this phase (exact line
 numbers, exact field names, exact three test cases), leaving no genuine ambiguity to log.
 
-**What's next:** re-verify (round 2) with the prior gap list, then commit Phase 6, hand
-off to `/ship` (PR for Phase 6) — no behavior-change callout needed (test-only diff, zero
-`src/` changes) — then continue the `/implement` loop to Phase 7 (`listSessions()` admin
-drift-detection endpoint).
+**Committed:** `23bca58` (test-coverage work) + `b0ca068` (PROGRESS.md commit-hash
+checkpoint), both on `absorb-runtime-v0.8.0-p6`.
+
+### Phase 6 — ship-gate — 2026-09-22
+Fresh Opus ship-gate subagent (distinct from both implement-gate rounds above): **GAPS**,
+1 doc-only item, code/tests fully verified. Independently re-ran typecheck (both
+`test/tsconfig.test.json` and root), `npm test` (815/815), `npm run build`, `npm run lint`,
+full mock-mode integration (106/106, own isolated Postgres on a free port since 5433 was
+held by an unrelated container), and both mutation tests (identical pass/fail shape to the
+pasted ledger evidence, confirmed reverted). Traced the full event path end-to-end through
+real source (`event-normalizer.service.ts` → `projection.service.ts` →
+`proto-registry.service.ts`'s `MESSAGE_TYPE_MAP`, confirming the mode-key/type-name
+distinction the plan warned about is respected) and confirmed `implicit` really is field 4
+of the shipped `HandoffAcceptPayload` proto with `defaults: false` decoding — the reason
+case 3 correctly asserts `toBeUndefined()` rather than `toBe(false)`. Confirmed zero doc
+drift (test-only diff) and zero new/blocking `ASSUMPTIONS.md` entries. **Gap found:** this
+narrative had a round-1 GAPS entry but no round-2 verdict entry, and the closing
+"What's next" line still described re-verify/commit/ship as pending when all three had
+already happened — fixed now, in place (this entry). Three non-blocking nits noted, no
+action needed: (1) the "57 call sites" figure is 57 including the function's own
+declaration (56 call sites), pre-existing plan/checkpoint text, no bearing on verification;
+(2) `findAcceptContribution`'s `any` return type means case 3's negative assertion alone
+wouldn't catch an isolated property-name typo, though cases 1/2 sharing the same accessor
+would catch a shared one; (3) an inert `eslint-disable` comment on a test file mirrors an
+identical pre-existing one in `stream-resume-live.integration.spec.ts` — consistency
+argues for leaving it.
+
+No follow-up commit needed beyond this doc fix — proceeding straight to push.
+
+**What's next:** commit this doc fix, push, open the PR, watch CI, merge — then continue
+the `/implement` loop to Phase 7 (`listSessions()` admin drift-detection endpoint).
