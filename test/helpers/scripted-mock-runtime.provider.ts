@@ -392,6 +392,7 @@ export function makeStreamEnvelope(
   sender: string,
   payload: Record<string, unknown>,
   sessionId?: string,
+  opts?: { messageId?: string; payloadBytes?: Buffer },
 ): RawRuntimeEvent {
   return {
     kind: 'stream-envelope',
@@ -400,11 +401,15 @@ export function makeStreamEnvelope(
       macpVersion: '1.0',
       mode,
       messageType,
-      messageId: randomUUID(),
+      messageId: opts?.messageId ?? randomUUID(),
       sessionId: sessionId ?? randomUUID(),
       sender,
       timestampUnixMs: Date.now(),
-      payload: Buffer.from(JSON.stringify(payload)),
+      // `payloadBytes`, when supplied, is used verbatim instead of JSON-encoding
+      // `payload` — lets a caller send real proto-encoded bytes (e.g. a
+      // HandoffAcceptPayload) through a mock-runtime fixture, which the mock's
+      // default JSON encoding cannot produce.
+      payload: opts?.payloadBytes ?? Buffer.from(JSON.stringify(payload)),
     },
   };
 }
