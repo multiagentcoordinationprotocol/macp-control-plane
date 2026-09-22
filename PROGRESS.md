@@ -1058,3 +1058,33 @@ Committed as `69a23dd`.
 the PR description itself will explain (this is an internal reliability fix with no public
 API surface change) — then continue the `/implement` loop to Phase 6 (handoff
 implicit-accept integration test coverage).
+
+### Phase 5 — ship-gate — 2026-09-22
+Fresh Opus ship-gate subagent (distinct from the implement-gate verifier above): **PASS**,
+zero gaps. Independently re-ran the full suite (lint/typecheck/815 unit tests/build/3
+convention greps, all clean), confirmed the DI wiring is real (not just unit-mocked) by
+tracing both `InstrumentationService` and `RunEventService` to the same `app.module.ts`
+providers array, checked all 14 call sites of `emitControlPlaneEvents`/
+`persistRawAndCanonical` for regressions (none — the HTTP-path caller now correctly
+returns 201 instead of a 500 that lied about an already-durable write), and independently
+mutation-tested both fixes (deleting the `consumeLoop` `.catch()` and removing the metrics
+try/catch each fail their corresponding new test). Confirmed doc drift is genuinely nil —
+`docs/` has no metrics inventory to update and no description of the old post-commit
+re-ingestion behavior to correct — and confirmed `CLAUDE.md`'s new line + bumped test
+counts are present locally. Six non-blocking observations, none requiring action before
+ship: (1) the `publish_snapshot` catch is the one of three independent catches with no
+dedicated test (structurally identical to its two tested siblings); (2) `recordSpanEvents`
+remains the one post-commit step that could still theoretically propagate, already
+documented as intentional and practically unreachable; (3) a comment in the new `.catch()`
+overstates its own effect slightly (the loop has already exited by the time it runs, so
+the marker writes are close to cosmetic) — imprecise wording, zero behavioral impact;
+(4) the plan's own §6 "Out of scope" list still describes the Prometheus counter with the
+original conditional phrasing ("if time allows") even though the Phase 5 section itself
+correctly documents it as shipped in-phase; (5) AC4 has no direct unit test coupling
+ordinal-advance to a post-commit failure, same as noted at implement-gate — not fixable at
+the unit level, transitively proven by AC1 + existing tests; (6) a **pre-existing**,
+unrelated doc inaccuracy in `docs/ARCHITECTURE.md` misattributing which service performs
+`updateStreamCursor` — not introduced by this diff, out of scope for this phase.
+
+Following the same precedent as Phase 4's zero-gap ship-gate: no follow-up commit for
+non-blocking observations, proceeding straight to push.
