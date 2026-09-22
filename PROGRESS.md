@@ -641,3 +641,23 @@ confirm it actually resolves, not just that the import statement is present.
 pushed absorb-runtime-v0.8.0 7fc96304d445baaad47b5d72e9c2c7ef57a4a159
 pushed absorb-runtime-v0.8.0 f8ed39f (checkpoint commit)
 PR #81 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/81
+
+### Phase 1 — CI + merge — 2026-09-22
+All required checks green on PR #81: CodeQL, `check-env-secrets`, `typecheck`, `lint`,
+`test`, `conventions`, `audit`, `build`, `docker`, `integration-test` (11 checks). Notably
+`integration-test`/`docker` passing in CI is itself a live confirmation of this phase's
+own fix — those jobs use `INTEGRATION_RUNTIME=mock` per `ci.yml:132`, so they exercise the
+`needPostgres=false needRuntime=false` no-op path in CI, not the docker-mode path (that
+stays `workflow_dispatch`-only via `integration-tests.yml`, unchanged by this phase).
+`gh pr view` confirmed `MERGEABLE`/`CLEAN`, no branch-protection block.
+
+merged #81: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/81
+(squash-merged to `main` at `1690e7b`, remote + local feature branch deleted)
+
+**Post-merge deploy:** `.github/workflows/deploy.yml` is `workflow_dispatch`-only (manual,
+SSH-based, dormant until `DEPLOY_SSH_*` secrets are configured) — merging to `main` does
+**not** trigger an automatic deploy in this repo. No deploy to watch as a result of this
+merge; nothing "in flight, unwatched" either — there is simply no CI/CD-triggered deploy
+for this repo, by design. Nothing further to verify here.
+
+**Phase 1 fully closed.** Next: Phase 2 (stream pipeline bugs #67/#68/#69).
