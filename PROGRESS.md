@@ -945,8 +945,30 @@ halvings ladder untouched) was already prescribed by the plan itself with clear
 reasoning; the AC4 limitation is a testing-methodology fact, not a judgment call with
 a real wrong alternative to track.
 
-**What's next:** commit Phase 4, hand off to `/ship` (PR #4) — no behavior-change
-callout needed in the PR description this time (receive is a pure raise, send is a
-tightening with nil practical risk since the runtime's own tighter limit binds
-first) — then continue the `/implement` loop to Phase 5 (non-blocking post-commit
+Committed as `586614a`.
+
+### Phase 4 — ship-gate — 2026-09-22
+Fresh Opus ship-gate subagent (distinct from the implement-gate verifier above): **PASS**.
+Independently confirmed both grpc-js technical claims against `node_modules/@grpc/grpc-js`
+source directly (`DEFAULT_MAX_RECEIVE_MESSAGE_LENGTH = 4 MiB`,
+`DEFAULT_MAX_SEND_MESSAGE_LENGTH = -1`), mutation-tested the two new `createClient` tests
+by stripping the third constructor argument in production code (both failed as expected,
+confirming they exercise the real private method, not a stub bypass; tree restored clean),
+re-ran the full gate (lint/typecheck/812 unit tests/build/convention greps, all clean),
+confirmed doc drift fully closed and tracked files consistent (plan `Status: DONE` +
+divergence note, `PROGRESS.md` matching). No gaps — zero follow-up commit needed before
+push, unlike Phases 2 and 3. Three non-blocking observations recorded for later, none
+blocking this phase: (1) `ASSUMPTIONS.md`'s v0.7.0 P2 entry still describes the client as
+having "no channel options," now stale — correctly noted as `/reconcile`'s job, not this
+phase's, per that file's own header; (2) `readNumber` silently falls back to default on a
+non-numeric value rather than erroring, a pre-existing repo-wide pattern this phase didn't
+introduce; (3) AC4's inherent untestability is correctly and prominently recorded rather
+than glossed over.
+
+pushed absorb-runtime-v0.8.0-p4 586614a
+
+**What's next:** open PR #4, watch CI, merge — no behavior-change callout needed in the PR
+description this time (receive is a pure raise, send is a tightening with nil practical
+risk since the runtime's own tighter limit binds first) — then continue the `/implement`
+loop to Phase 5 (non-blocking post-commit
 publish side effects).
