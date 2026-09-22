@@ -398,7 +398,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | P2 stream pipeline: policy.denied inline match, compacted-history regex, gap-detection ordering | DONE | 1 (implement) + 1 GAPS→closed (ship-gate) | Opus (fresh subagent, both gates) | `3188017` (squash; pre-squash branch commits `e0e431e`/`965a2bf` are unreachable once `absorb-runtime-v0.8.0-p2` is pruned) | merged #82 |
 | P3 tighten schema_version pre-check | DONE | 1 (implement PASS) + 1 (ship-gate PASS) | Opus (fresh subagent, both gates) | `2ac9dc6` | merged #83 |
 | P4 explicit gRPC channel options | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `fe6c70d` (squash) | merged #84 |
-| P5 non-blocking post-commit publish side effects | DONE | 1 (implement PASS, 5 non-blocking nits folded in) | Opus (fresh subagent) | `69a23dd` | (none yet — ships via `/ship`) |
+| P5 non-blocking post-commit publish side effects | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `2a6e1d2` (squash) | merged #85 |
 | P6 handoff implicit-accept integration test | TODO | — | — | — | — |
 | P7 listSessions() admin drift-detection endpoint | TODO | — | — | — | — |
 | P8 bump @multiagentcoordinationprotocol/proto to 0.1.10 | DONE (independently, PR #80, pre-dates this plan) | 0 | n/a | 23db607 (#80) | #80 (already merged) |
@@ -1092,5 +1092,9 @@ non-blocking observations, proceeding straight to push.
 pushed absorb-runtime-v0.8.0-p5 c7b6563
 PR #85 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/85
 
-**What's next:** watch CI, merge, then continue the `/implement` loop to Phase 6 (handoff
-implicit-accept integration test coverage).
+All 11 required checks green (CodeQL, analyze, audit, build, check-env-secrets,
+conventions, docker, integration-test, lint, test, typecheck). merged #85 (squash,
+`2a6e1d2`, branch deleted). No deploy triggered — `workflow_dispatch`-only, unchanged.
+
+**Phase 5 fully closed.** Next: Phase 6 (handoff implicit-accept integration test
+coverage).
