@@ -15,12 +15,29 @@ services:
       timeout: 2s
       retries: 10
 
-  # Pinned release image. Started with: docker compose --profile with-runtime up
-  # Runtime v0.5.0 refuses to boot without an explicit MACP_ALLOW_INSECURE=1
+  # Pinned to the v0.8.0 release commit's SHA tag, not a semver tag — none exists.
+  # Started with: docker compose --profile with-runtime up
+  #
+  # Two independent bugs, tracked in multiagentcoordinationprotocol/macp-runtime#184
+  # (plans/cross-repo/macp-runtime-docker-tag-trigger.md has the full writeup):
+  #   1. Upstream: macp-runtime's docker.yml triggers image publishing on tags
+  #      matching `v*`, but release-plz now tags releases `macp-runtime-vX.Y.Z` —
+  #      that glob never matches, so no `:0.8.0`/`:0.8`/`:0.7.x` image has been
+  #      published since the tagging scheme changed.
+  #   2. Local (already fixed here): the previous pin, `:v0.5.0`, was itself dead —
+  #      docker/metadata-action's semver rule strips the leading `v` from the tag
+  #      before publishing, so the real (working) tag has always been `:0.5.0`.
+  # `f97fd15` is the SHA tag for the macp-runtime-v0.8.0 release commit
+  # (f97fd15a9e0…, verified multi-arch linux/amd64,linux/arm64). SHA tags are more
+  # GC-prone than semver tags — if this pull ever fails because GHCR collected it,
+  # re-pin to whatever SHA tag is current for the release, or fall back to `latest`/
+  # `main` temporarily; don't wait on the upstream fix to unblock this harness.
+  #
+  # Runtime v0.5.0+ refuses to boot without an explicit MACP_ALLOW_INSECURE=1
   # (the published image no longer bakes it in). MACP_ALLOW_DEV_SENDER_HEADER was
   # removed upstream — the dev-header auth path no longer exists.
   runtime:
-    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:v0.5.0
+    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:f97fd15
     ports:
       - '50051:50051'
     environment:
@@ -28,9 +45,10 @@ services:
     profiles:
       - with-runtime
     healthcheck:
-      # NOTE: verify the published v0.5.0 image still ships /bin/grpc_health_probe;
-      # if not, switch to a grpcurl/TCP probe.
-      test: ['CMD', '/bin/grpc_health_probe', '-addr=:50051']
+      # The image ships no grpc_health_probe binary (debian:bookworm-slim +
+      # ca-certificates + the runtime binary only) — a plain TCP check is what
+      # actually reflects the server accepting connections on the gRPC port.
+      test: ['CMD-SHELL', 'timeout 2 bash -c "</dev/tcp/127.0.0.1/50051"']
       interval: 5s
       timeout: 3s
       retries: 5
@@ -49,7 +67,9 @@ services:
     profiles:
       - with-runtime-src
     healthcheck:
-      test: ['CMD', '/bin/grpc_health_probe', '-addr=:50051']
+      # Same TCP check as the `runtime` service above — the image ships no
+      # grpc_health_probe binary.
+      test: ['CMD-SHELL', 'timeout 2 bash -c "</dev/tcp/127.0.0.1/50051"']
       interval: 5s
       timeout: 3s
       retries: 5

@@ -369,3 +369,262 @@ Final regression on `main`: 56 suites / 786 unit tests, 21 suites / 103 integrat
 (mock, isolated cluster), observer-invariant 4/4, lint + build + tsc clean.
 The observer invariant was never weakened — `src/runtime/observer-invariant.spec.ts` is
 byte-identical to its pre-plan state across all seven phases.
+
+---
+
+# PROGRESS — absorb-runtime-v0.8.0
+
+Plan: `plans/absorb-runtime-v0.8.0.md`
+Started: 2026-09-22 (via `/drive`)
+PR strategy: one PR per phase (8 PRs), each referencing the issue(s) it closes in its
+commit/PR body. Why: matches this repo's own v0.7.0 absorption precedent (PRs #61-#65,
+#76-#78 — one per phase/unit), phases have no cross-phase `Depends on` edges so each is
+independently reviewable, and bundling 8 unrelated fixes (CI infra, two stream-pipeline
+bugs, a validation tightening, gRPC config, reliability hardening, a new integration test,
+a new admin endpoint, a dependency bump) into one PR would make it unreviewable honestly.
+Each PR still goes through `/ship` in full (tests → verify gate → commit → PR → CI →
+merge) before the next phase starts.
+
+Picks up the "Follow-ups filed rather than folded into a phase: #67-#75" line above —
+this plan closes all nine, plus absorbs runtime v0.7.1→v0.8.0.
+
+## Phase log
+
+_(one checkpoint per phase; `/implement` appends)_
+
+| Phase | Status | Rounds | Verifier | Commit | PR |
+|---|---|---|---|---|---|
+| P1 repoint integration harness (runtime image pin, healthcheck, CI env split, PG timeout) | DONE | 1 | Opus (fresh subagent) | (pending) | (none — per-phase, ships via `/ship`) |
+| P2 stream pipeline: policy.denied inline match, compacted-history regex, gap-detection ordering | TODO | — | — | — | — |
+| P3 tighten schema_version pre-check | TODO | — | — | — | — |
+| P4 explicit gRPC channel options | TODO | — | — | — | — |
+| P5 non-blocking post-commit publish side effects | TODO | — | — | — | — |
+| P6 handoff implicit-accept integration test | TODO | — | — | — | — |
+| P7 listSessions() admin drift-detection endpoint | TODO | — | — | — | — |
+| P8 bump @multiagentcoordinationprotocol/proto to 0.1.10 | DONE (independently, PR #80, pre-dates this plan) | 0 | n/a | 23db607 (#80) | #80 (already merged) |
+
+## Repo map
+
+See `plans/absorb-runtime-v0.8.0.md`'s own repo-map notes inline per phase (Files/Approach
+sections cite `file:line` throughout — gathered by four parallel Opus subagents this
+session, each grounded in direct source reads across both `macp-control-plane` and
+`macp-runtime`). Not duplicated here to avoid drift between two copies; that plan file is
+the source of truth for this feature's repo map.
+
+## Cross-repo
+
+- `plans/cross-repo/macp-runtime-docker-tag-trigger.md` — macp-runtime's `docker.yml` tag
+  trigger (`v*`) doesn't match release-plz's `macp-runtime-vX.Y.Z` tags, so no versioned
+  image has published since the scheme changed. Filed as
+  `multiagentcoordinationprotocol/macp-runtime#184`. Phase 1 works around it locally by
+  pinning the release commit's SHA tag (`f97fd15` for v0.8.0) rather than blocking on the
+  upstream fix.
+
+## Phase checkpoints
+
+### Preflight — 2026-09-22
+No existing `absorb-runtime-v0.8.0` plan to resume; `plans/current/` empty. No `.drive.lock`
+conflict — lock written. `autoCompactEnabled: true`, `autoCompactWindow: 400000` in
+`~/.claude/settings.json` — no manual-compact gate needed. Working tree clean at start.
+
+### Planning — 2026-09-22
+Four parallel Opus subagents (general-purpose, `model: opus`) completed grounded analysis:
+CI/integration infra; event-normalizer/stream-consumer; runtime-controller/provider/
+persistence; handoff-test/listSessions. All findings cite `file:line` in both repos,
+cross-verified. Notable correction to the originating research report: the
+`docker-compose.test.yml` runtime bump is not a one-line tag swap — see Cross-repo above.
+`plans/absorb-runtime-v0.8.0.md` written (8 phases).
+
+### Plan review round 1 — 2026-09-22
+Fresh Opus agent, full read of every cited `file:line` in both repos. **Verdict: REVISE**
+— 5 blocking findings, 5 `🟠`, several `🟡`. Summary (full detail in the plan's own
+"Plan review" section and §9 "Prior decisions consulted"):
+- Phase 1 AC2 named `list-sessions-pagination.integration.spec.ts` as proof the docker
+  harness works — that spec fails **by design** against an empty runtime (already recorded
+  in `plans/absorb-runtime-v0.7.0.md` criterion 5 and `DECISIONS.md:15`). Fixed: AC2 now
+  points at `/runtime/manifest`/`/runtime/health` instead, and Phase 1 explicitly scopes
+  that it does not deliver a fully green docker-mode suite (16/23 specs are ungated for a
+  real, agentless runtime — pre-existing gap, `DECISIONS.md` DEFER #14).
+- Phase 3's premise was wrong: the runtime's *admission-time* schema_version check is only
+  `!= 0` (`registry.rs:301-303`); the `{1,2,3}` enum is *evaluation-time* only
+  (`evaluator.rs:24`). Reclassified from "fail-fast convenience" to "genuine behavior
+  change" — this repo's check becomes the only admission-time guard.
+- Phase 2's proposed `^`-anchored compaction regex would have broken on grpc-js's real
+  `"9 FAILED_PRECONDITION: …"`-prefixed terminal error text, and contradicted
+  `DECISIONS.md` entry 13, which the plan hadn't consulted. Fixed: adopted entry 13's
+  unanchored form verbatim, added a grpc-prefixed test fixture.
+- The cross-repo doc's root-cause claim was wrong: `0.5.0`/`0.5` DO exist on GHCR; the
+  dead `:v0.5.0` pin is a local leading-`v` typo, not solely the upstream bug. Fixed in
+  `plans/cross-repo/macp-runtime-docker-tag-trigger.md` and via a correction comment on
+  the already-filed `macp-runtime#184`; also added the `type=match` metadata-action
+  extractor the suggested fix was missing.
+- Phase 1 AC1 required running `runtime` and `runtime-src` concurrently — impossible
+  (different profiles, same port 50051). Split into two sequential criteria.
+- Plus: Phase 7 cited error handling in `admin.controller.ts` that doesn't exist (fixed —
+  explicit `AppException`/`HttpStatus.SERVICE_UNAVAILABLE` specified); Phase 4's
+  `Number('') === 0` startup-failure trap noted; Phase 5's scope expanded to cover
+  `emitControlPlaneEvents`'s identical post-commit pattern and a genuine unhandled-
+  rejection process-crash path (`consumeLoop` had no `.catch()`); the impact matrix's
+  "closed rule objects already absorbed" claim was unsupported (neither repo enforces it)
+  — moved to §6 Out of scope with the correct reasoning instead of a false absorbed claim;
+  ~10 minor citation-drift corrections applied throughout.
+
+All findings applied directly to `plans/absorb-runtime-v0.8.0.md` (see its inline
+"Correction to an earlier draft of this plan" callouts and new §9) and to the cross-repo
+doc.
+
+### Plan review round 2 (final, 2-round cap) — 2026-09-22
+Different fresh Opus agent, targeted re-verification of every round-1 fix against current
+code in both repos. **Verdict: SOUND.** All five round-1 blocking fixes independently
+re-confirmed correct. Four small nits found and applied (Phase 1 AC2 reworded — the
+runtime manifest has no version field, so liveness is proven via `supportedModes` instead;
+two citation fixes; Phase 5 now names both unprotected `emitControlPlaneEvents` call sites,
+`:281` and `:359`; Phase 7 names `ErrorCode.RUNTIME_UNAVAILABLE`/`CIRCUIT_BREAKER_OPEN`
+explicitly). Cross-repo doc's suggested-fix snippet corrected (was missing the existing
+`branches: [main]` clause) and a follow-up comment posted to `macp-runtime#184`. No
+findings required re-planning. **Plan is SOUND — proceeding to `/implement`.**
+
+### Phase 1 — 2026-09-22
+**Verdict: PASS**, round 1, fresh Opus verifier (default tier — CI/infra phase, no one-way door,
+no auth/schema/contract/prod-access — Fable not warranted per the Autonomy ladder).
+
+Changes: `docker-compose.test.yml` repinned `runtime`/`runtime-src` from `:v0.5.0` to the
+`f97fd15` SHA tag (v0.8.0 release commit — no semver tag exists, see Cross-repo above) and
+replaced the broken `grpc_health_probe` healthcheck with a TCP check on both services;
+`test/setup/global-setup.ts`/`global-teardown.ts` split the single `CI`-gated block into
+independent `needPostgres`/`needRuntime` booleans, starting the `runtime` service by name
+(not the bare profile) when only the runtime is needed, to avoid colliding with CI's own
+Postgres service container on port 5433; added `connectionTimeoutMillis: 5000` to the
+Postgres readiness probe (bounds worst-case failure to ~110s, was unbounded/~25min).
+
+**All 5 acceptance criteria independently verified against live containers / the real code
+path (by both the executor and the verifier, who re-ran several independently rather than
+taking the executor's word):**
+- AC1 — both `--profile with-runtime` and `--profile with-runtime-src` booted and reported
+  `Healthy` via the new TCP check, run and re-run live.
+- AC2 — satisfied in substance, not via a new automated assertion (see the plan's own
+  Phase 1 divergence note): `grpcurl` confirmed `GetManifest` returns exactly 6
+  `supportedModes` including `ext.multi_round.v1` against the pinned container; separately,
+  `INTEGRATION_RUNTIME=docker npm run test:integration:docker` was run against the live
+  container and a real-runtime-gated spec (`policy.integration.spec.ts`) passed, proving the
+  control plane's own gRPC client reaches it end-to-end.
+- AC3 — `CI=true INTEGRATION_RUNTIME=mock` against the real `global-setup.ts`: logged
+  `needPostgres=false needRuntime=false`, invoked no docker command.
+- AC4 — same harness against a blackhole IP: threw after ~109.5s (bound: ~2min, was ~25min).
+- AC5 — `plans/cross-repo/macp-runtime-docker-tag-trigger.md` exists;
+  `multiagentcoordinationprotocol/macp-runtime#184` filed and confirmed open.
+- Gates: `npm run lint`, `npx tsc --noEmit -p test/tsconfig.test.json`, `npm test`
+  (56 suites / 786 tests), `npm run build` all clean.
+
+**Non-blocking findings from the verifier, folded in before commit (cheap, in-scope, closed
+real gaps — reproduced live in both the broken and fixed states):**
+1. `INTEGRATION_RUNTIME` case sensitivity — `runtimeMode === 'docker'` didn't match
+   `Docker`/`DOCKER`, while `test-app.ts`'s case-sensitive "anything but exactly `mock`"
+   check would still boot the real gRPC provider for those values — a real trap (documented
+   precedent for this exact asymmetry already exists in `real-runtime-gate.ts`). Fixed:
+   both `global-setup.ts` and `global-teardown.ts` now lowercase `INTEGRATION_RUNTIME`
+   before comparing.
+2. Container leak on setup failure — Jest does not call `globalTeardown` when `globalSetup`
+   throws; if the Postgres-readiness wait failed *after* a runtime container had already
+   started, that container would never be stopped. Fixed: `globalSetup` now does inline
+   best-effort cleanup of whatever it started if the Postgres wait subsequently throws.
+   Reproduced live: without the fix, a container was left running after a forced failure;
+   with the fix, the same scenario leaves zero containers.
+3. `global-teardown.ts`'s needRuntime-only branch used two `execSync` calls (`stop` then
+   `rm`) — a mid-sequence failure could leave a container stopped-but-not-removed. Fixed:
+   collapsed to one `docker compose rm -sf runtime` call (used in both the normal teardown
+   path and the new setup-failure cleanup path).
+4. Added a comment on the "can't distinguish setup-started vs. already-running" edge case
+   the plan itself flagged as worth documenting.
+
+**Deferred, non-blocking (verifier explicitly rated these low-priority/cosmetic; left for a
+future cycle rather than expanding this phase further):**
+- The needRuntime-only teardown branch doesn't remove the compose network it created
+  (cosmetic on ephemeral CI runners; verified the network survives `rm -sf runtime`).
+- `KEEP_TEST_DB` now also gates runtime-container teardown despite its DB-specific name —
+  a naming quirk, not a behavior bug.
+- No retry/backoff around `docker compose up --wait` failing for the runtime container
+  (mirroring the Postgres retry loop) — accepted because failure is already loud (gRPC
+  errors / hook timeouts in the dependent specs), never a silent false-green.
+- Failed-attempt `pg.Client` instances in the retry loop aren't explicitly `.end()`ed — `pg`
+  destroys the socket on a connect-timeout regardless, so this is cosmetic.
+
+**Also surfaced by the verifier, not a Phase 1 gap:** running the full docker-mode suite
+unseeded shows `policy.integration.spec.ts` — one of the 7 specs this plan's Phase 1 scope
+note calls "appropriately gated" — still failing on a 60s `app.close()` timeout from its
+observer session-poll loop never resolving. Phase 1 never promised a green docker-mode
+suite (see its own Scope note and §6 Out of scope), so this isn't an overclaim, but it's
+worth flagging for whoever eventually works the "gate the 16 mock-only specs" backlog item.
+
+No `ASSUMPTIONS.md` entry — Phase 1's scope was unambiguous throughout; the items above
+were verifier-identified hardening/nits, not implementation choices made under ambiguity.
+
+Files touched: `docker-compose.test.yml`, `test/setup/global-setup.ts`,
+`test/setup/global-teardown.ts`, `plans/absorb-runtime-v0.8.0.md` (Status: DONE + divergence
+note), `plans/cross-repo/macp-runtime-docker-tag-trigger.md` (force-added to git, matching
+this repo's `/plans/`-is-gitignored-except-finalized-absorption-plans convention — see
+`plans/absorb-runtime-v0.5.0.md`/`plans/absorb-runtime-v0.7.0.md` precedent).
+
+**What's next:** commit Phase 1, then Phase 2 (stream pipeline bugs #67/#68/#69).
+
+### Phase 1 — ship-gate round 1 — 2026-09-22
+`/ship`'s §0 Orient & sync rebased this branch onto current `origin/main`
+(`git fetch origin && git rebase origin/main`) before opening the PR — clean, no
+conflicts. This pulled in one unrelated commit already merged to `main`: `23db607`,
+an **automated dependency-bump PR (#80)** that bumped
+`@multiagentcoordinationprotocol/proto` from `^0.1.9` to `^0.1.10` and resolved
+`package-lock.json` to `0.1.10` — merged 2026-09-20, two days before this absorption's
+planning started, entirely independent of it. This is **exactly Phase 8's planned work**,
+already done. Re-ran the full gate after the rebase (lint/typecheck/786 tests/build) —
+all green.
+
+Fresh Opus ship-gate verifier (different subagent from the `/implement`-stage verifier).
+**Verdict: GAPS** — code changes rated correct/complete/"better-verified than most phases
+reviewed"; all findings were tracked-file/doc staleness, one rated fix-before-merge:
+
+1. **[fixed]** The plan and this file both still described Phase 8 as `TODO`/unstarted
+   with `package-lock.json` resolving `0.1.9` — false on this branch's own tree after the
+   rebase. Fixed: Phase 8 marked `DONE — landed independently, outside this plan` in
+   `plans/absorb-runtime-v0.8.0.md` (impact matrix row + full phase section, original
+   Approach/AC preserved inline as historical record), and the phase-log table below.
+2. **[fixed]** Case-insensitivity was only applied where `global-setup.ts` read
+   `INTEGRATION_RUNTIME`, not written back — `test-app.ts`, `runtime-kind.ts`, and five
+   per-spec real-runtime gates all still compare case-sensitively, so
+   `INTEGRATION_RUNTIME=Docker` would start a container correctly but some specs would
+   still (mis)treat the run as mock, going green having exercised nothing live. Fixed:
+   `global-setup.ts` now writes the lowercased value back to
+   `process.env.INTEGRATION_RUNTIME`, following the exact pattern already used for
+   `DATABASE_URL` in the same file — confirmed live (`Docker` in, `docker` out, read back
+   from `process.env` after `globalSetup()` returned).
+3. **[fixed]** `stopCommand`'s 3-branch selection logic was duplicated between
+   `global-setup.ts` (for its own cleanup-on-throw path) and `global-teardown.ts` — two
+   copies that could silently drift. Fixed: `global-teardown.ts` now imports
+   `stopCommand` from `global-setup.ts` instead of re-implementing it.
+4. **[fixed]** §7 Verification ledger was still the unpopulated template text despite
+   Phase 1's own promise to record its local verification runs there. Fixed: populated
+   with all 8 live verification runs (the executor's + the two verifiers' independent
+   re-runs), matching what's recorded here.
+5. **[fixed]** Wording nit — Phase 1's divergence note claimed the live checks were
+   "strictly stronger evidence" than the originally-planned assertion; true right now, but
+   not in the one dimension the original AC2 had (a repeatable in-suite regression guard).
+   Reworded to say so plainly, and noted as a reasonable low-cost follow-up rather than
+   something this phase was obligated to add. Also fixed a typo ("delvier" → "deliver").
+6. **[deferred to merge]** This row (P1 Commit/PR) still needs the real commit SHA and PR
+   number backfilled once the amended commit is made and the PR is opened — noted here so
+   it isn't forgotten, not a code gap.
+
+Ship-gate verifier additionally independently re-verified (fresh docker runs, not just
+re-reading the executor's claims): the CI-only teardown branch (`rm -sf runtime`, no
+`--profile` flag) does correctly resolve and remove a running profiled container under
+compose v2.39; `f97fd15` is anonymously pullable from GHCR (neither CI workflow has a
+registry login step, so this is load-bearing, not incidental); no doc drift against
+`CLAUDE.md` (it documents the 3 `INTEGRATION_RUNTIME` modes and the npm commands, never
+the image pin or healthcheck mechanism, so nothing there is now stale); tracked-file
+consistency confirmed (Phase 1 `DONE`, Phases 2-7 `TODO` in both the plan and this file —
+Phase 8 was the one inconsistency, see item 1).
+
+All fixes re-verified: `npx tsc --noEmit -p test/tsconfig.test.json` clean, `npm run
+lint` clean, `npm test` 56/56 suites, 786/786 tests, `npm run build` clean, and the
+case-insensitivity + cleanup-on-throw behaviors re-confirmed live against real containers
+after the refactor (zero leaked containers, `INTEGRATION_RUNTIME` correctly normalized
+and observable via `process.env` after `globalSetup()` returns).
