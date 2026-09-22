@@ -732,3 +732,55 @@ enough to need `UNCONFIRMED` tracking.
 
 **What's next:** commit Phase 2, then hand off to `/ship` (PR #2 of the 8-phase, one-PR-per-
 phase strategy) before continuing the `/implement` loop to Phase 3.
+
+Committed as `e0e431e` on `absorb-runtime-v0.8.0-p2`.
+
+### Phase 2 — ship-gate round 1 — 2026-09-22
+Fresh Opus ship-gate verifier (distinct from the implement-stage verifier above, same diff
+`main...HEAD`). **Verdict: GAPS (4 items).** Re-confirmed all three core fixes correct on a
+fresh read and independently re-ran `npm test` (793/793) — the gaps were entirely in tracked
+docs/records, not code:
+- **G1 (the real one — operator-facing doc drift):** `docs/TROUBLESHOOTING.md` still had two
+  full sections describing the #67 and #68 bugs as open, with a `**Mitigation:** avoid the
+  word "compact" in policy-rule denial reasons` operator workaround that's now actively wrong
+  advice. `docs/ARCHITECTURE.md`'s "Stream Resume & Cross-Process Recovery" section also
+  described the pre-fix `isCompactedHistoryError`/`/compact/i` behavior and the pre-#69
+  resume-flag-before-gap-check ordering. **Fixed:** removed both obsolete TROUBLESHOOTING
+  sections outright (no inbound links found); rewrote the two stale ARCHITECTURE paragraphs to
+  name the actual `COMPACTED_HISTORY_RE`/`isCompactedHistoryTerminalError`/
+  `isCompactedHistoryInlineError`, the tightened-from-`/compact/i` regex history, the
+  now-correct gap-before-resume-flag ordering, and refreshed the `server.rs` line citations
+  from `745-755`/`608-628` to `748-756`/`611-629` to match what Phase 2's code comments
+  already correctly cite.
+- **G2:** local-only `CLAUDE.md` (gitignored, so invisible to the PR diff) still said 792
+  after the implement-stage follow-up (5) added a 7th test without re-bumping it. Fixed to 793
+  at both mentions.
+- **G3:** `docs/API.md`'s `policy.denied` section enumerated only two producers (`PolicyDenied`
+  messageType envelope; send-ack `POLICY_DENIED`) — the inline stream-error frame this phase
+  fixed is a third, and per the now-removed TROUBLESHOOTING analysis the send-ack path is dead
+  under the observer invariant, so inline is one of only two paths that actually fire in this
+  deployment. Fixed: added the inline case with its `errorCode` prefix-match semantics, its
+  always-empty `messageId`/`subject.id`, and its text-based (not `error.reasons`/binary-metadata)
+  reason extraction.
+- **G4:** the prior checkpoint's "No new `ASSUMPTIONS.md` entries" claim was wrong. The
+  ship-gate verifier surfaced one real judgment call: inline `policy.denied`'s `errorCode`
+  carries the raw `"PolicyDenied: <reasons>"` wire text (unbounded, operator-authored, emitted
+  unredacted into span attributes), where the ack path's `errorCode` is always the fixed
+  constant `"POLICY_DENIED"` — so a consumer matching on that constant exactly will silently
+  miss inline denials. Low severity (`OTEL_ENABLED` defaults false; the same text already flows
+  through `errorMessage` regardless), but it's an accepted trade-off, not a plan-resolved one.
+  Logged as a new `ASSUMPTIONS.md` entry, `Status: UNCONFIRMED`.
+
+Also folded in non-blocking note N4 (cheap): refreshed Phase 5's plan-text citation of the
+Phase 2 gap-detection call site from `:281` to its actual current line `:317`, with an added
+caution to re-verify all citations in that paragraph fresh when Phase 5 starts rather than
+trust any of them. Left N1 (PR-description note re: new `session.stream.gap` output for
+`STREAM_RESUME_ENABLED=false` deployments — will state in the PR body), N2, N3, N5 as noted
+(non-blocking, no tracked-file action needed).
+
+Re-ran after all fixes: `npm test` 793/793 (56/56 suites, unchanged — these were doc/tracked-
+file-only edits, no source changed). Landed as a small follow-up commit on the same branch
+rather than an amend (the Phase 2 commit is unpushed but `/ship`'s guardrails default against
+amending; a short logical sequence is explicitly allowed).
+
+**Ship-gate round 1 closed all 4 gaps. Proceeding to push and open the PR.**
