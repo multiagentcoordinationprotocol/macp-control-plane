@@ -1247,5 +1247,7 @@ argues for leaving it.
 
 No follow-up commit needed beyond this doc fix — proceeding straight to push.
 
-**What's next:** commit this doc fix, push, open the PR, watch CI, merge — then continue
-the `/implement` loop to Phase 7 (`listSessions()` admin drift-detection endpoint).
+pushed absorb-runtime-v0.8.0-p6 417c40f
+
+**What's next:** open the PR, watch CI, merge — then continue the `/implement` loop to
+Phase 7 (`listSessions()` admin drift-detection endpoint).
