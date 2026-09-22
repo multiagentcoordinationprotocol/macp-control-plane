@@ -396,7 +396,7 @@ _(one checkpoint per phase; `/implement` appends)_
 |---|---|---|---|---|---|
 | P1 repoint integration harness (runtime image pin, healthcheck, CI env split, PG timeout) | DONE | 1 | Opus (fresh subagent) | `1690e7b` | merged #81 |
 | P2 stream pipeline: policy.denied inline match, compacted-history regex, gap-detection ordering | DONE | 1 (implement) + 1 GAPS→closed (ship-gate) | Opus (fresh subagent, both gates) | `3188017` (squash; pre-squash branch commits `e0e431e`/`965a2bf` are unreachable once `absorb-runtime-v0.8.0-p2` is pruned) | merged #82 |
-| P3 tighten schema_version pre-check | DONE | 1 (PASS) | Opus (fresh subagent) | (pending) | (none yet — ships via `/ship`) |
+| P3 tighten schema_version pre-check | DONE | 1 (implement PASS) + 1 (ship-gate PASS) | Opus (fresh subagent, both gates) | `2ac9dc6` | merged #83 |
 | P4 explicit gRPC channel options | TODO | — | — | — | — |
 | P5 non-blocking post-commit publish side effects | TODO | — | — | — | — |
 | P6 handoff implicit-accept integration test | TODO | — | — | — | — |
@@ -883,3 +883,16 @@ toast instead of the console's own validation catching it — is out of this rep
 
 pushed absorb-runtime-v0.8.0-p3 4cd4a83
 PR #83 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/83
+
+### Phase 3 — CI + merge — 2026-09-22
+All 11 required checks green on PR #83 (CodeQL, `analyze`, `audit`, `build`,
+`check-env-secrets`, `conventions`, `docker`, `integration-test`, `lint`, `test`,
+`typecheck`; `call / auto-merge` correctly `skipping`). Watched the two live run IDs
+directly in the background, cross-confirmed via `gh pr checks 83`.
+
+merged #83: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/83
+(squash-merged to `main` at `2ac9dc6`, remote branch deleted, local branch/ref pruned)
+
+**Post-merge deploy:** still `workflow_dispatch`-only, unchanged. No deploy triggered.
+
+**Phase 3 fully closed.** Next: Phase 4 (explicit gRPC channel options).
