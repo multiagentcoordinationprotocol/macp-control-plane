@@ -394,8 +394,8 @@ _(one checkpoint per phase; `/implement` appends)_
 
 | Phase | Status | Rounds | Verifier | Commit | PR |
 |---|---|---|---|---|---|
-| P1 repoint integration harness (runtime image pin, healthcheck, CI env split, PG timeout) | DONE | 1 | Opus (fresh subagent) | (pending) | (none — per-phase, ships via `/ship`) |
-| P2 stream pipeline: policy.denied inline match, compacted-history regex, gap-detection ordering | TODO | — | — | — | — |
+| P1 repoint integration harness (runtime image pin, healthcheck, CI env split, PG timeout) | DONE | 1 | Opus (fresh subagent) | `1690e7b` | merged #81 |
+| P2 stream pipeline: policy.denied inline match, compacted-history regex, gap-detection ordering | DONE | 1 (PASS) | Opus (fresh subagent) | (pending) | (none yet — ships via `/ship`) |
 | P3 tighten schema_version pre-check | TODO | — | — | — | — |
 | P4 explicit gRPC channel options | TODO | — | — | — | — |
 | P5 non-blocking post-commit publish side effects | TODO | — | — | — | — |
@@ -661,3 +661,74 @@ merge; nothing "in flight, unwatched" either — there is simply no CI/CD-trigge
 for this repo, by design. Nothing further to verify here.
 
 **Phase 1 fully closed.** Next: Phase 2 (stream pipeline bugs #67/#68/#69).
+
+### Phase 2 — implement + verify — 2026-09-22
+Branch `absorb-runtime-v0.8.0-p2` (off `main` at `6a2e880`, post Phase-1-merge). Implemented
+all three fixes per plan §Phase 2: `event-normalizer.service.ts:149-152` (#67, inline
+`policy.denied` matching against the real `"PolicyDenied"`/`"PolicyDenied: <reasons>"` wire
+string, plus new `parsePolicyDenyReasons` helper); `stream-consumer.service.ts:160`
+(#68, `COMPACTED_HISTORY_RE = /history before ordinal \d+ was compacted/i`, unanchored per
+`DECISIONS.md:37`, split into `isCompactedHistoryTerminalError`/`isCompactedHistoryInlineError`);
+`stream-consumer.service.ts:306-321` (#69, gap-detection now checked and recorded before the
+`streamResumeEnabled` short-circuit, not after).
+
+**Local verification (round 1, pre-verifier):** lint clean; targeted unit run 62/62; full
+`tsc --noEmit -p test/tsconfig.test.json` clean; full `npm test` 792/792 (56/56 suites,
+6 new tests); `npm run build` clean; mock-mode `npm run test:integration` 21/21 runnable
+suites, 103/103 tests (2 docker-only suites correctly skipped), including the updated
+`stream-gap.integration.spec.ts` (2/2) against its corrected fixture (real runtime sentence
+`"session history before ordinal 5 was compacted"` instead of the old placeholder
+`"resume point compacted"`).
+
+**Verify — fresh Opus subagent, round 1: PASS.** Confirmed all three fixes match `file:line`
+exactly as planned; confirmed all 4 acceptance criteria are backed by real tests that
+provably fail against the pre-fix code (traced each manually, not just trusted the pass
+count); independently re-ran the two changed spec files (62/62) and cross-checked every
+`server.rs`/`error.rs` line citation in the new code comments against the actual
+`../macp-runtime` sibling checkout — all exact. Also traced the live runtime's actual
+control flow (`server.rs:748-756`'s `is_stream_terminal_error`) and confirmed a real
+compaction rejection only ever arrives as an *inline* frame today, never a terminal grpc-js
+error — so AC3's terminal-path regression guard covers a defensive/future shape, not (yet)
+a path the live v0.8.0 runtime exercises; correctly noted this as conformant with the plan
+(AC3 was specified verbatim), not a gap. Flagged 6 non-blocking follow-ups, all folded in
+before commit rather than deferred:
+1. A stale `isCompactedHistoryError (/compact/i)` doc-comment reference in
+   `test/integration/stream-resume-live.integration.spec.ts` (drift this phase's rename
+   created, in a file outside the plan's own file list) — corrected to name the actual
+   `COMPACTED_HISTORY_RE`/`isCompactedHistoryInlineError`.
+2. `stream-gap.integration.spec.ts`'s fixture comment overclaimed that it "exercises the
+   tightened, sentence-specific regex — not just the `code === 9` fallback"; since the
+   fixture keeps `code: 9` alongside the real sentence, the `||` short-circuits and the
+   regex branch is never evaluated there in practice (AC3's *unit* test is what actually
+   isolates the regex-only path). Comment softened to say so plainly.
+3. `CLAUDE.md`'s two "786 tests" mentions (`:25`, `:55`) were stale — updated to 792, then
+   793 after the follow-up test below.
+4. The two inline-`PolicyDenied` unit-test fixtures used `messageId: 'msg-1'`, contradicting
+   the plan's own explicit note that this field is always `""` on the inline path
+   (`server.rs:624`). Changed to `messageId: ''` with matching `subject`/`errorCode`
+   assertions, so the fixtures read like the real wire shape rather than an unrealistic
+   placeholder.
+5. `parsePolicyDenyReasons`'s all-empty-after-split fallback branch (input like
+   `"PolicyDenied: ; "` → falls back to `[message]`) was genuinely untested — added one more
+   unit test for it (793/793 total after this fix, up from 792/792).
+6. The pre-existing `emitStreamGap` unguarded-await hazard (an uncaught rejection would crash
+   the process) becomes reachable on one additional path via this phase's #69 reorder —
+   needed no new action: Phase 5's own plan text already explicitly names this exact call
+   site as in scope (see Phase 5 section, "Approach" second paragraph).
+
+Re-ran the full suite after folding in all 6 follow-ups: lint clean, targeted unit run 63/63,
+full `npm test` 793/793 (56/56 suites), `tsc --noEmit` clean, `npm run build` clean, and the
+full mock-mode integration suite again (103/103, `stream-gap.integration.spec.ts` 2/2) — all
+still green with a fresh standalone Postgres container (repo's own `docker-compose.test.yml`
+`postgres-test` port 5433 was occupied by an unrelated pre-existing container on this shared
+dev machine, same workaround as Phase 1: standalone `postgres:16-alpine` on an alternate host
+port, `CI=true` to skip `global-setup.ts`'s own compose invocation).
+
+`plans/absorb-runtime-v0.8.0.md`'s Phase 2 section marked `Status: DONE` with the full
+divergence note above. No new `ASSUMPTIONS.md` entries — every judgment call this phase made
+was already resolved by the plan itself (the unanchored-regex decision, the split call sites,
+the reordering) or by the verifier's non-blocking follow-ups, none of which were ambiguous
+enough to need `UNCONFIRMED` tracking.
+
+**What's next:** commit Phase 2, then hand off to `/ship` (PR #2 of the 8-phase, one-PR-per-
+phase strategy) before continuing the `/implement` loop to Phase 3.

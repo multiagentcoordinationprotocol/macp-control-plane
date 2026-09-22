@@ -515,6 +515,61 @@ describe('StreamConsumerService', () => {
       expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
     });
 
+    it('detects a compacted-history gap from the real grpc-js-prefixed terminal error text alone (regex-only regression guard, issue #68)', async () => {
+      // Deliberately no numeric `code: 9` here — this isolates the regex match
+      // from the `code === 9` branch, proving the unanchored regex genuinely
+      // matches grpc-js's real wrapped ServiceError text ("<code> <CODE_NAME>:
+      // <details>", per DECISIONS.md entry 13). A `^`-anchored regex would NOT
+      // match this prefixed string — this is exactly the case that would have
+      // silently regressed if Phase 2 had kept the `^`-anchored form an
+      // earlier draft of the plan proposed.
+      const gapError = new Error(
+        '9 FAILED_PRECONDITION: session history before ordinal 5 was compacted; resume with after_sequence >= 5 or re-read state via GetSession'
+      );
+      const handle1 = makeHandle([envelope('m1')], gapError);
+      const mockProvider = {
+        subscribeSession: jest.fn(),
+        getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
+      };
+      runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+      const marker = newMarker();
+      await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+      expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
+      expect(marker.historyGap).toBe(true);
+      const gapEmitted = eventService.emitControlPlaneEvents.mock.calls.some((call) =>
+        (call[1] as any[]).some((e) => e.type === 'session.stream.gap')
+      );
+      expect(gapEmitted).toBe(true);
+      expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
+    });
+
+    it('still emits session.stream.gap when STREAM_RESUME_ENABLED is false (gap check now runs before the resume-flag check, issue #69)', async () => {
+      (config as any).streamResumeEnabled = false;
+      const gapError = Object.assign(new Error('session history before ordinal 5 was compacted'), { code: 9 });
+      const handle1 = makeHandle([envelope('m1')], gapError);
+      const mockProvider = {
+        subscribeSession: jest.fn(),
+        getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
+      };
+      runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+      const marker = newMarker();
+      await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+      // Never resubscribe on a gap, same as the resume-enabled case.
+      expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
+      // Previously, `!streamResumeEnabled` broke BEFORE the gap check ever
+      // ran, so this assertion would have failed pre-fix.
+      expect(marker.historyGap).toBe(true);
+      const gapEmitted = eventService.emitControlPlaneEvents.mock.calls.some((call) =>
+        (call[1] as any[]).some((e) => e.type === 'session.stream.gap')
+      );
+      expect(gapEmitted).toBe(true);
+      expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
+    });
+
     it('does not resubscribe when STREAM_RESUME_ENABLED is false (legacy poll-degrade)', async () => {
       (config as any).streamResumeEnabled = false;
       const handle1 = makeHandle([envelope('m1')], new Error('disconnect'));
@@ -557,6 +612,19 @@ describe('StreamConsumerService', () => {
             message: 'payload failed schema validation',
             sessionId: 'session-1',
             messageId: 'm-err-1'
+          }
+        };
+      }
+
+      function inlinePolicyDeniedMentioningCompact(): any {
+        return {
+          kind: 'stream-inline-error',
+          receivedAt: '2026-01-01T00:00:00.000Z',
+          inlineError: {
+            code: 'PolicyDenied: log compaction window exceeded',
+            message: 'PolicyDenied: log compaction window exceeded',
+            sessionId: 'session-1',
+            messageId: 'm-err-2'
           }
         };
       }
@@ -610,6 +678,40 @@ describe('StreamConsumerService', () => {
           expect.objectContaining({
             kind: 'stream-inline-error',
             inlineError: expect.objectContaining({ code: 'INVALID_PAYLOAD' })
+          }),
+          expect.anything()
+        );
+        expect(marker.historyGap).toBeFalsy();
+        const gapEmitted = eventService.emitControlPlaneEvents.mock.calls.some((call) =>
+          (call[1] as any[]).some((e) => e.type === 'session.stream.gap')
+        );
+        expect(gapEmitted).toBe(false);
+        expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
+      });
+
+      it('does NOT treat a PolicyDenied inline error mentioning "compact" as a history gap (over-match guard, issue #68)', async () => {
+        // The old /compact/i regex would have false-matched this and broken
+        // BEFORE the frame reached handleRawEvent — losing both the
+        // message.send_failed and policy.denied events and wrongly degrading
+        // the run to poll-only. The tightened, sentence-specific regex must
+        // let this frame through to the normal handling path instead.
+        (config as any).streamMaxRetries = 0; // break to poll fallback immediately after one pass
+        const handle1 = makeHandle([inlinePolicyDeniedMentioningCompact()]);
+        const mockProvider = {
+          subscribeSession: jest.fn(),
+          getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
+        };
+        runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+        const marker = newMarker();
+        await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+        // Went through the normal handleRawEvent path, not the gap short-circuit.
+        expect(normalizer.normalize).toHaveBeenCalledWith(
+          'run-1',
+          expect.objectContaining({
+            kind: 'stream-inline-error',
+            inlineError: expect.objectContaining({ code: 'PolicyDenied: log compaction window exceeded' })
           }),
           expect.anything()
         );

@@ -82,8 +82,10 @@ import { RuntimeProviderRegistry } from '../../src/runtime/runtime-provider.regi
  *       'stream-inline-error'` `RawRuntimeEvent` instead of vanishing. Part
  *       1 proves this directly, live, against the real provider.
  *   (2) `StreamConsumerService`'s consume loop matches that inline frame's
- *       message/code against `isCompactedHistoryError` (/compact/i), emits
- *       `session.stream.gap`, flags the projection's `historyGap`, and
+ *       message/code against `COMPACTED_HISTORY_RE`
+ *       (`/history before ordinal \d+ was compacted/i`, via
+ *       `isCompactedHistoryInlineError`), emits `session.stream.gap`, flags
+ *       the projection's `historyGap`, and
  *       degrades to poll-only instead of resubscribing from 0 (the CP has no
  *       message-id dedup, so a from-0 resubscribe would re-ingest history).
  *  Part 2 forces this live with a second, dedicated app instance (its own

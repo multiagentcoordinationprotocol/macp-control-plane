@@ -38,8 +38,14 @@ function gapScript(): RuntimeScript {
           rationale: 'Looks good',
         }),
       },
-      // FAILED_PRECONDITION: resume point compacted away.
-      { delayMs: 10, error: { code: 9, message: 'resume point compacted' } },
+      // FAILED_PRECONDITION: resume point compacted away. Uses the runtime's
+      // real sentence (macp-runtime/src/server.rs:516-521) rather than a bare
+      // placeholder string, so this fixture reads like the real wire error —
+      // note the `code === 9` branch still short-circuits ahead of
+      // `COMPACTED_HISTORY_RE` here (both are true for this fixture); the
+      // regex-only path (no numeric code, grpc-js-prefixed message) is
+      // isolated by the unit test in stream-consumer.service.spec.ts instead.
+      { delayMs: 10, error: { code: 9, message: 'session history before ordinal 5 was compacted' } },
     ],
   };
 }

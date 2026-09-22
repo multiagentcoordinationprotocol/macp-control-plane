@@ -652,6 +652,102 @@ describe('EventNormalizerService', () => {
       expect(policyDenied!.data.errorCode).toBe('POLICY_DENIED');
     });
 
+    it('should emit policy.denied from an inline stream error with a PolicyDenied prefix, parsing multiple reasons', () => {
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-inline-error',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        inlineError: {
+          // The runtime never populates messageId on this path
+          // (server.rs:624 is `message_id: String::new()`) — kept empty here
+          // to match the real wire shape, not as a placeholder.
+          code: 'PolicyDenied: reason-a; reason-b',
+          message: 'PolicyDenied: reason-a; reason-b',
+          sessionId: 'session-1',
+          messageId: ''
+        }
+      };
+      const ctx = makeContext();
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      expect(events).toHaveLength(2); // message.send_failed + policy.denied
+      const sendFailed = events.find((e) => e.type === 'message.send_failed');
+      const policyDenied = events.find((e) => e.type === 'policy.denied');
+      expect(sendFailed).toBeDefined();
+      expect(policyDenied).toBeDefined();
+      expect(policyDenied!.subject).toEqual({ kind: 'policy', id: '' });
+      expect(policyDenied!.data.errorCode).toBe('PolicyDenied: reason-a; reason-b');
+      expect(policyDenied!.data.decodedPayload).toEqual({
+        decision: 'deny',
+        reasons: ['reason-a', 'reason-b']
+      });
+    });
+
+    it('should fall back to the whole message as the reason when an inline PolicyDenied error has no ": " delimiter', () => {
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-inline-error',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        inlineError: {
+          code: 'PolicyDenied',
+          message: 'PolicyDenied',
+          sessionId: 'session-1',
+          messageId: ''
+        }
+      };
+      const ctx = makeContext();
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const policyDenied = events.find((e) => e.type === 'policy.denied');
+      expect(policyDenied).toBeDefined();
+      expect(policyDenied!.data.decodedPayload).toEqual({
+        decision: 'deny',
+        reasons: ['PolicyDenied']
+      });
+    });
+
+    it('should fall back to the whole message as the reason when an inline PolicyDenied error has a delimiter but no non-empty reasons after it', () => {
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-inline-error',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        inlineError: {
+          code: 'PolicyDenied: ; ',
+          message: 'PolicyDenied: ; ',
+          sessionId: 'session-1',
+          messageId: ''
+        }
+      };
+      const ctx = makeContext();
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const policyDenied = events.find((e) => e.type === 'policy.denied');
+      expect(policyDenied).toBeDefined();
+      expect(policyDenied!.data.decodedPayload).toEqual({
+        decision: 'deny',
+        reasons: ['PolicyDenied: ; ']
+      });
+    });
+
+    it('should NOT emit policy.denied from an inline stream error unrelated to policy', () => {
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-inline-error',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        inlineError: {
+          code: 'InvalidPayload',
+          message: 'InvalidPayload: missing required field',
+          sessionId: 'session-1',
+          messageId: 'msg-1'
+        }
+      };
+      const ctx = makeContext();
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      expect(events).toHaveLength(1); // only message.send_failed
+      expect(events[0].type).toBe('message.send_failed');
+    });
+
     it('should NOT emit policy.denied from send-ack with non-policy error', () => {
       const raw: RawRuntimeEvent = {
         kind: 'send-ack',
