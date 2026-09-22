@@ -787,3 +787,21 @@ amending; a short logical sequence is explicitly allowed).
 
 pushed absorb-runtime-v0.8.0-p2 965a2bf
 PR #82 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/82
+
+### Phase 2 — CI + merge — 2026-09-22
+All 11 required checks green on PR #82: CodeQL, `analyze`, `audit`, `build`,
+`check-env-secrets`, `conventions`, `docker`, `integration-test`, `lint`, `test`,
+`typecheck` (`call / auto-merge` correctly `skipping`, same as Phase 1). Watched the two
+live run IDs directly (`gh run watch <id> --exit-status`, run in parallel in the
+background) rather than relying solely on `gh pr checks --watch`, per the propagation-lag
+lesson from Phase 1 — both exited 0. Cross-confirmed via `gh pr checks 82` afterward.
+
+merged #82: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/82
+(squash-merged to `main` at `3188017`, remote branch deleted by `gh pr merge`, local
+branch fast-forwarded back to `main` and pruned)
+
+**Post-merge deploy:** `.github/workflows/deploy.yml` is still `workflow_dispatch`-only
+(manual, SSH-based, dormant until `DEPLOY_SSH_*` secrets are configured) — unchanged since
+Phase 1. No deploy triggered by this merge; nothing "in flight, unwatched."
+
+**Phase 2 fully closed.** Next: Phase 3 (tighten the `schema_version` pre-check).
