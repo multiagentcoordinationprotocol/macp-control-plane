@@ -1249,5 +1249,7 @@ No follow-up commit needed beyond this doc fix — proceeding straight to push.
 
 pushed absorb-runtime-v0.8.0-p6 417c40f
 
-**What's next:** open the PR, watch CI, merge — then continue the `/implement` loop to
-Phase 7 (`listSessions()` admin drift-detection endpoint).
+PR #86 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/86
+
+**What's next:** watch CI, merge — then continue the `/implement` loop to Phase 7
+(`listSessions()` admin drift-detection endpoint).
