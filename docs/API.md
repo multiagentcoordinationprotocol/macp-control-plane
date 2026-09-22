@@ -495,6 +495,13 @@ Body:
 }
 ```
 
+`schemaVersion` must be `1`, `2`, or `3` (omit for the default of `1`) — any other value, including
+a value the runtime's own registration-time admission check would still accept, returns
+`400 Bad Request` locally without reaching the runtime. This is deliberately stricter than the
+runtime's admission gate: it matches the runtime's *evaluation-time* authoritative set instead, so
+a bad value fails fast at registration rather than silently denying every commitment under that
+policy later, with no signal at registration time.
+
 Returns: `{ "ok": true }` or `{ "ok": false, "error": "..." }`
 
 ### `GET /runtime/policies`

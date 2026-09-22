@@ -299,6 +299,17 @@ export interface RuntimeProvider {
 
 // ── Policy types (RFC-MACP-0012) ────────────────────────────────────
 
+// The runtime's evaluation-time authoritative set (macp-runtime
+// crates/macp-policy/src/evaluator.rs:24, SUPPORTED_SCHEMA_VERSIONS). The
+// runtime's own admission-time check (registry.rs:301-303) only rejects
+// `schema_version == 0` — an out-of-range value like 99 is accepted at
+// registration and only fails later, silently, at evaluation. This repo's
+// pre-check is deliberately stricter than the runtime's admission gate so a
+// bad value is caught immediately instead of degrading into ongoing silent
+// evaluation-time denials.
+export const POLICY_SCHEMA_VERSIONS = [1, 2, 3] as const;
+export type PolicySchemaVersion = (typeof POLICY_SCHEMA_VERSIONS)[number];
+
 export interface RuntimePolicyDescriptor {
   policyId: string;
   mode: string;

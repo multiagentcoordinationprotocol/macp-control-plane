@@ -395,8 +395,8 @@ _(one checkpoint per phase; `/implement` appends)_
 | Phase | Status | Rounds | Verifier | Commit | PR |
 |---|---|---|---|---|---|
 | P1 repoint integration harness (runtime image pin, healthcheck, CI env split, PG timeout) | DONE | 1 | Opus (fresh subagent) | `1690e7b` | merged #81 |
-| P2 stream pipeline: policy.denied inline match, compacted-history regex, gap-detection ordering | DONE | 1 (PASS) | Opus (fresh subagent) | (pending) | (none yet — ships via `/ship`) |
-| P3 tighten schema_version pre-check | TODO | — | — | — | — |
+| P2 stream pipeline: policy.denied inline match, compacted-history regex, gap-detection ordering | DONE | 1 (implement) + 1 GAPS→closed (ship-gate) | Opus (fresh subagent, both gates) | `e0e431e`+`965a2bf` | merged #82 |
+| P3 tighten schema_version pre-check | DONE | 1 (PASS) | Opus (fresh subagent) | (pending) | (none yet — ships via `/ship`) |
 | P4 explicit gRPC channel options | TODO | — | — | — | — |
 | P5 non-blocking post-commit publish side effects | TODO | — | — | — | — |
 | P6 handoff implicit-accept integration test | TODO | — | — | — | — |
@@ -805,3 +805,59 @@ branch fast-forwarded back to `main` and pruned)
 Phase 1. No deploy triggered by this merge; nothing "in flight, unwatched."
 
 **Phase 2 fully closed.** Next: Phase 3 (tighten the `schema_version` pre-check).
+
+### Phase 3 — implement + verify + ship-gate follow-ups — 2026-09-22
+Branch `absorb-runtime-v0.8.0-p3` (off `main` at `620fb3c`, post Phase-2-merge). Implemented
+per plan §Phase 3: `src/contracts/runtime.ts:310-311` adds `POLICY_SCHEMA_VERSIONS = [1,2,3]
+as const` / `PolicySchemaVersion`, following the `CANONICAL_EVENT_TYPES` pattern, with an
+in-code comment recording why this repo's pre-check is deliberately stricter than the
+runtime's own admission gate (registry.rs only rejects `== 0`; the `{1,2,3}` enum is
+evaluation-time only, in `evaluator.rs`). `runtime.controller.ts:78-79` replaces the old
+`< 1` check with a membership test, message derived from the constant so it auto-tracks a
+future widening. Response/descriptor-side `schemaVersion: number` left unnarrowed exactly
+as the plan required (confirmed load-bearing: `scripted-mock-runtime.provider.ts:318`
+returns `schemaVersion: 0` from a mock `getPolicy` and would fail to compile otherwise).
+
+**Local verification:** lint clean; targeted `runtime.controller.spec.ts` run 23/23 (6
+schemaVersion-specific cases, including one added beyond the plan's list for the
+non-integer `1.5` edge case); full `npx tsc --noEmit -p test/tsconfig.test.json` clean;
+full `npm test` 798/798 (56/56 suites, 5 new tests); `npm run build` clean.
+
+**Verify — fresh Opus subagent: PASS.** Confirmed the implementation matches the plan
+file:line-for-line; confirmed all 3 acceptance criteria backed by tests that assert on
+actual forwarded values (not just "didn't throw" — e.g. AC3 asserts
+`registerPolicy` was called with `descriptor: expect.objectContaining({schemaVersion:
+1})`); independently probed the `.includes()` cast in a scratch TS file and confirmed it's
+compiler-mandated (the readonly-tuple's `includes` signature narrows to `1 | 2 | 3`) and
+runtime-safe (the cast is erased at compile time; `Array.prototype.includes` does a real
+SameValueZero comparison regardless); independently re-ran the full suite (798/798), lint,
+build, typecheck, and the CLAUDE.md convention grep sweeps — all clean. Flagged one
+unflagged-but-correct drift (below) and several non-blocking doc/coverage notes.
+
+**Divergence, folded into the plan's own Phase 3 section (see above) rather than repeated
+here:** the plan's literal "only the request-side inline body type narrows" instruction
+was not followed verbatim — the inline `@Body()` type stayed unnarrowed, with the cast
+applied only at the check site — because narrowing the body type would both assert a
+compile-time lie about unvalidated network JSON and break the plan's own required
+`schemaVersion: 99`/`1.5` test cases from compiling. The verifier confirmed this was the
+correct call, just never explicitly called out; now recorded in the plan's divergence note.
+
+**Follow-up folded in before commit:** `docs/API.md`'s `POST /runtime/policies` section
+documented `"schemaVersion": 1` in its example body with no mention of the allowed set or
+that an out-of-range value is now a `400`, not a silent-later-failure `200` — a real
+behavior change with no matching doc update. Added a paragraph stating the `{1,2,3}`
+constraint and why this repo's check is stricter than the runtime's own admission gate.
+Not folded in (deliberately, low value for a routine phase): a `CANONICAL_EVENT_TYPES`-
+style contract-stability spec asserting `POLICY_SCHEMA_VERSIONS`'s exact contents — the
+plan didn't require one and the constant is a 3-line literal with no duplication risk;
+worth adding only when/if the set actually widens to `{1,2,3,4}`.
+
+`plans/absorb-runtime-v0.8.0.md`'s Phase 3 section marked `Status: DONE` with the full
+divergence note. No new `ASSUMPTIONS.md` entries — the one deviation from literal plan
+wording was a correctness fix to an internally-inconsistent plan instruction, not an
+ambiguous judgment call with a real "wrong" alternative to track.
+
+**What's next:** commit Phase 3, hand off to `/ship` (PR #3 of the one-PR-per-phase
+strategy) — PR description must call out the `200→400` behavior change for
+out-of-range `schemaVersion` values, per the plan's own instruction — then continue the
+`/implement` loop to Phase 4 (explicit gRPC channel options).

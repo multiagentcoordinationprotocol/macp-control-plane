@@ -13,6 +13,7 @@ import {
   RuntimeUnregisterPolicyResultDto
 } from '../dto/runtime-responses.dto';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
+import { POLICY_SCHEMA_VERSIONS, PolicySchemaVersion } from '../contracts/runtime';
 
 @ApiTags('runtime')
 @Controller('runtime')
@@ -74,8 +75,8 @@ export class RuntimeController {
       throw new BadRequestException('policy.default is reserved and cannot be registered');
     }
     const schemaVersion = body.schemaVersion ?? 1;
-    if (schemaVersion < 1) {
-      throw new BadRequestException('schemaVersion must be > 0');
+    if (!POLICY_SCHEMA_VERSIONS.includes(schemaVersion as PolicySchemaVersion)) {
+      throw new BadRequestException(`schemaVersion must be one of ${POLICY_SCHEMA_VERSIONS.join(', ')}`);
     }
     if (!body.rules || typeof body.rules !== 'object' || Array.isArray(body.rules)) {
       throw new BadRequestException('rules must be a JSON object');
