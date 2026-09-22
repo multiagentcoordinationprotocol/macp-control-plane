@@ -313,7 +313,9 @@ prefix, not the whole set.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `RUNTIME_LIST_SESSIONS_PAGE_SIZE` | 200 | Explicit page size sent on each `ListSessions` call. Deliberately below the runtime's max of 1000: the gRPC client has no channel options, so grpc-js's default 4 MB `max_receive_message_length` applies, and a 1000-item page of large sessions can approach that and fail with `RESOURCE_EXHAUSTED`. Must be a positive integer. |
+| `RUNTIME_MAX_RECEIVE_MESSAGE_BYTES` | 16777216 | Explicit `grpc.max_receive_message_length` channel option (was grpc-js's implicit 4 MB default). Must be a positive integer. |
+| `RUNTIME_MAX_SEND_MESSAGE_BYTES` | 4194304 | Explicit `grpc.max_send_message_length` channel option (was grpc-js's implicit unlimited default). Must be a positive integer. |
+| `RUNTIME_LIST_SESSIONS_PAGE_SIZE` | 200 | Explicit page size sent on each `ListSessions` call. Deliberately below the runtime's max of 1000 even with the explicit receive-size channel option above: a 1000-item page of large sessions can still approach that ceiling and fail with `RESOURCE_EXHAUSTED`. Must be a positive integer. |
 | `RUNTIME_LIST_SESSIONS_MAX_PAGES` | 200 | Guard against a server that never clears `next_page_token`. Exhausting it returns `complete: false` with the collected prefix, never a silent truncation. Must be a positive integer. |
 | `RUNTIME_LIST_SESSIONS_TIMEOUT_MS` | 60000 | Bounds the whole drain (not each page). On expiry, returns `complete: false`. Must be a positive integer. |
 

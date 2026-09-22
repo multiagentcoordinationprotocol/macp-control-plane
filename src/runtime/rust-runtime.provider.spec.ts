@@ -549,6 +549,50 @@ describe('RustRuntimeProvider.listSessions — pagination, bounds, and truth-in-
     expect(unary.mock.calls[1][1]).toEqual({ pageToken: '', pageSize: 100 });
   });
 
+  it('Phase 4 (0.8.0) regression guard: MAX_PAGE_SIZE_HALVINGS survives two consecutive RESOURCE_EXHAUSTED responses, not just one — the safety net this phase relies on more heavily is not itself weakened', async () => {
+    // Honest scope note: createClient() (which reads
+    // runtimeMaxReceiveMessageBytes/runtimeMaxSendMessageBytes) is bypassed
+    // by this test harness — provider.client is stubbed directly, so there
+    // is no real gRPC channel to trip an actual byte-size ceiling against.
+    // AC4 ("a response exceeding the new, raised ceiling still degrades
+    // through the ladder") is therefore not directly testable at this
+    // level — no unit test in this file can trip a real byte-size limit,
+    // since that enforcement lives inside grpc-js below the `unary()` seam
+    // every test here stubs. The config overrides below are included for
+    // traceability to AC4's intent, even though listSessions()'s halving
+    // logic never reads them. What this test actually proves: the ladder
+    // still correctly survives TWO consecutive RESOURCE_EXHAUSTED responses
+    // (not just the one case the pre-existing test above covers) before
+    // succeeding — the boundary case between "halves once and works" and
+    // "exhausts the ladder and rethrows" (covered by the tests below).
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream, {
+      runtimeListSessionsPageSize: 200,
+      runtimeMaxReceiveMessageBytes: 16777216,
+      runtimeMaxSendMessageBytes: 4194304
+    });
+
+    const resourceExhausted = Object.assign(new Error('received message larger than max'), {
+      metadata: { grpcCode: grpc.status.RESOURCE_EXHAUSTED }
+    });
+
+    const unary = spyUnary(provider)
+      .mockRejectedValueOnce(resourceExhausted)
+      .mockRejectedValueOnce(resourceExhausted)
+      .mockResolvedValueOnce({ sessions: [{ sessionId: 's1', state: 'SESSION_STATE_OPEN' }], nextPageToken: '' });
+
+    const result = await provider.listSessions();
+
+    expect(result.complete).toBe(true);
+    expect(result.sessions.map((s) => s.sessionId)).toEqual(['s1']);
+    expect(unary).toHaveBeenCalledTimes(3);
+    // 200 -> 100 -> 50, succeeding on the 3rd attempt (still within
+    // MAX_PAGE_SIZE_HALVINGS = 2 retries).
+    expect(unary.mock.calls[0][1]).toEqual({ pageToken: '', pageSize: 200 });
+    expect(unary.mock.calls[1][1]).toEqual({ pageToken: '', pageSize: 100 });
+    expect(unary.mock.calls[2][1]).toEqual({ pageToken: '', pageSize: 50 });
+  });
+
   it('rethrows RESOURCE_EXHAUSTED once the page size is already at the floor of 1', async () => {
     const stream = makeFakeStream();
     const { provider } = makeProvider(() => stream, { runtimeListSessionsPageSize: 1 });
@@ -737,5 +781,77 @@ describe('RustRuntimeProvider.listSessions — RESOURCE_EXHAUSTED ladder vs. the
     // With the default threshold of 5, a 3-attempt ladder must not trip the breaker.
     expect(provider.getCircuitBreakerState()).toBe('CLOSED');
     expect(provider.getCircuitBreakerState()).not.toBe('OPEN');
+  });
+});
+
+describe('RustRuntimeProvider.createClient — explicit gRPC channel options (Phase 4, 0.8.0)', () => {
+  // The `makeProvider()` helper above assigns `provider.client` directly,
+  // bypassing `createClient()` entirely and setting none of
+  // `serviceConstructor`/`runtimeAddress`/`channelCreds` — it can't be reused
+  // here. Stub those three private fields directly instead, then invoke the
+  // private `createClient()` and assert on the constructor call itself.
+  function makeProviderForCreateClient(configOverrides: Record<string, unknown> = {}): {
+    provider: RustRuntimeProvider;
+    serviceConstructor: jest.Mock;
+  } {
+    const config = {
+      runtimeDevAgentId: 'control-plane',
+      runtimeBearerToken: 'obs-token',
+      runtimeUseDevHeader: false,
+      runtimeCircuitBreakerThreshold: 5,
+      runtimeCircuitBreakerResetMs: 30_000,
+      runtimeRequestTimeoutMs: 30_000,
+      runtimeMaxReceiveMessageBytes: 16777216,
+      runtimeMaxSendMessageBytes: 4194304,
+      ...configOverrides
+    } as unknown as AppConfigService;
+
+    const jwtMinter = {
+      isEnabled: () => false,
+      getToken: () => Promise.reject(new Error('jwt disabled in unit test'))
+    } as unknown as RuntimeJwtMinterService;
+    const resolver = new RuntimeCredentialResolverService(config, jwtMinter);
+    const instrumentation = {} as unknown as InstrumentationService;
+    const provider = new RustRuntimeProvider(config, resolver, instrumentation);
+
+    const serviceConstructor = jest.fn().mockImplementation(() => ({}));
+    Object.assign(provider as unknown as Record<string, unknown>, {
+      serviceConstructor,
+      runtimeAddress: '127.0.0.1:50051',
+      channelCreds: grpc.credentials.createInsecure()
+    });
+
+    return { provider, serviceConstructor };
+  }
+
+  it('constructs the gRPC client with a third argument setting grpc.max_receive_message_length and grpc.max_send_message_length from config', () => {
+    const { provider, serviceConstructor } = makeProviderForCreateClient({
+      runtimeMaxReceiveMessageBytes: 16777216,
+      runtimeMaxSendMessageBytes: 4194304
+    });
+
+    (provider as unknown as { createClient: () => unknown }).createClient();
+
+    expect(serviceConstructor).toHaveBeenCalledTimes(1);
+    expect(serviceConstructor.mock.calls[0]).toHaveLength(3);
+    expect(serviceConstructor.mock.calls[0][0]).toBe('127.0.0.1:50051');
+    expect(serviceConstructor.mock.calls[0][2]).toEqual({
+      'grpc.max_receive_message_length': 16777216,
+      'grpc.max_send_message_length': 4194304
+    });
+  });
+
+  it('derives the channel options from whatever the config currently holds, not a hardcoded value', () => {
+    const { provider, serviceConstructor } = makeProviderForCreateClient({
+      runtimeMaxReceiveMessageBytes: 33554432,
+      runtimeMaxSendMessageBytes: 8388608
+    });
+
+    (provider as unknown as { createClient: () => unknown }).createClient();
+
+    expect(serviceConstructor.mock.calls[0][2]).toEqual({
+      'grpc.max_receive_message_length': 33554432,
+      'grpc.max_send_message_length': 8388608
+    });
   });
 });
