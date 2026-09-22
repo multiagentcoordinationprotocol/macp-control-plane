@@ -639,3 +639,5 @@ smoke-ran `global-teardown.ts`'s new cross-module import of `stopCommand` at run
 confirm it actually resolves, not just that the import statement is present.
 
 pushed absorb-runtime-v0.8.0 7fc96304d445baaad47b5d72e9c2c7ef57a4a159
+pushed absorb-runtime-v0.8.0 f8ed39f (checkpoint commit)
+PR #81 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/81
