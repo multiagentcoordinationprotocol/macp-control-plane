@@ -606,6 +606,30 @@ Response:
 
 Notes: history is in-memory and resets on process restart. For persistent observability, scrape Prometheus `circuit_breaker_state` + `macp_circuit_breaker_{success,failures}_total`.
 
+### `GET /admin/runtime/sessions`
+Drift detection (read-only, runtime v0.8.0 absorption): diffs the runtime's live session
+list (`listSessions()`) against this service's locally-tracked active runs
+(`starting`/`binding_session`/`running`/`suspended`). Does not auto-reconcile.
+
+Response:
+```json
+{
+  "complete": true,
+  "runtimeSessionCount": 42,
+  "trackedRunCount": 40,
+  "untrackedSessions": [ { "sessionId": "...", "mode": "...", "state": "..." } ],
+  "missingFromRuntime": [ { "runId": "...", "runtimeSessionId": "..." } ]
+}
+```
+
+Notes: `complete: false` means the underlying `listSessions()` drain was truncated (page
+cap or overall timeout) — `untrackedSessions` is still sound in that case (a session in the
+fetched prefix that isn't tracked really is untracked), but `missingFromRuntime` is not (a
+tracked run's session simply not yet fetched would otherwise look like a false positive), so
+it comes back as `null` rather than a partial, unsound list. A runtime error surfaces as
+`503 SERVICE_UNAVAILABLE` (`RUNTIME_UNAVAILABLE` when unreachable, `CIRCUIT_BREAKER_OPEN`
+when the breaker is open) — never a silently-empty diff.
+
 ---
 
 ## Health (Public, no auth)

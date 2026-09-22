@@ -400,7 +400,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | P4 explicit gRPC channel options | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `fe6c70d` (squash) | merged #84 |
 | P5 non-blocking post-commit publish side effects | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `2a6e1d2` (squash) | merged #85 |
 | P6 handoff implicit-accept integration test | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) + 1 (ship-gate: 1 GAPS→closed) | Opus (fresh subagent, all rounds) | `e8258fc` (squash) | merged #86 |
-| P7 listSessions() admin drift-detection endpoint | TODO | — | — | — | — |
+| P7 listSessions() admin drift-detection endpoint | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) | Opus (fresh subagent, both rounds) | (pending) | (none yet — ships via `/ship`) |
 | P8 bump @multiagentcoordinationprotocol/proto to 0.1.10 | DONE (independently, PR #80, pre-dates this plan) | 0 | n/a | 23db607 (#80) | #80 (already merged) |
 
 ## Repo map
@@ -1265,3 +1265,91 @@ branch deleted).
 
 **Phase 6 fully closed.** Next: Phase 7 (`listSessions()` admin drift-detection
 endpoint).
+
+### Phase 7 — implement + verify — 2026-09-22
+Implemented per plan §Phase 7, on the working tree (branch not yet created — will be cut
+at commit time). Added `GET /admin/runtime/sessions` to `src/controllers/admin.controller.ts`:
+injects `RunRepository` alongside the existing `RustRuntimeProvider`, diffs
+`provider.listSessions()` against `RunRepository.listActiveRuns()` by `runtimeSessionId`,
+and returns `{ complete, runtimeSessionCount, trackedRunCount, untrackedSessions,
+missingFromRuntime }`. Errors: an already-translated `AppException` from `listSessions()`
+(e.g. `RUNTIME_UNAVAILABLE` via `mapGrpcError`) propagates unchanged; a circuit-breaker
+trip (a plain `Error`, not a gRPC status) is translated into
+`AppException(ErrorCode.CIRCUIT_BREAKER_OPEN, …, HttpStatus.SERVICE_UNAVAILABLE)` — no
+`@Public()` decorator, so the endpoint sits behind the same global `AuthGuard` as every
+other admin route. New tests in `src/controllers/admin.controller.spec.ts` covering no
+drift, runtime-only-session drift, reverse-direction drift, exclusion of a
+not-yet-bound run, `complete: false` passthrough, AppException passthrough,
+circuit-breaker-open translation, and an unrecognized-error passthrough. `CLAUDE.md`'s
+Administration list gained the new endpoint plus the previously-undocumented
+`GET /admin/circuit-breaker/history`.
+
+**Verify (round 1) — fresh Opus subagent: GAPS.** Independently reproduced every claimed
+test result (typecheck, 823/823 unit — the +8 baseline before this phase's tests, build,
+lint, all 3 convention greps) and traced the full `RUNTIME_UNAVAILABLE`/`CIRCUIT_BREAKER_OPEN`
+error-translation path through real source end to end, confirming the controller
+genuinely needs no separate `RUNTIME_UNAVAILABLE` branch (it arrives pre-translated via
+`mapGrpcError` inside `RustRuntimeProvider.unary()`) and DI wiring is real (both
+`AdminController`/`RunRepository` in the same `app.module.ts`). Found 1 real bug + 3
+minor + 5 advisory (all non-blocking) items:
+1. **(should-fix)** Under a truncated `listSessions()` drain (`complete: false`), the
+   original code computed `missingFromRuntime` unconditionally against the partial
+   session prefix — every tracked run would falsely show as "missing from runtime" even
+   though the runtime hadn't actually lost track of it; the drain just never reached it.
+   A misleading, fully-populated-but-unsound reverse diff sitting next to `complete:
+   false` rather than an honest "not computed."
+2. **(minor)** Test fixtures used `state: 'SESSION_STATE_RUNNING'`, not a real
+   `SessionState` union member (the live value is `SESSION_STATE_OPEN`) — harmless to
+   behavior (an untyped mock), but sloppy.
+3. **(minor)** A prettier-inconsistent line (an escaped single quote where the repo's
+   `singleQuote: true` config would normally avoid one).
+4. **(advisory, not required)** No `state` filter distinguishing runtime session
+   liveness, and `trackedRunCount` includes runs with no bound session yet — not drift
+   from the plan (which named `listActiveRuns()`'s exact status set explicitly), just an
+   observation about what the numbers do and don't mean.
+5. **(advisory)** `docs/API.md` documents every other admin endpoint but not this new
+   one — the plan's own Docs field named only `CLAUDE.md`, so not required, but a cheap
+   completeness win.
+6. Three more advisory/non-blocking notes on snapshot skew between the two data sources,
+   `listActiveRuns()` being an unbounded `SELECT *`, and `trackedRunCount` vs.
+   `runtimeSessionCount` not being directly comparable — none requiring action.
+7. Flagged that `ASSUMPTIONS.md`'s `P2 — listSessions() returns a result object` entry
+   (tagged to the prior v0.7.0 plan) asserted "no production behavior changes because
+   nothing calls it," which this diff now falsifies.
+
+**Gaps closed:** (1) `missingFromRuntime` now returns `null` (not computed) whenever
+`result.complete` is `false`, with a new test proving the closure (a tracked run under a
+truncated drain must NOT appear in `missingFromRuntime`, which must be `null`, not `[]`);
+`untrackedSessions` stays unconditional since that direction is sound even under
+truncation. (2) Test fixtures fixed to `SESSION_STATE_OPEN`. (3) The prettier deviation
+fixed. (5) `docs/API.md` gained a `### GET /admin/runtime/sessions` section matching the
+sibling `circuit-breaker/history` format, including a note on the truncation behavior.
+(7) `ASSUMPTIONS.md`'s stale entry updated: struck the falsified sentence (kept, not
+deleted, for the record), named the new caller, and moved `UNCONFIRMED` → `CONFIRMED`.
+Item 4's advisory left as-is (not drift from the plan, correctly scoped).
+
+**Re-verification after fixes:** typecheck clean, `npm test` **824/824** (56/56 suites —
+the +1 over round 1's 823 being the new truncation-closure test), `npm run build` clean,
+`npm run lint` clean, `npx prettier --check` clean on both touched files, all 3 convention
+greps empty.
+
+**Verify (round 2) — fresh Opus subagent: PASS.** Given the exact round-1 gap list.
+Confirmed all required items (the truncation fix, the fixture fix, the prettier fix)
+genuinely closed with file:line evidence, confirmed both optional items (`docs/API.md`,
+`ASSUMPTIONS.md`) were actually done and accurate (not overclaiming), confirmed the
+advisory item was correctly left alone rather than silently expanded or shrunk, and
+independently re-ran the full gate (824/824, typecheck/build/lint/prettier/convention
+greps all clean). One FYI, not affecting the verdict: the identical invalid
+`SESSION_STATE_RUNNING` literal pre-exists, untouched, in
+`src/runs/stream-consumer.service.spec.ts:763` — out of this phase's scope, noted for a
+future sweep.
+
+`plans/absorb-runtime-v0.8.0.md`'s Phase 7 section marked `Status: DONE` with a
+divergence note (the truncation-soundness fix, plus the two doc/assumption updates beyond
+what the phase's own Docs field named). No new `ASSUMPTIONS.md` entries from this phase
+itself — the one entry touched belongs to the prior v0.7.0 plan and was corrected, not
+newly logged.
+
+**What's next:** commit Phase 7, hand off to `/ship` (PR for Phase 7) — then confirm
+Phase 8's already-merged status (PR #80, pre-dates this plan) and move to `/implement`'s
+finalization pass (§4) across the whole plan.

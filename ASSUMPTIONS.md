@@ -77,9 +77,17 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
 - **Alternatives:** Defer the signature change until a caller exists — rejected: every later
   phase touching this file widens the blast radius and the rebase surface. This is the
   cheapest moment it will ever be.
-- **Blast radius if wrong:** Two implementations and their specs. No production behavior
-  changes today because nothing calls it.
-- **Status:** UNCONFIRMED
+- **Blast radius if wrong:** Two implementations and their specs. ~~No production behavior
+  changes today because nothing calls it.~~ **Update (v0.8.0 absorption, Phase 7):** this is
+  no longer true — `AdminController.getRuntimeSessionDrift()`
+  (`src/controllers/admin.controller.ts`) is now the first production caller, added by
+  `plans/absorb-runtime-v0.8.0.md`'s Phase 7. It consumes exactly the shape this entry chose
+  (`result.sessions`/`result.complete`), which **validates** the assumption rather than
+  depending on anything left unsettled — the `complete: false` labeling this entry argued for
+  is exactly what lets that endpoint tell a truncated drain apart from a genuine empty diff
+  (see its own handling of `missingFromRuntime` under truncation).
+- **Status:** CONFIRMED (v0.8.0 Phase 7 gave it a real caller that depends on the chosen
+  shape working as designed; no further action needed at the next `/reconcile`).
 
 ## P2 — page size defaults to 200, not the runtime's max of 1000
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 2)

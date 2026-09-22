@@ -329,7 +329,22 @@ Cite **RFC-MACP-0010 §5.1** in the new fixture/test comments, matching `project
 
 ### Phase 7 — `listSessions()` disposition: admin drift-detection endpoint
 
-**Status:** TODO
+**Status:** DONE (2026-09-22)
+
+**Divergence from plan:** Implemented as designed, with one correctness tightening found
+during implement-gate review (round 1: GAPS, round 2: PASS after fixes). Under a truncated
+`listSessions()` drain (`complete: false`), the reverse-direction diff
+(`missingFromRuntime`) is unsound if computed against the partial session prefix — a
+tracked run's session simply not having been fetched yet would otherwise show up as a
+false positive. Fixed by returning `missingFromRuntime: null` (not computed) whenever
+`complete` is `false`, while `untrackedSessions` stays computed unconditionally (that
+direction is sound even under truncation — a session in the fetched prefix that isn't
+tracked really is untracked). Also added the endpoint to `docs/API.md` (not named in this
+phase's own Docs field, which listed only `CLAUDE.md`, but the repo's existing convention
+documents every other admin endpoint there too) and updated a now-stale entry in
+`ASSUMPTIONS.md` (tagged to the prior v0.7.0 plan's Phase 2) that had asserted
+`listSessions()` had zero production callers — this phase gives it its first one, which
+validates rather than unsettles that entry's chosen return shape.
 **Delivers:** A read-only admin endpoint that surfaces drift between the runtime's live session list and this service's locally-tracked active runs — the one genuine gap `listSessions()` being uncalled was hiding, rather than a cosmetic doc-comment fix.
 **Depends on:** none.
 **Files:**
