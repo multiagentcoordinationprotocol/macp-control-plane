@@ -282,7 +282,19 @@ A Prometheus counter for this now-logged (not rethrown) failure mode is a reason
 
 ### Phase 6 — Handoff implicit-accept integration test coverage
 
-**Status:** TODO
+**Status:** DONE (2026-09-22)
+
+**Divergence from plan:** Implemented as designed, one clarification:
+- `handoffImplicitAcceptScript()` was designed as one parameterized function (taking
+  `{ payloadBytes?, payload?, messageId? }`) rather than three separate functions, so all
+  three test cases share one fixture and one code path for building the accept envelope —
+  matches the plan's intent (one new fixture function) without over-specializing it. Case
+  3 (negative control) itself calls the existing `handoffAcceptScript()` directly, per the
+  plan's literal instruction to reuse it, rather than the new parameterized fixture.
+
+Both acceptance criteria met, including AC1's mutation-testing requirement — see §7 below
+for the pasted mutation-run evidence, and `PROGRESS.md`'s Phase 6 checkpoint for the full
+test summary.
 **Delivers:** An integration test proving the runtime's v0.8.0 synthetic `HandoffAccept` (semantics_rev 2, RFC-MACP-0010 §5.1) is correctly badged `implicit: true` in the projection, end-to-end through the real decode path — not just the unit-level mocked-decoder tests that exist today.
 **Depends on:** none (uses the mock runtime, not Phase 1's real-runtime harness).
 **Files:**
@@ -411,6 +423,42 @@ Phases 1–8 are independently shippable and have no cross-phase `Depends on` ed
 - `CI=true INTEGRATION_RUNTIME=mock` against a blackhole IP (`10.255.255.1`, genuine hang not fast-refuse): threw after `109568ms` — matches the predicted `5000×20 + 500×19 ≈ 109.5s` bound, well under the ~2min AC.
 - `CI=true INTEGRATION_RUNTIME=Docker` (case-mismatch probe): logged `needRuntime=true`, started and health-checked the runtime container correctly (confirms the lowercasing fix).
 - Forced-failure-after-container-start probe (`CI=true INTEGRATION_RUNTIME=Docker`, bad `DATABASE_URL`): runtime container started and went `Healthy`, then the Postgres wait threw, triggering the new inline cleanup path (`docker compose … rm -sf runtime`) — post-run `docker compose ps -a` showed zero containers. Re-confirmed independently by the ship-gate verifier (fresh subagent, separate run), who also confirmed the CI-only teardown branch (`rm -sf runtime` with no `--profile` flag) correctly resolves and removes a running profiled container under compose v2.39, and that GHCR's `f97fd15` tag is anonymously pullable (no `docker/login-action` in either CI workflow, so this is load-bearing).
+
+**Phase 6 — mutation-check outputs (2026-09-22):** AC1 requires each branch of
+`isImplicitAccept` (`projection.service.ts:790-793`) to be independently proven
+load-bearing. Ran the new `handoff-implicit-accept.integration.spec.ts` twice more, each
+time with one branch temporarily disabled, confirmed only the corresponding case failed,
+then reverted (confirmed via `git diff` showing zero residual changes to
+`projection.service.ts` both times).
+
+*Run 1 — line 791 (primary decode branch) disabled:*
+```
+FAIL test/integration/handoff-implicit-accept.integration.spec.ts
+  ● Handoff implicit-accept (integration, runtime v0.8.0) › badges implicit: true when the
+    decoded HandoffAcceptPayload.implicit is true (primary branch, projection.service.ts:791)
+    expect(received).toBe(expected)
+    Expected: true
+    Received: undefined
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 2 passed, 3 total
+```
+Only the primary-branch case failed; corroboration and negative-control cases still passed.
+
+*Run 2 — line 792 (corroboration branch) disabled:*
+```
+FAIL test/integration/handoff-implicit-accept.integration.spec.ts
+  ● Handoff implicit-accept (integration, runtime v0.8.0) › badges implicit: true from the
+    implicit-accept: message-id prefix alone when the payload is not a decodable implicit
+    boolean (corroboration branch, projection.service.ts:792)
+    expect(received).toBe(expected)
+    Expected: true
+    Received: undefined
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 2 passed, 3 total
+```
+Only the corroboration-branch case failed; primary and negative-control cases still passed.
+Both mutations confirm the assertions are load-bearing, not accidentally green. (Full
+narrative and local-verification summary: `PROGRESS.md`'s Phase 6 checkpoint.)
 
 ## 8. Open questions
 

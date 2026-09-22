@@ -399,7 +399,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | P3 tighten schema_version pre-check | DONE | 1 (implement PASS) + 1 (ship-gate PASS) | Opus (fresh subagent, both gates) | `2ac9dc6` | merged #83 |
 | P4 explicit gRPC channel options | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `fe6c70d` (squash) | merged #84 |
 | P5 non-blocking post-commit publish side effects | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `2a6e1d2` (squash) | merged #85 |
-| P6 handoff implicit-accept integration test | TODO | — | — | — | — |
+| P6 handoff implicit-accept integration test | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) | Opus (fresh subagent, both rounds) | `23bca58` | (pending — ships via `/ship`) |
 | P7 listSessions() admin drift-detection endpoint | TODO | — | — | — | — |
 | P8 bump @multiagentcoordinationprotocol/proto to 0.1.10 | DONE (independently, PR #80, pre-dates this plan) | 0 | n/a | 23db607 (#80) | #80 (already merged) |
 
@@ -1098,3 +1098,158 @@ conventions, docker, integration-test, lint, test, typecheck). merged #85 (squas
 
 **Phase 5 fully closed.** Next: Phase 6 (handoff implicit-accept integration test
 coverage).
+
+### Phase 6 — implement + verify — 2026-09-22
+Branch `absorb-runtime-v0.8.0-p6` (off `main` at `eff8b61`, post-Phase-5-merge). This
+phase adds test coverage only — zero `src/` changes. Implemented per plan §Phase 6:
+
+- `test/helpers/scripted-mock-runtime.provider.ts`'s `makeStreamEnvelope` gained an
+  optional 6th parameter `opts?: { messageId?: string; payloadBytes?: Buffer }` —
+  `payloadBytes`, when supplied, is used verbatim instead of JSON-encoding `payload`,
+  letting a fixture send real proto-encoded bytes through the mock runtime. Confirmed
+  backward-compatible with all 57 existing positional (≤5-arg) call sites — full
+  integration suite green (below).
+- `test/fixtures/handoff-mode.ts` gained `handoffImplicitAcceptScript(accept: {
+  payloadBytes?, payload?, messageId? })` — one parameterized fixture (not three
+  separate functions) covering all three verification cases via the same
+  `HandoffOffer` → `HandoffAccept` script shape.
+- New `test/integration/handoff-implicit-accept.integration.spec.ts`, gated
+  `isRealRuntime ? describe.skip : describe` (mock-only, matching the inline-ternary
+  pattern of the other 5 mock-scripting-dependent specs). Loads the real
+  `HandoffAcceptPayload` protobuf type via `protobufjs` (same pattern as
+  `stream-resume-live.integration.spec.ts`'s `loadPayloadTypes`) and proto-encodes real
+  bytes for the primary-branch case. Three cases: (1) proto-encoded `implicit: true` +
+  plain-UUID `messageId` → `implicit: true`, reachable only via
+  `projection.service.ts:791`; (2) JSON payload (no decodable `implicit` boolean) +
+  `messageId: 'implicit-accept:handoff-1'` → `implicit: true`, reachable only via `:792`;
+  (3) negative control (JSON payload, random-UUID messageId, same shape as the existing
+  `handoffAcceptScript()`'s explicit accept) → `implicit` is `undefined`.
+
+**Mutation-test evidence (AC1 — required, not optional):** ran the new spec twice more
+with each branch of `isImplicitAccept` (`projection.service.ts:790-793`) individually
+disabled, confirmed the corresponding case fails both times, then reverted (confirmed via
+`git diff` showing zero changes to `projection.service.ts` afterward).
+
+*Run 1 — line 791 (primary decode branch) disabled:*
+```
+FAIL test/integration/handoff-implicit-accept.integration.spec.ts
+  ● Handoff implicit-accept (integration, runtime v0.8.0) › badges implicit: true when the
+    decoded HandoffAcceptPayload.implicit is true (primary branch, projection.service.ts:791)
+    expect(received).toBe(expected)
+    Expected: true
+    Received: undefined
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 2 passed, 3 total
+```
+Only the primary-branch case failed; corroboration and negative-control cases still passed
+(as expected — they don't depend on line 791).
+
+*Run 2 — line 792 (corroboration branch) disabled:*
+```
+FAIL test/integration/handoff-implicit-accept.integration.spec.ts
+  ● Handoff implicit-accept (integration, runtime v0.8.0) › badges implicit: true from the
+    implicit-accept: message-id prefix alone when the payload is not a decodable implicit
+    boolean (corroboration branch, projection.service.ts:792)
+    expect(received).toBe(expected)
+    Expected: true
+    Received: undefined
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 2 passed, 3 total
+```
+Only the corroboration-branch case failed; primary and negative-control cases still
+passed (as expected — they don't depend on line 792). Both mutations confirm the
+assertions are load-bearing, not accidentally green.
+
+**Local verification:** full `npx tsc --noEmit -p test/tsconfig.test.json` clean; full
+`npm test` 815/815 unchanged (56/56 suites — this phase touches no `src/` file); `npm run
+build` clean; `npm run lint` clean (scoped to `src/`, unaffected); full mock-mode `npm run
+test:integration` **106/106** (22/24 suites, 2 docker-only skipped — up from 103/103,
+21/23, confirming the new suite runs and the 6th-parameter extension didn't regress any
+of the 57 existing `makeStreamEnvelope` call sites).
+
+**Verify (round 1) — fresh Opus subagent (`a38a79d22fb8d339a`): GAPS.** Independently
+reproduced every claimed test result (typecheck, 815/815 unit, build, lint, 106/106
+mock-mode integration, both mutation-test outputs verbatim, plus its own independent
+cross-check of the proto round-trip through the real production `decodeKnown` path) and
+confirmed the test code itself is sound. Found 2 real gaps and 1 non-blocking nit:
+1. **(gap)** The Phase 6 divergence note falsely claimed no "§7 verification ledger"
+   section exists — it genuinely exists at `plans/absorb-runtime-v0.8.0.md:413`, with
+   Phase 1's own evidence already recorded there as precedent, and AC1 explicitly requires
+   the mutation-test outputs to be pasted there. The evidence had only been written into
+   this file, not into §7 — meaning AC1 wasn't actually fully met.
+2. **(gap)** This very checkpoint had pre-declared `PASS` with "[verifier output
+   pending]" before any verifier had actually run.
+3. **(nit)** Case 3 (negative control) used a custom `handoffImplicitAcceptScript({
+   payload: {...} })` call instead of literally reusing the plan-specified
+   `handoffAcceptScript()`, an undeclared drift from the plan's literal instruction.
+
+**Gaps closed:**
+1. Added a `**Phase 6 — mutation-check outputs (2026-09-22):**` entry to
+   `plans/absorb-runtime-v0.8.0.md`'s §7 (Verification ledger), pasting both mutation-run
+   output blocks verbatim (same content as this file's Mutation-test evidence above).
+   Corrected the Phase 6 section's own divergence note to drop the false "no §7 exists"
+   claim.
+2. This checkpoint now records the real round-1 verdict instead of a pre-declared one.
+3. `test/integration/handoff-implicit-accept.integration.spec.ts` case 3 now imports and
+   calls `handoffAcceptScript()` directly (added to the existing `handoff-mode` import),
+   removing the custom-fixture drift.
+
+**Re-verification after fixes (executor's own re-run):** full suite re-run clean —
+typecheck clean, `npm test` 815/815 unchanged, `npm run build` clean, `npm run lint`
+clean, full mock-mode `npm run test:integration` **106/106** again (case 3's script swap
+caused no regression), and both mutation tests (line 791, line 792 of
+`projection.service.ts`) re-run against the updated case 3 with identical pass/fail
+results to round 1, `git diff` confirming zero residual change to `projection.service.ts`
+afterward.
+
+**Verify (round 2) — fresh Opus subagent: PASS.** Given the exact round-1 gap list (not
+reviewing cold). Confirmed all 3 items closed: the §7 ledger entry exists with both
+mutation-run blocks pasted verbatim and the divergence note's false claim removed; this
+checkpoint's premature-PASS line is gone and replaced with the real narrative; case 3 now
+calls `handoffAcceptScript()` directly. Independently re-ran typecheck/815-unit/build/lint
+clean; flagged one residual doc nit — the phase-log table's `Rounds` cell (`PROGRESS.md`
+line ~402) still read `1 (implement PASS)` — fixed in place. `npm run test:integration`
+not independently re-run (port 5433 held by an unrelated repo's container; not stopped).
+Verdict PASS on substance, with that one cell corrected before proceeding.
+
+`plans/absorb-runtime-v0.8.0.md`'s Phase 6 section marked `Status: DONE` with a corrected
+divergence note (one parameterized fixture function used instead of three separate ones;
+case 3 reuses `handoffAcceptScript()` directly per the plan's literal instruction). No new
+`ASSUMPTIONS.md` entries — the plan was fully prescriptive for this phase (exact line
+numbers, exact field names, exact three test cases), leaving no genuine ambiguity to log.
+
+**Committed:** `23bca58` (test-coverage work) + `b0ca068` (PROGRESS.md commit-hash
+checkpoint), both on `absorb-runtime-v0.8.0-p6`.
+
+### Phase 6 — ship-gate — 2026-09-22
+Fresh Opus ship-gate subagent (distinct from both implement-gate rounds above): **GAPS**,
+1 doc-only item, code/tests fully verified. Independently re-ran typecheck (both
+`test/tsconfig.test.json` and root), `npm test` (815/815), `npm run build`, `npm run lint`,
+full mock-mode integration (106/106, own isolated Postgres on a free port since 5433 was
+held by an unrelated container), and both mutation tests (identical pass/fail shape to the
+pasted ledger evidence, confirmed reverted). Traced the full event path end-to-end through
+real source (`event-normalizer.service.ts` → `projection.service.ts` →
+`proto-registry.service.ts`'s `MESSAGE_TYPE_MAP`, confirming the mode-key/type-name
+distinction the plan warned about is respected) and confirmed `implicit` really is field 4
+of the shipped `HandoffAcceptPayload` proto with `defaults: false` decoding — the reason
+case 3 correctly asserts `toBeUndefined()` rather than `toBe(false)`. Confirmed zero doc
+drift (test-only diff) and zero new/blocking `ASSUMPTIONS.md` entries. **Gap found:** this
+narrative had a round-1 GAPS entry but no round-2 verdict entry, and the closing
+"What's next" line still described re-verify/commit/ship as pending when all three had
+already happened — fixed now, in place (this entry). Three non-blocking nits noted, no
+action needed: (1) the "57 call sites" figure is 57 including the function's own
+declaration (56 call sites), pre-existing plan/checkpoint text, no bearing on verification;
+(2) `findAcceptContribution`'s `any` return type means case 3's negative assertion alone
+wouldn't catch an isolated property-name typo, though cases 1/2 sharing the same accessor
+would catch a shared one; (3) an inert `eslint-disable` comment on a test file mirrors an
+identical pre-existing one in `stream-resume-live.integration.spec.ts` — consistency
+argues for leaving it.
+
+No follow-up commit needed beyond this doc fix — proceeding straight to push.
+
+pushed absorb-runtime-v0.8.0-p6 417c40f
+
+PR #86 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/86
+
+**What's next:** watch CI, merge — then continue the `/implement` loop to Phase 7
+(`listSessions()` admin drift-detection endpoint).
