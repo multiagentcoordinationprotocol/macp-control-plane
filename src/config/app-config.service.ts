@@ -52,6 +52,30 @@ export class AppConfigService implements OnModuleInit {
   readonly runtimeTls = readBoolean('RUNTIME_TLS', false);
   readonly runtimeAllowInsecure = readBoolean('RUNTIME_ALLOW_INSECURE', process.env.NODE_ENV === 'development');
   /**
+   * Explicit gRPC channel message-size limits (`rust-runtime.provider.ts`
+   * `createClient()`). Without these, grpc-js falls back to its implicit
+   * 4 MB `grpc.max_receive_message_length` default — the exact gap
+   * `RUNTIME_LIST_SESSIONS_PAGE_SIZE` above was kept conservative to work
+   * around.
+   *
+   * - Receive: defaults to 16 MiB. A 1000-session `ListSessions` page at
+   *   ~1-2 KB/session is ~2 MB, giving ~8x headroom while staying bounded
+   *   rather than unbounded (`-1`). tonic sets no server-side encoding cap
+   *   of its own, so this receive limit is the genuinely binding constraint
+   *   on this side of the wire.
+   * - Send: defaults to 4 MiB. This TIGHTENS grpc-js's implicit default,
+   *   which for send is unlimited (`-1`), not 4 MB — unlike receive, this is
+   *   a new ceiling, not a raised one. The largest outbound payload,
+   *   `RegisterPolicy.rules`, is already bounded by the 1 MB HTTP body
+   *   limit — but the *actual* binding constraint on the wire is the
+   *   runtime's own `max_decoding_message_size` on its receive side
+   *   (`macp-runtime/src/main.rs:501-505,522`, `~max_payload_bytes + 64 KiB
+   *   ≈ 1.06 MiB`), so this client-side send ceiling is headroom above a
+   *   limit the runtime enforces first, not the binding one itself.
+   */
+  readonly runtimeMaxReceiveMessageBytes = readNumber('RUNTIME_MAX_RECEIVE_MESSAGE_BYTES', 16777216);
+  readonly runtimeMaxSendMessageBytes = readNumber('RUNTIME_MAX_SEND_MESSAGE_BYTES', 4194304);
+  /**
    * Control-plane's own single Bearer token. The control-plane has exactly one
    * runtime identity, least-privilege (`can_start_sessions: false`). Per-agent
    * tokens were removed with direct-agent-auth Phase 4 (CP-9) — agents authenticate
@@ -75,17 +99,19 @@ export class AppConfigService implements OnModuleInit {
    * `listSessions()` pagination knobs (runtime v0.7.0 caps ListSessions pages
    * server-side). Deliberately conservative defaults:
    *
-   * - Page size defaults to 200, NOT the runtime's max of 1000. The gRPC
-   *   client is constructed with no channel options
-   *   (`rust-runtime.provider.ts` `createClient()`), so grpc-js's default 4 MB
-   *   `grpc.max_receive_message_length` applies. `SessionMetadata` carries
-   *   `repeated string participants` (up to 1000 per session),
-   *   `repeated ParticipantActivity`, and `repeated string extension_keys` —
-   *   a 1000-item page of large sessions can approach ~4 MB and fail with
-   *   RESOURCE_EXHAUSTED, turning a working-but-truncating drain into a total
-   *   failure. 200 keeps a worst-case page well under the limit. Values above
-   *   the runtime's max are clamped server-side, so a higher configured value
-   *   is safe from the server's perspective but not from the client's.
+   * - Page size defaults to 200, NOT the runtime's max of 1000, even though
+   *   the gRPC client now has an explicit `RUNTIME_MAX_RECEIVE_MESSAGE_BYTES`
+   *   channel option (above) rather than grpc-js's implicit 4 MB
+   *   default. `SessionMetadata` carries `repeated string participants` (up
+   *   to 1000 per session), `repeated ParticipantActivity`, and `repeated
+   *   string extension_keys` — a 1000-item page of large sessions can still
+   *   approach the configured receive ceiling and fail with
+   *   RESOURCE_EXHAUSTED, turning a working-but-truncating drain into a
+   *   total failure. 200 keeps a worst-case page well under the limit
+   *   regardless of the channel option's exact value. Values above the
+   *   runtime's max are clamped server-side, so a higher configured value
+   *   is safe from the server's perspective but not necessarily the
+   *   client's.
    * - Max pages defaults to 200 (40,000 sessions ceiling) purely as a guard
    *   against a server that never clears `next_page_token`; exhausting it
    *   yields a truthful `complete: false`, not a silent truncation.
@@ -211,6 +237,18 @@ export class AppConfigService implements OnModuleInit {
     // phase exists to remove. Validate it exactly like the other two knobs.
     if (!Number.isInteger(this.runtimeListSessionsTimeoutMs) || this.runtimeListSessionsTimeoutMs <= 0) {
       throw new Error('RUNTIME_LIST_SESSIONS_TIMEOUT_MS must be a positive integer');
+    }
+    // Same blank-string trap as RUNTIME_LIST_SESSIONS_TIMEOUT_MS above
+    // (`Number('') === 0`, and `Number.isFinite(0)` is true, so readNumber's
+    // default never kicks in for an accidentally-blank env var) — a channel
+    // option of 0 isn't "use grpc-js's default", it's a channel that can send
+    // or receive literally nothing, so it must fail fast here rather than at
+    // the first gRPC call.
+    if (!Number.isInteger(this.runtimeMaxReceiveMessageBytes) || this.runtimeMaxReceiveMessageBytes <= 0) {
+      throw new Error('RUNTIME_MAX_RECEIVE_MESSAGE_BYTES must be a positive integer');
+    }
+    if (!Number.isInteger(this.runtimeMaxSendMessageBytes) || this.runtimeMaxSendMessageBytes <= 0) {
+      throw new Error('RUNTIME_MAX_SEND_MESSAGE_BYTES must be a positive integer');
     }
 
     if (this.isDevelopment) return;

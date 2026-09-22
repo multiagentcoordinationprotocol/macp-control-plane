@@ -148,7 +148,10 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
 
   /** Create a fresh gRPC channel to the runtime. */
   private createClient(): any {
-    return new this.serviceConstructor(this.runtimeAddress, this.channelCreds);
+    return new this.serviceConstructor(this.runtimeAddress, this.channelCreds, {
+      'grpc.max_receive_message_length': this.config.runtimeMaxReceiveMessageBytes,
+      'grpc.max_send_message_length': this.config.runtimeMaxSendMessageBytes
+    });
   }
 
   /**

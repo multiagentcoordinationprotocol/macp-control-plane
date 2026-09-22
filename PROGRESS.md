@@ -397,7 +397,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | P1 repoint integration harness (runtime image pin, healthcheck, CI env split, PG timeout) | DONE | 1 | Opus (fresh subagent) | `1690e7b` | merged #81 |
 | P2 stream pipeline: policy.denied inline match, compacted-history regex, gap-detection ordering | DONE | 1 (implement) + 1 GAPS→closed (ship-gate) | Opus (fresh subagent, both gates) | `3188017` (squash; pre-squash branch commits `e0e431e`/`965a2bf` are unreachable once `absorb-runtime-v0.8.0-p2` is pruned) | merged #82 |
 | P3 tighten schema_version pre-check | DONE | 1 (implement PASS) + 1 (ship-gate PASS) | Opus (fresh subagent, both gates) | `2ac9dc6` | merged #83 |
-| P4 explicit gRPC channel options | TODO | — | — | — | — |
+| P4 explicit gRPC channel options | DONE | 1 (PASS) | Opus (fresh subagent) | (pending) | (none yet — ships via `/ship`) |
 | P5 non-blocking post-commit publish side effects | TODO | — | — | — | — |
 | P6 handoff implicit-accept integration test | TODO | — | — | — | — |
 | P7 listSessions() admin drift-detection endpoint | TODO | — | — | — | — |
@@ -896,3 +896,57 @@ merged #83: https://github.com/multiagentcoordinationprotocol/macp-control-plane
 **Post-merge deploy:** still `workflow_dispatch`-only, unchanged. No deploy triggered.
 
 **Phase 3 fully closed.** Next: Phase 4 (explicit gRPC channel options).
+
+### Phase 4 — implement + verify — 2026-09-22
+Branch `absorb-runtime-v0.8.0-p4` (off `main` at `b2534b9`, post Phase-3-merge). Implemented
+per plan §Phase 4: `RUNTIME_MAX_RECEIVE_MESSAGE_BYTES` (default 16 MiB)/
+`RUNTIME_MAX_SEND_MESSAGE_BYTES` (default 4 MiB) added to `app-config.service.ts` following
+the existing `readNumber` + validation-block pattern (including the blank-string trap
+already established for `RUNTIME_LIST_SESSIONS_TIMEOUT_MS`); `rust-runtime.provider.ts`'s
+`createClient()` now passes both as `grpc.max_receive_message_length`/
+`grpc.max_send_message_length` in a third constructor argument.
+
+**Local verification:** lint clean; targeted `rust-runtime.provider.spec.ts` run 25/25 (22
+pre-existing + 3 new, zero pre-existing tests modified — `git diff --numstat` confirms
+pure additions); targeted `app-config.service.spec.ts` run 69/69 (11 new); full
+`npx tsc --noEmit -p test/tsconfig.test.json` clean; full `npm test` 812/812 (56/56
+suites, 14 new tests); `npm run build` clean; mock-mode `npm run test:integration`
+103/103 (unaffected as expected — mock mode uses `ScriptedMockRuntimeProvider`, never
+touches `RustRuntimeProvider.createClient()`).
+
+**Verify — fresh Opus subagent: PASS.** All 4 acceptance criteria confirmed met,
+independently re-ran every gate (25/25, 812/812, lint, typecheck, build, convention
+greps — all matching). Gave an unusually candid assessment of AC4 specifically, worth
+preserving verbatim in spirit: the byte-size ceiling this phase configures is enforced
+inside grpc-js below the `unary()` seam every test in this file stubs, so **no unit test
+can directly trip a real ceiling** — AC4 is inherently untestable at this level, and the
+added test (honest about this in its own comment) instead proves the halving ladder
+survives *two* consecutive `RESOURCE_EXHAUSTED` responses, a genuinely new case beyond
+the pre-existing single-halving test. Recorded as a divergence note in the plan rather
+than left implicit. 5 non-blocking findings, all folded in before commit: a stale
+"gRPC client has no channel options" sentence + missing env-var rows in
+`docs/INTEGRATION.md` (the plan's Docs note under-scoped to 3 files, missed this 4th);
+a factual fix in `.env.example` (unset ≠ empty-string — only empty-string fails
+startup, the original wording conflated the two); a "worst-case"/"typical" wording
+mismatch between `.env.example` and `app-config.service.ts` about a 1000-session
+`ListSessions` page (resolved in `.env.example`'s favor of `app-config.service.ts`'s
+framing); a `(see below)` cross-reference in `app-config.service.ts` fixed to
+`(above)`; and a one-clause addition noting the send-side default is a genuine
+*tightening* (grpc-js's implicit send default is unlimited, not 4 MB) rather than a
+raise like the receive side — practical risk nil, but the original phrasing implied
+otherwise. Also renamed the AC4 test's title, which the verifier flagged as
+overclaiming relative to its own honest in-body comment.
+
+`plans/absorb-runtime-v0.8.0.md`'s Phase 4 section marked `Status: DONE` with the full
+divergence note (the AC4-untestability finding, preserved for future readers rather
+than only living in this checkpoint). No new `ASSUMPTIONS.md` entries — every judgment
+call (the specific byte-size defaults, the blank-string validation, leaving the
+halvings ladder untouched) was already prescribed by the plan itself with clear
+reasoning; the AC4 limitation is a testing-methodology fact, not a judgment call with
+a real wrong alternative to track.
+
+**What's next:** commit Phase 4, hand off to `/ship` (PR #4) — no behavior-change
+callout needed in the PR description this time (receive is a pure raise, send is a
+tightening with nil practical risk since the runtime's own tighter limit binds
+first) — then continue the `/implement` loop to Phase 5 (non-blocking post-commit
+publish side effects).

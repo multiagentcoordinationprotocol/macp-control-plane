@@ -17,6 +17,8 @@ describe('AppConfigService', () => {
     delete process.env.RUNTIME_USE_DEV_HEADER;
     delete process.env.RUNTIME_REQUEST_TIMEOUT_MS;
     delete process.env.RUNTIME_DEV_AGENT_ID;
+    delete process.env.RUNTIME_MAX_RECEIVE_MESSAGE_BYTES;
+    delete process.env.RUNTIME_MAX_SEND_MESSAGE_BYTES;
     delete process.env.RUNTIME_LIST_SESSIONS_PAGE_SIZE;
     delete process.env.RUNTIME_LIST_SESSIONS_MAX_PAGES;
     delete process.env.RUNTIME_LIST_SESSIONS_TIMEOUT_MS;
@@ -382,6 +384,75 @@ describe('AppConfigService', () => {
       expect(config.runtimeListSessionsPageSize).toBe(50);
       expect(config.runtimeListSessionsMaxPages).toBe(10);
       expect(config.runtimeListSessionsTimeoutMs).toBe(5000);
+    });
+  });
+
+  describe('gRPC channel message-size options (Phase 4, runtime 0.8.0 absorption)', () => {
+    it('defaults RUNTIME_MAX_RECEIVE_MESSAGE_BYTES to 16777216 (16 MiB)', () => {
+      const config = new AppConfigService();
+      expect(config.runtimeMaxReceiveMessageBytes).toBe(16777216);
+    });
+
+    it('defaults RUNTIME_MAX_SEND_MESSAGE_BYTES to 4194304 (4 MiB)', () => {
+      const config = new AppConfigService();
+      expect(config.runtimeMaxSendMessageBytes).toBe(4194304);
+    });
+
+    it('should throw if RUNTIME_MAX_RECEIVE_MESSAGE_BYTES is zero', () => {
+      process.env.RUNTIME_MAX_RECEIVE_MESSAGE_BYTES = '0';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_RECEIVE_MESSAGE_BYTES must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_MAX_RECEIVE_MESSAGE_BYTES is negative', () => {
+      process.env.RUNTIME_MAX_RECEIVE_MESSAGE_BYTES = '-1';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_RECEIVE_MESSAGE_BYTES must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_MAX_RECEIVE_MESSAGE_BYTES is fractional', () => {
+      process.env.RUNTIME_MAX_RECEIVE_MESSAGE_BYTES = '1.5';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_RECEIVE_MESSAGE_BYTES must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_MAX_RECEIVE_MESSAGE_BYTES is a blank string (Number(\'\') === 0 bypasses the default)', () => {
+      process.env.RUNTIME_MAX_RECEIVE_MESSAGE_BYTES = '';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_RECEIVE_MESSAGE_BYTES must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_MAX_SEND_MESSAGE_BYTES is zero', () => {
+      process.env.RUNTIME_MAX_SEND_MESSAGE_BYTES = '0';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_SEND_MESSAGE_BYTES must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_MAX_SEND_MESSAGE_BYTES is negative', () => {
+      process.env.RUNTIME_MAX_SEND_MESSAGE_BYTES = '-1';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_SEND_MESSAGE_BYTES must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_MAX_SEND_MESSAGE_BYTES is fractional', () => {
+      process.env.RUNTIME_MAX_SEND_MESSAGE_BYTES = '1.5';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_SEND_MESSAGE_BYTES must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_MAX_SEND_MESSAGE_BYTES is a blank string (Number(\'\') === 0 bypasses the default)', () => {
+      process.env.RUNTIME_MAX_SEND_MESSAGE_BYTES = '';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_SEND_MESSAGE_BYTES must be a positive integer');
+    });
+
+    it('should not throw with valid positive overrides for both', () => {
+      process.env.RUNTIME_MAX_RECEIVE_MESSAGE_BYTES = '33554432';
+      process.env.RUNTIME_MAX_SEND_MESSAGE_BYTES = '8388608';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).not.toThrow();
+      expect(config.runtimeMaxReceiveMessageBytes).toBe(33554432);
+      expect(config.runtimeMaxSendMessageBytes).toBe(8388608);
     });
   });
 
