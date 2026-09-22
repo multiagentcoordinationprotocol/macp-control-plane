@@ -967,8 +967,7 @@ than glossed over.
 
 pushed absorb-runtime-v0.8.0-p4 586614a
 
-**What's next:** open PR #4, watch CI, merge — no behavior-change callout needed in the PR
-description this time (receive is a pure raise, send is a tightening with nil practical
-risk since the runtime's own tighter limit binds first) — then continue the `/implement`
-loop to Phase 5 (non-blocking post-commit
-publish side effects).
+PR #84 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/84
+
+**What's next:** watch CI, merge, then continue the `/implement` loop to Phase 5
+(non-blocking post-commit publish side effects).
