@@ -400,7 +400,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | P4 explicit gRPC channel options | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `fe6c70d` (squash) | merged #84 |
 | P5 non-blocking post-commit publish side effects | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `2a6e1d2` (squash) | merged #85 |
 | P6 handoff implicit-accept integration test | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) + 1 (ship-gate: 1 GAPS→closed) | Opus (fresh subagent, all rounds) | `e8258fc` (squash) | merged #86 |
-| P7 listSessions() admin drift-detection endpoint | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) | Opus (fresh subagent, both rounds) | (pending) | (none yet — ships via `/ship`) |
+| P7 listSessions() admin drift-detection endpoint | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) | Opus (fresh subagent, both rounds) | `d9709c5` | (pending — ships via `/ship`) |
 | P8 bump @multiagentcoordinationprotocol/proto to 0.1.10 | DONE (independently, PR #80, pre-dates this plan) | 0 | n/a | 23db607 (#80) | #80 (already merged) |
 
 ## Repo map
