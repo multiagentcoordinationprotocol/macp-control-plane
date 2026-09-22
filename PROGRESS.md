@@ -784,3 +784,6 @@ rather than an amend (the Phase 2 commit is unpushed but `/ship`'s guardrails de
 amending; a short logical sequence is explicitly allowed).
 
 **Ship-gate round 1 closed all 4 gaps. Proceeding to push and open the PR.**
+
+pushed absorb-runtime-v0.8.0-p2 965a2bf
+PR #82 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/82
