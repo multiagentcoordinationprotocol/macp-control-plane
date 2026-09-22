@@ -140,21 +140,51 @@ export class StreamConsumerService implements OnModuleDestroy {
   }
 
   /**
-   * Detect the runtime's "resume point was compacted" rejection — a gRPC
-   * FAILED_PRECONDITION (code 9) raised on the StreamSession when we request an
-   * `after_sequence` below the compacted base. Resubscribing from 0 after this
-   * would double-ingest history (the CP has no message-id dedup), so callers
-   * degrade to poll-only instead.
+   * Matches the runtime's exact "resume point was compacted" sentence
+   * (macp-runtime/src/server.rs:516-521): "session history before ordinal {N}
+   * was compacted; resume with after_sequence >= {N} or re-read state via
+   * GetSession". Deliberately **unanchored**, not `^`-anchored — the terminal
+   * path's error text (see `isCompactedHistoryTerminalError` below) is
+   * grpc-js's own wrapped `ServiceError.message`, formatted as
+   * "<code> <CODE_NAME>: <details>" (e.g. "9 FAILED_PRECONDITION: session
+   * history before ordinal 5 was compacted; ..."), which a `^`-anchored regex
+   * would never match. This exact unanchored form is prescribed by
+   * DECISIONS.md entry 13 — do not re-anchor it.
    *
-   * Also reused (message-text branch only — `code` is never numeric there) to
-   * classify the *inline* `stream-inline-error` frame macp-runtime 0.7.0 emits
-   * for the same condition instead of ending the stream. See the call site in
-   * the consume loop for why that path exists and why it is fragile.
+   * Coupled to the runtime's exact wording: if it's ever reworded upstream,
+   * this regex stops matching and gap detection on the terminal path degrades
+   * to the `code === 9` branch only — the inline path (see
+   * `isCompactedHistoryInlineError`) has no such fallback, so a reworded
+   * sentence would silently regress issue #68's protection.
    */
-  private isCompactedHistoryError(error: unknown): boolean {
+  private static readonly COMPACTED_HISTORY_RE = /history before ordinal \d+ was compacted/i;
+
+  /**
+   * Detect the runtime's "resume point was compacted" rejection on the
+   * *terminal* stream-error path — a gRPC FAILED_PRECONDITION (code 9) raised
+   * on the StreamSession when we request an `after_sequence` below the
+   * compacted base. Resubscribing from 0 after this would double-ingest
+   * history (the CP has no message-id dedup), so callers degrade to poll-only
+   * instead. `code === 9` is the primary signal; the regex is a fallback for
+   * whatever error-message shape actually reaches us (grpc-js's wrapped text).
+   */
+  private isCompactedHistoryTerminalError(error: unknown): boolean {
     const code = (error as { code?: number })?.code;
     const message = error instanceof Error ? error.message : String(error);
-    return code === 9 /* grpc FAILED_PRECONDITION */ || /compact/i.test(message);
+    return code === 9 /* grpc FAILED_PRECONDITION */ || StreamConsumerService.COMPACTED_HISTORY_RE.test(message);
+  }
+
+  /**
+   * Detect the same condition on the *inline* `stream-inline-error` frame
+   * macp-runtime emits instead of ending the stream (see the call site in the
+   * consume loop for why that path exists and why it is fragile). There is no
+   * numeric gRPC code on this path — it is not a terminal stream error — and a
+   * PolicyDenied frame can never reach here either: server.rs:748-756 excludes
+   * FailedPrecondition (PolicyDenied's own status code) from terminal errors.
+   * So, unlike the terminal path, this is text-only with no numeric fallback.
+   */
+  private isCompactedHistoryInlineError(text: string): boolean {
+    return StreamConsumerService.COMPACTED_HISTORY_RE.test(text);
   }
 
   /**
@@ -220,14 +250,14 @@ export class StreamConsumerService implements OnModuleDestroy {
             if (marker.aborted) return;
 
             // Inline compacted-history detection (live-finding follow-up to T7).
-            // macp-runtime 0.7.0 does NOT surface a compacted resume point as a
+            // macp-runtime does NOT surface a compacted resume point as a
             // terminal gRPC stream error: server.rs's stream loop only ends the
             // stream for Unauthenticated | Internal | ResourceExhausted |
-            // InvalidArgument | NotFound | AlreadyExists (server.rs:745-755,
+            // InvalidArgument | NotFound | AlreadyExists (server.rs:748-756,
             // is_stream_terminal_error) — FailedPrecondition is excluded, so a
             // compacted resume is instead delivered as a non-terminal inline
             // `Response::Error` frame while the bidi stream stays open
-            // (server.rs:608-628). The `catch` below — which drives gap
+            // (server.rs:611-629). The `catch` below — which drives gap
             // detection for a genuine stream error — never runs for this case,
             // so it has to be detected here, before we normalize the frame.
             //
@@ -235,18 +265,17 @@ export class StreamConsumerService implements OnModuleDestroy {
             // both `code` and `message` on the inline frame to
             // `status.message()`, i.e. the human-readable "session history
             // before ordinal {N} was compacted; resume with after_sequence >=
-            // {N} or re-read state via GetSession" string (server.rs:512-519).
-            // We reuse `isCompactedHistoryError`'s existing /compact/i text
-            // match against that string rather than inventing a second
-            // detector. This is inherently fragile: if the runtime ever
-            // reword this message, detection silently stops firing with no
-            // compiler or test signal short of the live-runtime suite —
-            // that fragility is deliberate to call out, not accidental.
+            // {N} or re-read state via GetSession" string (server.rs:516-521).
+            // We match that string via `isCompactedHistoryInlineError` rather
+            // than inventing a second detector. This is inherently fragile: if
+            // the runtime ever rewords this message, detection silently stops
+            // firing with no compiler or test signal short of the live-runtime
+            // suite — that fragility is deliberate to call out, not accidental.
             if (
               raw.kind === 'stream-inline-error' &&
               raw.inlineError &&
-              (this.isCompactedHistoryError(raw.inlineError.message) ||
-                this.isCompactedHistoryError(raw.inlineError.code))
+              (this.isCompactedHistoryInlineError(raw.inlineError.message) ||
+                this.isCompactedHistoryInlineError(raw.inlineError.code))
             ) {
               gapDetected = true;
               marker.connected = false;
@@ -268,19 +297,28 @@ export class StreamConsumerService implements OnModuleDestroy {
           }
         } catch (error) {
           marker.connected = false;
-          gapDetected = this.isCompactedHistoryError(error);
+          gapDetected = this.isCompactedHistoryTerminalError(error);
           this.logger.warn(
             `stream error for run ${params.runId}: ${error instanceof Error ? error.message : String(error)}`
           );
         }
 
         if (marker.finalized || marker.aborted) return;
-        if (!this.config.streamResumeEnabled) break; // legacy poll-degrade behavior
 
+        // Check the gap FIRST, regardless of streamResumeEnabled: a real
+        // history gap must be recorded on every run, not just when resume is
+        // on. run-executor.service.ts:348 subscribes to StreamSession
+        // unconditionally, independent of this flag — a gap here isn't a
+        // "resume" concern, it's an on-the-wire fact about missing history.
+        // DECISIONS.md entry 15 flagged this exact ordering bug. Previously
+        // `!streamResumeEnabled` broke *before* this check ever ran, so a real
+        // gap went unrecorded whenever resume was disabled.
         if (gapDetected) {
           await this.emitStreamGap(params.runId, params.runtimeSessionId, marker);
           break; // degrade to poll-only
         }
+
+        if (!this.config.streamResumeEnabled) break; // legacy poll-degrade behavior
 
         streamRetries += 1;
         this.instrumentation.streamReconnectsTotal.inc();

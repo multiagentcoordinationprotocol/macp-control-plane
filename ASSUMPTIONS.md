@@ -343,3 +343,34 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   produce a new `decision.finalized`. No data loss, no behavioral effect; reversible by making the
   field optional or rebuilding projections.
 - **Status:** UNCONFIRMED
+
+## P2 (v0.8.0) — inline `policy.denied`'s `errorCode` carries unbounded operator text, not the ack path's fixed constant
+- **Plan:** `plans/absorb-runtime-v0.8.0.md` (Phase 2)
+- **Assumed:** The plan directs keeping the inline-path `policy.denied` event shape "identical to
+  the ack path so `run-event.service.ts:25-27`'s existing span-annotation labeling keeps working."
+  Mechanically true — both paths populate `data.errorCode` — but the *values* diverge: the ack path
+  sets the fixed constant `"POLICY_DENIED"` (`event-normalizer.service.ts:96`), while the inline
+  path (`:149-161`) sets `err.code` verbatim, which on this wire path is always
+  `"PolicyDenied"` or `"PolicyDenied: <operator-authored reason text>"` — unbounded, free-text,
+  and emitted unredacted (`run-event.service.ts:135-145`'s span-annotation write applies no
+  redaction; `RedactionService` is wired only to the LLM signal path at
+  `event-normalizer.service.ts:220`, not this one).
+- **Chose:** Ship as specified rather than normalize inline `errorCode` to the constant
+  `"POLICY_DENIED"` (which the plan's own note about `err.messageId` being unpopulated on this path
+  already signals as an accepted "the inline path is a lesser cousin of the ack path" trade-off).
+  Normalizing would lose the actual denial text from `errorCode` (still available via
+  `errorMessage` and `decodedPayload.reasons` either way), and — more importantly — deciding a
+  new field semantic mid-phase was out of scope for a bug-fix phase whose spec was explicit about
+  the shape.
+- **Alternatives:** (a) Set `errorCode: 'POLICY_DENIED'` on the inline path too, matching the ack
+  path's constant exactly and accepting the loss of the raw prefix from that one field; (b) add a
+  redaction pass on this span-annotation write path, mirroring the LLM-signal path's.
+- **Blast radius if wrong:** Any consumer (a tracing backend, a future webhook filter) that matches
+  `data.errorCode === 'POLICY_DENIED'` exactly will silently miss every inline-path denial — it
+  will still see `errorMessage` and (if it reads canonical events, not spans) `decodedPayload`, so
+  no event is lost, only one specific field-matching pattern breaks. Separately, `OTEL_ENABLED`
+  defaults `false` in this repo, and the same unredacted text already flows through `errorMessage`
+  on this path regardless, so the incremental exposure from `errorCode` carrying it too is low —
+  but it is an unbounded-cardinality string landing in a trace attribute if tracing is later
+  enabled, worth revisiting before this repo turns OTel on for policy-heavy deployments.
+- **Status:** UNCONFIRMED

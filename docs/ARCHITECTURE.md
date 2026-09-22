@@ -203,28 +203,38 @@ never a substitute for a marker that failed to seed.
 `stream-consumer.service.ts`, exercised whether the handle came from initial `start()` or
 from `RunRecoveryService`'s cross-process resume) is what protects a resume point that
 *was* valid when persisted but has since been compacted out of the runtime's log:
-`isCompactedHistoryError` recognizes gRPC `FAILED_PRECONDITION` (code 9) or a
-"compacted"-flavored message, `emitStreamGap` emits a `session.stream.gap` canonical event
-and flags the projection `historyGap: true` (idempotent per run via `marker.historyGap`),
-and the consumer degrades to poll-only **without ever resubscribing from 0** — the gap is
-made visible instead of silently skipped. `test/integration/stream-gap.integration.spec.ts`
-covers this path against a scripted mock runtime.
+`isCompactedHistoryTerminalError` (terminal stream errors) recognizes gRPC
+`FAILED_PRECONDITION` (code 9) or a match against `COMPACTED_HISTORY_RE`
+(`/history before ordinal \d+ was compacted/i`, unanchored so it matches both a bare
+message and grpc-js's `"<code> <CODE_NAME>: <details>"`-prefixed form); the sibling
+`isCompactedHistoryInlineError` applies the same regex, text-only, to inline frames.
+`emitStreamGap` emits a `session.stream.gap` canonical event and flags the projection
+`historyGap: true` (idempotent per run via `marker.historyGap`), and the consumer degrades
+to poll-only **without ever resubscribing from 0** — the gap is made visible instead of
+silently skipped. `test/integration/stream-gap.integration.spec.ts` covers this path
+against a scripted mock runtime.
 
-**How the rejection actually arrives against runtime 0.7.0 — not as a stream error.** Live
+**How the rejection actually arrives against runtime 0.7.0+ — not as a stream error.** Live
 re-verification found that the runtime does *not* end the stream for a compacted-history
-resume: `is_stream_terminal_error` (`macp-runtime/src/server.rs:745-755`) omits
+resume: `is_stream_terminal_error` (`macp-runtime/src/server.rs:748-756`) omits
 `FailedPrecondition`, so the rejection is delivered as a **non-terminal inline `MACPError`
-frame with the stream left open** (`server.rs:608-628`). The consumer therefore also
+frame with the stream left open** (`server.rs:611-629`). The consumer therefore also
 classifies the inline frame, not just the stream-error path — without that, the gap event
 never fired at all and the consumer sat on an open stream that had replayed nothing.
 
 Two caveats a maintainer should know. First, detection matches on the message text, because
 the runtime sets the inline frame's `code` to `status.message()` rather than a status name —
 so there is no machine-readable code to key on, and a future rewording of that string breaks
-detection silently. Second, the classification runs *after* the `STREAM_RESUME_ENABLED` check,
-so with resume disabled an inline compaction frame still degrades to poll-only but does not
-record the gap. `test/integration/stream-resume-live.integration.spec.ts` proves the whole
-path end to end against a real runtime; it is gated and skips under the mock runtime CI pins.
+detection silently. The regex was tightened from a loose `/compact/i` substring match (which
+false-positived on operator-authored `PolicyDenied` reasons mentioning "compact") to the
+sentence-specific `COMPACTED_HISTORY_RE` above, closing that false-positive without changing
+the "future rewording breaks detection" trade-off. Second, the gap classification now runs
+**before** the `STREAM_RESUME_ENABLED` check (reversed from an earlier version of this code,
+which skipped gap recording whenever resume was disabled) — with resume disabled, a
+compaction is now correctly recorded (`session.stream.gap` emitted, `historyGap: true` set)
+before the consumer degrades to poll-only, matching the behavior with resume enabled.
+`test/integration/stream-resume-live.integration.spec.ts` proves the whole path end to end
+against a real runtime; it is gated and skips under the mock runtime CI pins.
 
 **Known residual gap (accepted, not fixed):** the cursor write in
 `RunEventService.persistRawAndCanonical` happens outside the same DB transaction as the

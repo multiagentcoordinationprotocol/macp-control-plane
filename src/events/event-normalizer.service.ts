@@ -136,8 +136,21 @@ export class EventNormalizerService implements EventNormalizer {
           'stream-inline-error'
         )
       ];
-      // If it's a policy denial, also emit policy.denied
-      if (err.code === 'POLICY_DENIED') {
+      // If it's a policy denial, also emit policy.denied. The inline path's
+      // `code` and `message` fields are both built server-side from
+      // `status.message().to_string()` (macp-runtime/src/server.rs:621-622) —
+      // for MacpError::PolicyDenied that string is literally "PolicyDenied" or
+      // "PolicyDenied: <reason1>; <reason2>" (server.rs:769-775), never the
+      // stable POLICY_DENIED constant the ack path's error code genuinely is
+      // (crates/macp-core/src/error.rs:75). Keep the literal check for
+      // forward-compat in case that ever changes, and match the real prefix
+      // (anchored so unrelated text can't false-match) on both fields, since
+      // either could in principle carry it.
+      const isPolicyDeny =
+        err.code === 'POLICY_DENIED' ||
+        /^PolicyDenied(:|$)/.test(err.code) ||
+        /^PolicyDenied(:|$)/.test(err.message);
+      if (isPolicyDeny) {
         events.push(
           this.makeEvent(
             runId,
@@ -147,7 +160,7 @@ export class EventNormalizerService implements EventNormalizer {
             {
               errorCode: err.code,
               errorMessage: err.message,
-              decodedPayload: { decision: 'deny', reasons: [err.message] }
+              decodedPayload: { decision: 'deny', reasons: this.parsePolicyDenyReasons(err.message) }
             },
             'stream-inline-error'
           )
@@ -497,6 +510,28 @@ export class EventNormalizerService implements EventNormalizer {
       },
       data
     };
+  }
+
+  /**
+   * Parses `reasons` out of an inline PolicyDenied error's `message` string,
+   * e.g. "PolicyDenied: <reason1>; <reason2>". Structured reasons are never
+   * available on this path — the runtime hardcodes `details: vec![]` for
+   * inline stream errors (macp-runtime/src/server.rs:625) — so this is a
+   * best-effort text split, mirroring the ack path's own fallback (`:96-98`
+   * above). Two known-lossy edges, both accepted: a reason containing "; "
+   * internally is mis-split, and a reason containing ": " internally loses
+   * everything before the first occurrence (the delimiter between the
+   * "PolicyDenied" prefix and the reasons).
+   */
+  private parsePolicyDenyReasons(message: string): string[] {
+    const delimiterIndex = message.indexOf(': ');
+    if (delimiterIndex === -1) return [message];
+    const reasons = message
+      .slice(delimiterIndex + 2)
+      .split('; ')
+      .map((r) => r.trim())
+      .filter((r) => r.length > 0);
+    return reasons.length > 0 ? reasons : [message];
   }
 }
 

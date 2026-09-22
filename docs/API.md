@@ -796,11 +796,12 @@ Emitted for each commitment the runtime evaluates against the active policy.
 
 `decision` is always `"allow"` or `"deny"`. The projection accumulates these in `policy.commitmentEvaluations[]` (capped at the most recent 50).
 
-**`policy.denied`** — subject `{ kind: "policy", id: <commitmentId | messageId> }`
+**`policy.denied`** — subject `{ kind: "policy", id: <commitmentId | messageId | ""> }`
 
-Emitted in two cases:
+Emitted in three cases:
 1. The runtime sends a `PolicyDenied` stream message.
-2. A runtime-emitted send-ack observed on the stream carries `error.code = "POLICY_DENIED"` (the agent's `Send` RPC was rejected by policy). The control-plane synthesizes the event so deny reasons are visible on the event stream even if the runtime doesn't echo them back as a dedicated `PolicyDenied` envelope.
+2. A runtime-emitted send-ack observed on the stream carries `error.code = "POLICY_DENIED"` (the agent's `Send` RPC was rejected by policy). The control-plane synthesizes the event so deny reasons are visible on the event stream even if the runtime doesn't echo them back as a dedicated `PolicyDenied` envelope. Under the observer invariant the control-plane never calls `Send` itself, so this case only fires for a `Send` issued directly by an agent that the control-plane observes on the stream — not a control-plane-initiated call.
+3. A non-terminal inline `MACPError` stream frame (`kind: 'stream-inline-error'`) whose `code`/`message` matches `/^PolicyDenied(:|$)/` — the runtime's stream loop builds both fields from `status.message().to_string()` for this path, never the machine code `"POLICY_DENIED"`, so the match is on the human-readable prefix instead of equality. This is the case that fires for an ordinary agent-to-agent `Send` policy rejection observed on the stream, alongside case 1. `messageId` is always empty on this path (the runtime never populates it for inline frames), so `subject.id` is `""`; reasons are parsed from the message text (see below) rather than structured `error.reasons`, since the runtime sends no binary metadata on inline frames.
 
 ```json
 {
@@ -816,7 +817,7 @@ Emitted in two cases:
 }
 ```
 
-Reasons are extracted from `error.reasons` when available, otherwise from the `macp-error-details-bin` binary metadata, falling back to the error message. See CLAUDE.md § Policy event pipeline for the full extraction order.
+For cases 1 and 2, reasons are extracted from `error.reasons` when available, otherwise from the `macp-error-details-bin` binary metadata, falling back to the error message. See CLAUDE.md § Policy event pipeline for the full extraction order. For case 3 (inline frames), the runtime never sends structured reasons on this path — reasons are parsed from the message text instead: the substring after the first `": "`, split on `"; "`, trimmed, with the whole message as a fallback when nothing survives that split.
 
 ---
 
