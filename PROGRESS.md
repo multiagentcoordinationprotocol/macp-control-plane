@@ -395,7 +395,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | Phase | Status | Rounds | Verifier | Commit | PR |
 |---|---|---|---|---|---|
 | P1 repoint integration harness (runtime image pin, healthcheck, CI env split, PG timeout) | DONE | 1 | Opus (fresh subagent) | `1690e7b` | merged #81 |
-| P2 stream pipeline: policy.denied inline match, compacted-history regex, gap-detection ordering | DONE | 1 (implement) + 1 GAPS→closed (ship-gate) | Opus (fresh subagent, both gates) | `e0e431e`+`965a2bf` | merged #82 |
+| P2 stream pipeline: policy.denied inline match, compacted-history regex, gap-detection ordering | DONE | 1 (implement) + 1 GAPS→closed (ship-gate) | Opus (fresh subagent, both gates) | `3188017` (squash; pre-squash branch commits `e0e431e`/`965a2bf` are unreachable once `absorb-runtime-v0.8.0-p2` is pruned) | merged #82 |
 | P3 tighten schema_version pre-check | DONE | 1 (PASS) | Opus (fresh subagent) | (pending) | (none yet — ships via `/ship`) |
 | P4 explicit gRPC channel options | TODO | — | — | — | — |
 | P5 non-blocking post-commit publish side effects | TODO | — | — | — | — |

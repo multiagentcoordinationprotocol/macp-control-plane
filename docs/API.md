@@ -500,7 +500,10 @@ a value the runtime's own registration-time admission check would still accept, 
 `400 Bad Request` locally without reaching the runtime. This is deliberately stricter than the
 runtime's admission gate: it matches the runtime's *evaluation-time* authoritative set instead, so
 a bad value fails fast at registration rather than silently denying every commitment under that
-policy later, with no signal at registration time.
+policy later, with no signal at registration time. The check is also type-strict, not just
+range-strict: there is no `ValidationPipe` on this endpoint's body, so a JSON string like
+`"schemaVersion": "1"` previously coerced through to the runtime (proto-loader accepts a numeric
+string for an int32 field) and succeeded — it is now rejected the same as an out-of-range number.
 
 Returns: `{ "ok": true }` or `{ "ok": false, "error": "..." }`
 
