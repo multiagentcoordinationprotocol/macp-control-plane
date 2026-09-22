@@ -397,7 +397,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | P1 repoint integration harness (runtime image pin, healthcheck, CI env split, PG timeout) | DONE | 1 | Opus (fresh subagent) | `1690e7b` | merged #81 |
 | P2 stream pipeline: policy.denied inline match, compacted-history regex, gap-detection ordering | DONE | 1 (implement) + 1 GAPS→closed (ship-gate) | Opus (fresh subagent, both gates) | `3188017` (squash; pre-squash branch commits `e0e431e`/`965a2bf` are unreachable once `absorb-runtime-v0.8.0-p2` is pruned) | merged #82 |
 | P3 tighten schema_version pre-check | DONE | 1 (implement PASS) + 1 (ship-gate PASS) | Opus (fresh subagent, both gates) | `2ac9dc6` | merged #83 |
-| P4 explicit gRPC channel options | DONE | 1 (PASS) | Opus (fresh subagent) | (pending) | (none yet — ships via `/ship`) |
+| P4 explicit gRPC channel options | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `fe6c70d` (squash) | merged #84 |
 | P5 non-blocking post-commit publish side effects | TODO | — | — | — | — |
 | P6 handoff implicit-accept integration test | TODO | — | — | — | — |
 | P7 listSessions() admin drift-detection endpoint | TODO | — | — | — | — |
@@ -969,5 +969,10 @@ pushed absorb-runtime-v0.8.0-p4 586614a
 
 PR #84 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/84
 
-**What's next:** watch CI, merge, then continue the `/implement` loop to Phase 5
-(non-blocking post-commit publish side effects).
+All 11 required checks green (CodeQL, analyze, audit, build, check-env-secrets,
+conventions, docker, integration-test, lint, test, typecheck). merged #84 (squash,
+`fe6c70d`, branch deleted). No deploy triggered — this repo's deploy is
+`workflow_dispatch`-only, unchanged by this phase.
+
+**Phase 4 fully closed.** Next: Phase 5 (non-blocking post-commit publish side effects —
+`run-event.service.ts`/`stream-consumer.service.ts`).
