@@ -861,3 +861,25 @@ ambiguous judgment call with a real "wrong" alternative to track.
 strategy) — PR description must call out the `200→400` behavior change for
 out-of-range `schemaVersion` values, per the plan's own instruction — then continue the
 `/implement` loop to Phase 4 (explicit gRPC channel options).
+
+### Phase 3 — ship-gate + push — 2026-09-22
+Fresh Opus ship-gate verifier (distinct from the implement-stage verifier, same diff
+`main...HEAD`): **PASS**, no blocking findings. Independently re-derived correctness of
+`POLICY_SCHEMA_VERSIONS`/the membership check, cross-checked the in-code runtime-source
+citations directly against `evaluator.rs`/`registry.rs`, swept the whole repo for any
+caller sending an out-of-range `schemaVersion` (found none — only
+`policy.integration.spec.ts:80` sends one, and it's `1`), and independently re-ran the
+full suite (798/798), lint, build, and convention greps. 4 non-blocking notes; 3 folded in
+before push (see the commit above): a new `ASSUMPTIONS.md` entry for the real judgment
+call (this repo's check is now stricter than the runtime's own admission gate, with no
+automated trigger to widen it if the runtime's set grows past `{1,2,3}`); corrected
+`PROGRESS.md`'s P2 row to cite the actual squash commit instead of pre-squash branch
+commits that become unresolvable once that branch is pruned; and a `docs/API.md` note
+that the check is type-strict as well as range-strict (a JSON string `"1"` used to coerce
+through and succeed, now rejected). The 4th note — `macp-ui-console`'s client-side policy
+form still validates only `> 0`, so an operator entering `4` now gets a server-side `400`
+toast instead of the console's own validation catching it — is out of this repo's scope
+(cross-repo, not a write this repo makes) and is named in the PR description instead.
+
+pushed absorb-runtime-v0.8.0-p3 4cd4a83
+PR #83 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/83
