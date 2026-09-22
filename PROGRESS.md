@@ -628,3 +628,14 @@ lint` clean, `npm test` 56/56 suites, 786/786 tests, `npm run build` clean, and 
 case-insensitivity + cleanup-on-throw behaviors re-confirmed live against real containers
 after the refactor (zero leaked containers, `INTEGRATION_RUNTIME` correctly normalized
 and observable via `process.env` after `globalSetup()` returns).
+
+### Phase 1 — ship-gate round 2 (closure check) — 2026-09-22
+Fresh Opus subagent, given round 1's 6-item gap list and asked to confirm closure rather
+than review cold, per `/ship`'s re-verify loop. **Verdict: PASS.** All 5 fixable items
+confirmed closed against current source (item 6, the Commit/PR row, correctly confirmed
+still open-but-explicitly-deferred, not silently dropped). Independently re-ran
+`npm run lint`/`tsc --noEmit`/`npm test` (56/786)/`npm run build` — all clean. Also
+smoke-ran `global-teardown.ts`'s new cross-module import of `stopCommand` at runtime to
+confirm it actually resolves, not just that the import statement is present.
+
+pushed absorb-runtime-v0.8.0 7fc96304d445baaad47b5d72e9c2c7ef57a4a159
