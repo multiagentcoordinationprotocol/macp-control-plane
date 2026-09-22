@@ -399,7 +399,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | P3 tighten schema_version pre-check | DONE | 1 (implement PASS) + 1 (ship-gate PASS) | Opus (fresh subagent, both gates) | `2ac9dc6` | merged #83 |
 | P4 explicit gRPC channel options | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `fe6c70d` (squash) | merged #84 |
 | P5 non-blocking post-commit publish side effects | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `2a6e1d2` (squash) | merged #85 |
-| P6 handoff implicit-accept integration test | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) | Opus (fresh subagent, both rounds) | `23bca58` | (pending — ships via `/ship`) |
+| P6 handoff implicit-accept integration test | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) + 1 (ship-gate: 1 GAPS→closed) | Opus (fresh subagent, all rounds) | `e8258fc` (squash) | merged #86 |
 | P7 listSessions() admin drift-detection endpoint | TODO | — | — | — | — |
 | P8 bump @multiagentcoordinationprotocol/proto to 0.1.10 | DONE (independently, PR #80, pre-dates this plan) | 0 | n/a | 23db607 (#80) | #80 (already merged) |
 
@@ -1251,5 +1251,17 @@ pushed absorb-runtime-v0.8.0-p6 417c40f
 
 PR #86 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/86
 
-**What's next:** watch CI, merge — then continue the `/implement` loop to Phase 7
-(`listSessions()` admin drift-detection endpoint).
+All 11 required checks green (analyze/CodeQL, audit, build, check-env-secrets,
+conventions, docker, integration-test, lint, test, typecheck, call/auto-merge skipping as
+expected). One transient false alarm during the watch: GitHub queued two separate CI runs
+against the same head SHA a few minutes apart; the concurrency group (`cancel-in-progress`
+on `pull_request` events) cancelled the older run mid-flight, which briefly showed
+`docker: fail`/`cancel` in `gh pr checks` even though every step in that job had actually
+succeeded before cancellation (confirmed via the Actions API — job conclusion `cancelled`,
+not a real failure). The newer, superseding run completed with all jobs green; cross-
+confirmed via `gh pr checks 86` before merging, not trusted from the watch alone. No
+deploy triggered — `workflow_dispatch`-only, unchanged. merged #86 (squash, `e8258fc`,
+branch deleted).
+
+**Phase 6 fully closed.** Next: Phase 7 (`listSessions()` admin drift-detection
+endpoint).
