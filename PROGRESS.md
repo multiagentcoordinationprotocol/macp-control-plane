@@ -1088,3 +1088,9 @@ unrelated doc inaccuracy in `docs/ARCHITECTURE.md` misattributing which service 
 
 Following the same precedent as Phase 4's zero-gap ship-gate: no follow-up commit for
 non-blocking observations, proceeding straight to push.
+
+pushed absorb-runtime-v0.8.0-p5 c7b6563
+PR #85 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/85
+
+**What's next:** watch CI, merge, then continue the `/implement` loop to Phase 6 (handoff
+implicit-accept integration test coverage).
