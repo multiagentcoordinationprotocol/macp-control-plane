@@ -398,7 +398,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | P2 stream pipeline: policy.denied inline match, compacted-history regex, gap-detection ordering | DONE | 1 (implement) + 1 GAPS→closed (ship-gate) | Opus (fresh subagent, both gates) | `3188017` (squash; pre-squash branch commits `e0e431e`/`965a2bf` are unreachable once `absorb-runtime-v0.8.0-p2` is pruned) | merged #82 |
 | P3 tighten schema_version pre-check | DONE | 1 (implement PASS) + 1 (ship-gate PASS) | Opus (fresh subagent, both gates) | `2ac9dc6` | merged #83 |
 | P4 explicit gRPC channel options | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `fe6c70d` (squash) | merged #84 |
-| P5 non-blocking post-commit publish side effects | TODO | — | — | — | — |
+| P5 non-blocking post-commit publish side effects | DONE | 1 (implement PASS, 5 non-blocking nits folded in) | Opus (fresh subagent) | (pending) | (none yet — ships via `/ship`) |
 | P6 handoff implicit-accept integration test | TODO | — | — | — | — |
 | P7 listSessions() admin drift-detection endpoint | TODO | — | — | — | — |
 | P8 bump @multiagentcoordinationprotocol/proto to 0.1.10 | DONE (independently, PR #80, pre-dates this plan) | 0 | n/a | 23db607 (#80) | #80 (already merged) |
@@ -976,3 +976,85 @@ conventions, docker, integration-test, lint, test, typecheck). merged #84 (squas
 
 **Phase 4 fully closed.** Next: Phase 5 (non-blocking post-commit publish side effects —
 `run-event.service.ts`/`stream-consumer.service.ts`).
+
+### Phase 5 — implement + verify — 2026-09-22
+Branch `absorb-runtime-v0.8.0-p5` (off `main` at `9cf4585`, post-Phase-4-merge). Implemented
+per plan §Phase 5: `RunEventService.emitControlPlaneEvents`/`persistRawAndCanonical` both
+used to run post-commit side effects (span annotations, metrics recording, SSE publish,
+snapshot publish) that could throw and propagate to the caller even though the DB
+transaction had already committed — causing `StreamConsumerService` to treat an
+already-durable envelope as failed and re-ingest it on reconnect (duplicate rows, since a
+redelivered event gets a fresh id/seq and `onConflictDoNothing` can't dedup it). Fixed by
+extracting a shared private `runPostCommitSideEffects(runId, events, projection)` helper
+that wraps metrics/publish-event/publish-snapshot in three independent try/catch blocks,
+logging via a newly-added `Logger` (per CLAUDE.md convention) rather than rethrowing.
+`publishEvent` is caught **per event inside its loop**, not once around the whole batch, so
+one bad event doesn't suppress publishing its siblings — a small strengthening beyond the
+plan's literal wording, in the spirit of its own "one failure doesn't suppress the others"
+edge case.
+
+Separately, `StreamConsumerService.consumeLoop`'s launch chain in `start()` had only a
+`.finally()`, no `.catch()` — so anything escaping its own per-iteration error handling
+(the two unprotected `emitControlPlaneEvents` call sites: `emitStreamGap` and the
+poll-fallback's reconnect event) became an unhandled promise rejection that crashes the
+whole Node process (pre-existing hazard, not introduced by Phase 2, but explicitly folded
+into this phase's scope per the plan). Added a last-resort `.catch()` that logs and marks
+the marker `finalized`/`aborted` — deliberately does **not** call `finalizeRun`/`markFailed`
+(a second fallible async operation inside the one place that must not throw would risk
+recreating the exact hazard being closed); logged as an `UNCONFIRMED` judgment call in
+`ASSUMPTIONS.md` (P5) with full blast-radius reasoning, mitigated by
+`RunRecoveryService.onApplicationBootstrap()` (gated on `RUN_RECOVERY_ENABLED`, default
+`true`) re-attaching non-terminal runs on the next restart.
+
+Also added the Prometheus counter the plan flagged as "a reasonable near-term addition...
+if time allows" rather than deferring it: `macp_post_commit_side_effect_failures_total`
+(labeled `step`: `metrics`/`publish_event`/`publish_snapshot`) in
+`instrumentation.service.ts`, wired into `RunEventService` via constructor injection
+(trivial in this repo's single-module DI setup — confirmed via `app.module.ts`, no module
+wiring changes needed). Updated the now-stale comment on `envelopeOrdinal` in
+`handleRawEventInner` (`stream-consumer.service.ts`) that described the old
+duplication-over-loss trade-off, which no longer applies now that post-commit failures
+can't throw at all.
+
+**Local verification:** lint clean; full `npx tsc --noEmit -p test/tsconfig.test.json`
+clean; full `npm test` 815/815 (56/56 suites, 3 new: 2 in `run-event.service.spec.ts`
+covering the twin publish-failure case and `emitControlPlaneEvents`'s own post-commit path,
+1 in `stream-consumer.service.spec.ts` proving the new `.catch()` absorbs a rejection that
+would otherwise be unhandled — verified load-bearing by temporarily reverting each fix and
+confirming the corresponding new test fails); `npm run build` clean; all 3 CI convention
+greps empty; mock-mode `npm run test:integration` 103/103 both before and after adding the
+`InstrumentationService` constructor dependency (the second run is the meaningful one — a
+real Nest app bootstrap under integration test would fail if the new DI dependency weren't
+resolvable).
+
+**Verify — fresh Opus subagent: PASS**, with 5 non-blocking nits, all folded in before
+commit: (1) the new JSDoc on `runPostCommitSideEffects` claimed "each step is caught... independently"
+in a way that read as covering `recordSpanEvents` too, which is intentionally left
+unwrapped (pure in-memory annotation, no I/O) — reworded for precision; (2) this very
+PROGRESS.md entry was missing at gate time (the plan's Phase 5 section already pointed to
+it) — written now; (3) the `ASSUMPTIONS.md` P5 entry's blast-radius section didn't mention
+that `streamHub.complete(runId)` also never fires when the safety net trips, leaving a
+live SSE client's connection open with no completion signal (bounded, not a leak — the
+memory strategy's per-run `Subject` is reaped by the existing subscriber-count cleanup
+timer) — added, along with confirming `RUN_RECOVERY_ENABLED`'s default is `true`, not
+opt-in; (4) the new counter was undocumented — added a `CLAUDE.md` line (Key Reliability
+Features) alongside the existing stream-resume metrics documentation; (5) a candid
+observation (not a gap — already covered by the plan's own Rollback section) that a
+swallowed metrics failure is now a permanent under-count for that run's token/cost totals,
+with the counter + log as the only recovery signal. The verifier also ran two mutation
+checks (removing the new `.catch()`, collapsing the per-event publish catch into one
+batch-level catch) and confirmed the corresponding new tests fail without the fix, proving
+they're load-bearing rather than accidentally green.
+
+`plans/absorb-runtime-v0.8.0.md`'s Phase 5 section marked `Status: DONE` with a divergence
+note (shared helper vs. duplicated try/catch, per-event vs. per-batch publish catch, counter
+added in-phase rather than deferred). New `ASSUMPTIONS.md` entry: "P5 (v0.8.0) —
+consumeLoop's last-resort `.catch()` marks the stream marker finalized/aborted but never
+calls `finalizeRun`/`markFailed`" (Status: UNCONFIRMED).
+
+Committed as (pending).
+
+**What's next:** hand off to `/ship` (PR #5) — no behavior-change callout needed beyond what
+the PR description itself will explain (this is an internal reliability fix with no public
+API surface change) — then continue the `/implement` loop to Phase 6 (handoff
+implicit-accept integration test coverage).

@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { RunEventService } from './run-event.service';
 import { DatabaseService } from '../db/database.service';
 import { RunRepository } from '../storage/run.repository';
@@ -16,6 +17,8 @@ describe('RunEventService', () => {
   let projectionService: jest.Mocked<ProjectionService>;
   let metricsService: jest.Mocked<MetricsService>;
   let streamHub: jest.Mocked<StreamHubService>;
+  let postCommitSideEffectFailuresTotal: { inc: jest.Mock };
+  let errorSpy: jest.SpyInstance;
   let mockTx: Record<string, unknown>;
   // Shared lifecycle log used to prove commit-before-side-effects ordering.
   // The transaction mock only pushes 'tx:committed' after its callback resolves
@@ -44,6 +47,7 @@ describe('RunEventService', () => {
   beforeEach(() => {
     mockTx = {};
     callOrder = [];
+    errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
 
     database = {
       db: {
@@ -100,6 +104,8 @@ describe('RunEventService', () => {
       })
     } as unknown as jest.Mocked<StreamHubService>;
 
+    postCommitSideEffectFailuresTotal = { inc: jest.fn() };
+
     service = new RunEventService(
       database,
       runRepository,
@@ -112,8 +118,13 @@ describe('RunEventService', () => {
         withSpan: jest.fn(<T>(_name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
         addRunSpanEvent: jest.fn(),
         getRunTraceContext: jest.fn().mockReturnValue(undefined)
-      } as any
+      } as any,
+      { postCommitSideEffectFailuresTotal } as any
     );
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
   });
 
   describe('emitControlPlaneEvents', () => {
@@ -338,35 +349,34 @@ describe('RunEventService', () => {
       expect(result[1].id).not.toBe('');
     });
 
-    it('rejects on a post-commit metrics failure even though the transaction already committed (duplication-over-loss window)', async () => {
+    it('resolves on a post-commit metrics failure even though the transaction already committed (Phase 5, runtime 0.8.0 absorption)', async () => {
       // The DB transaction (allocateSequence/appendRaw/appendCanonical/applyAndPersist)
-      // commits before metricsService.recordEvents and streamHub.publish* run. If
-      // recordEvents throws, the caller (StreamConsumerService.handleRawEventInner)
-      // sees a rejected promise and never bumps its envelope ordinal, so the runtime
-      // redelivers this envelope — appending duplicate rows, since the redelivered
-      // event gets a fresh id/seq and onConflictDoNothing cannot dedup it.
+      // commits before metricsService.recordEvents and streamHub.publish* run. Since
+      // the events are already durable by that point, a post-commit metrics failure
+      // must not propagate: the caller (StreamConsumerService.handleRawEventInner)
+      // would otherwise see a rejected promise, never bump its envelope ordinal, and
+      // have the runtime redeliver this envelope on reconnect — appending duplicate
+      // rows, since the redelivered event gets a fresh id/seq and onConflictDoNothing
+      // cannot dedup it. Instead, RunEventService now catches and logs this failure
+      // and the call resolves normally.
       //
-      // Unlike a plain "does the promise reject" check, this asserts the actual
-      // commit-before-side-effects ordering via the shared `callOrder` log: the
-      // transaction mock only records 'tx:committed' after its callback resolves
-      // (and 'tx:rolled-back' if the callback throws — see beforeEach). If
-      // metrics/publish were moved inside the transaction callback (which would
-      // invert the durability guarantee this test protects — see
-      // src/events/run-event.service.ts persistRawAndCanonical), the callback
-      // would throw, the mock would record 'tx:rolled-back' instead of
-      // 'tx:committed', and the ordering assertions below would fail.
+      // This also asserts the actual commit-before-side-effects ordering via the
+      // shared `callOrder` log: the transaction mock only records 'tx:committed'
+      // after its callback resolves (and 'tx:rolled-back' if the callback throws —
+      // see beforeEach). If metrics/publish were moved inside the transaction
+      // callback, the callback would throw, the mock would record 'tx:rolled-back'
+      // instead of 'tx:committed', and the ordering assertions below would fail.
       runRepository.allocateSequence.mockResolvedValue(1);
       metricsService.recordEvents.mockImplementationOnce(async () => {
         callOrder.push('metrics:recordEvents');
         throw new Error('metrics backend unavailable');
       });
 
-      await expect(service.persistRawAndCanonical('run-1', rawEvent, canonicalEvents)).rejects.toThrow(
-        'metrics backend unavailable'
-      );
+      const result = await service.persistRawAndCanonical('run-1', rawEvent, canonicalEvents);
+      expect(result).toHaveLength(2);
 
       // The transaction (and everything inside it) already ran and resolved —
-      // the events are durably persisted before the rejection surfaces.
+      // the events are durably persisted regardless of the metrics outcome.
       expect(eventRepository.appendRaw).toHaveBeenCalled();
       expect(eventRepository.appendCanonical).toHaveBeenCalled();
       expect(projectionService.applyAndPersist).toHaveBeenCalled();
@@ -379,12 +389,68 @@ describe('RunEventService', () => {
       expect(commitIndex).toBeGreaterThanOrEqual(0);
       expect(metricsIndex).toBeGreaterThan(commitIndex);
 
-      // The failure happened after the commit, so downstream publish (which
-      // runs after metrics in source order) never fires for this call.
-      expect(streamHub.publishEvent).not.toHaveBeenCalled();
-      expect(streamHub.publishSnapshot).not.toHaveBeenCalled();
-      expect(callOrder).not.toContain('publish:event');
-      expect(callOrder).not.toContain('publish:snapshot');
+      // The metrics failure must not suppress the sibling post-commit steps.
+      expect(streamHub.publishEvent).toHaveBeenCalledTimes(2);
+      expect(streamHub.publishSnapshot).toHaveBeenCalledWith('run-1', fakeProjection);
+
+      // The failure was logged, not swallowed silently.
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('metrics backend unavailable'));
+      expect(postCommitSideEffectFailuresTotal.inc).toHaveBeenCalledWith({ step: 'metrics' });
+    });
+
+    it('resolves on a post-commit SSE publish failure, with metrics and snapshot still recorded (twin of the metrics-failure case)', async () => {
+      runRepository.allocateSequence.mockResolvedValue(1);
+      streamHub.publishEvent.mockImplementationOnce(() => {
+        callOrder.push('publish:event');
+        throw new Error('stream hub unavailable');
+      });
+
+      const result = await service.persistRawAndCanonical('run-1', rawEvent, canonicalEvents);
+      expect(result).toHaveLength(2);
+
+      // Metrics still recorded despite the first publishEvent throwing.
+      expect(metricsService.recordEvents).toHaveBeenCalledWith('run-1', result);
+      // The second event's publish still fires — one bad event doesn't block its siblings.
+      expect(streamHub.publishEvent).toHaveBeenCalledTimes(2);
+      expect(streamHub.publishEvent).toHaveBeenCalledWith(result[1]);
+      // Snapshot publish still fires after a publishEvent failure.
+      expect(streamHub.publishSnapshot).toHaveBeenCalledWith('run-1', fakeProjection);
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('stream hub unavailable'));
+      expect(postCommitSideEffectFailuresTotal.inc).toHaveBeenCalledWith({ step: 'publish_event' });
+    });
+  });
+
+  describe('post-commit failure isolation on emitControlPlaneEvents (Phase 5, runtime 0.8.0 absorption)', () => {
+    // emitControlPlaneEvents shares the identical post-commit tail with
+    // persistRawAndCanonical (see runPostCommitSideEffects) — this is its own
+    // post-commit path, exercised because it's what emitStreamGap /
+    // stream-consumer.service.ts's poll-fallback reconnect event call into, and
+    // AC2 explicitly requires this path (not just persistRawAndCanonical's) to
+    // resolve rather than throw on a post-commit failure.
+    it('resolves on a post-commit metrics failure instead of throwing out to emitStreamGap/consumeLoop', async () => {
+      runRepository.allocateSequence.mockResolvedValue(1);
+      metricsService.recordEvents.mockImplementationOnce(async () => {
+        throw new Error('metrics backend unavailable');
+      });
+
+      const partialEvents = [
+        {
+          ts: '2026-01-01T00:00:00.000Z',
+          type: 'session.stream.gap' as const,
+          source: { kind: 'macp-control-plane' as const, name: 'stream-consumer' },
+          subject: { kind: 'session' as const, id: 'session-1' },
+          data: { requestedAfter: 5, detail: 'compacted' }
+        }
+      ];
+
+      const result = await service.emitControlPlaneEvents('run-1', partialEvents);
+
+      expect(result).toHaveLength(1);
+      expect(streamHub.publishEvent).toHaveBeenCalledTimes(1);
+      expect(streamHub.publishSnapshot).toHaveBeenCalledWith('run-1', fakeProjection);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('metrics backend unavailable'));
+      expect(postCommitSideEffectFailuresTotal.inc).toHaveBeenCalledWith({ step: 'metrics' });
     });
   });
 });
