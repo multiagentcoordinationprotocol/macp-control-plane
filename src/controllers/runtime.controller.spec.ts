@@ -261,7 +261,79 @@ describe('RuntimeController', () => {
           rules: {},
           schemaVersion: 0
         })
-      ).rejects.toThrow('schemaVersion must be > 0');
+      ).rejects.toThrow('schemaVersion must be one of 1, 2, 3');
+    });
+
+    it('rejects an out-of-range schemaVersion (the runtime accepts this at registration today and only fails later, silently, at evaluation)', async () => {
+      await expect(
+        controller.registerPolicy({
+          policyId: 'policy.test',
+          mode: '*',
+          description: 'Out of range version',
+          rules: {},
+          schemaVersion: 99
+        })
+      ).rejects.toThrow('schemaVersion must be one of 1, 2, 3');
+      expect(mockProvider.registerPolicy).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-integer schemaVersion', async () => {
+      await expect(
+        controller.registerPolicy({
+          policyId: 'policy.test',
+          mode: '*',
+          description: 'Fractional version',
+          rules: {},
+          schemaVersion: 1.5
+        })
+      ).rejects.toThrow('schemaVersion must be one of 1, 2, 3');
+      expect(mockProvider.registerPolicy).not.toHaveBeenCalled();
+    });
+
+    it('accepts schemaVersion 2', async () => {
+      mockProvider.registerPolicy.mockResolvedValue({ ok: true });
+
+      const result = await controller.registerPolicy({
+        policyId: 'policy.test',
+        mode: 'macp.mode.decision.v1',
+        description: 'Version 2',
+        rules: { voting: { algorithm: 'majority' } },
+        schemaVersion: 2
+      });
+
+      expect(result).toEqual({ ok: true });
+      expect(mockProvider.registerPolicy).toHaveBeenCalled();
+    });
+
+    it('accepts schemaVersion 3', async () => {
+      mockProvider.registerPolicy.mockResolvedValue({ ok: true });
+
+      const result = await controller.registerPolicy({
+        policyId: 'policy.test',
+        mode: 'macp.mode.decision.v1',
+        description: 'Version 3',
+        rules: { voting: { algorithm: 'majority' } },
+        schemaVersion: 3
+      });
+
+      expect(result).toEqual({ ok: true });
+      expect(mockProvider.registerPolicy).toHaveBeenCalled();
+    });
+
+    it('defaults omitted schemaVersion to 1 and succeeds', async () => {
+      mockProvider.registerPolicy.mockResolvedValue({ ok: true });
+
+      const result = await controller.registerPolicy({
+        policyId: 'policy.test',
+        mode: 'macp.mode.decision.v1',
+        description: 'Default version',
+        rules: { voting: { algorithm: 'majority' } }
+      });
+
+      expect(result).toEqual({ ok: true });
+      expect(mockProvider.registerPolicy).toHaveBeenCalledWith({
+        descriptor: expect.objectContaining({ schemaVersion: 1 })
+      });
     });
 
     it('rejects weighted algorithm without weights', async () => {

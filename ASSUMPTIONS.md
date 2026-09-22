@@ -374,3 +374,33 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   but it is an unbounded-cardinality string landing in a trace attribute if tracing is later
   enabled, worth revisiting before this repo turns OTel on for policy-heavy deployments.
 - **Status:** UNCONFIRMED
+
+## P3 (v0.8.0) — the CP's schemaVersion pre-check is now deliberately stricter than the runtime's own admission gate, with no tracked trigger to widen it
+- **Plan:** `plans/absorb-runtime-v0.8.0.md` (Phase 3)
+- **Assumed:** Tightening `POST /runtime/policies`'s local pre-check from `>= 1` to the closed set
+  `{1,2,3}` is unambiguously correct today, because it matches the runtime's own
+  *evaluation-time* authoritative set (`macp-runtime crates/macp-policy/src/evaluator.rs`,
+  `SUPPORTED_SCHEMA_VERSIONS`) rather than its looser registration-time admission check
+  (`registry.rs:301-303`, which only rejects `0`). What the plan didn't separately call out as a
+  judgment call: this repo's check is now the *stricter* of the two runtime-adjacent checks, by
+  design — a future runtime release that adds `schema_version: 4` (widening evaluator.rs's set)
+  would make that value immediately registerable against the runtime directly, but this repo would
+  keep rejecting it with a `400` until `POLICY_SCHEMA_VERSIONS` is manually updated here. There is
+  no automated staleness detector for this — nothing fails a build or a test when the runtime's
+  actual supported set drifts from this repo's copy of it.
+- **Chose:** Ship the hardcoded `{1,2,3}` constant as planned rather than, e.g., fetching the
+  supported set from the runtime's manifest at startup (no such field exists in the manifest
+  today) or omitting the local pre-check entirely and letting the runtime be sole authority
+  (rejected in the plan itself — that reintroduces the silent-registration-then-silent-evaluation-
+  failure gap this phase exists to close).
+- **Alternatives:** (a) No local enum check, `>= 1` only (the pre-Phase-3 status quo) — rejected,
+  reintroduces the bug this phase fixes; (b) derive the set from a runtime capability/manifest
+  field — rejected, no such field exists to derive it from today, would require a runtime-side
+  change out of scope for this plan.
+- **Blast radius if wrong (i.e., if the runtime widens its set before this repo is updated):** a
+  legitimate `schema_version: 4` policy registration gets a spurious local `400` until someone
+  bumps `POLICY_SCHEMA_VERSIONS`. Not silent (visible 400, not a data-integrity issue), fully
+  reversible by a one-line constant change — but currently has no CI/monitoring signal to prompt
+  that change; it would surface only as an operator-reported registration failure after a runtime
+  upgrade.
+- **Status:** UNCONFIRMED
