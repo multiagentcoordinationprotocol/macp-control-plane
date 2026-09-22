@@ -218,7 +218,30 @@ Validate both as positive integers in the existing validation block (`app-config
 
 ### Phase 5 — Make publish-side failures non-blocking for the stream consumer
 
-**Status:** TODO
+**Status:** DONE (2026-09-22)
+
+**Divergence from plan:** Implemented as designed, with three notes:
+1. Both `emitControlPlaneEvents` and `persistRawAndCanonical` shared an identical
+   post-commit tail (`recordSpanEvents`/`metricsService.recordEvents`/`streamHub.publishEvent`/
+   `streamHub.publishSnapshot`), so the fix was extracted into one shared private
+   `runPostCommitSideEffects(runId, events, projection)` helper rather than duplicating three
+   independent try/catch blocks in both methods — same behavior the plan asked for, DRYer
+   implementation. `streamHub.publishEvent` is now caught **per event inside the loop**, not
+   once around the whole `forEach`, so one bad event in a batch doesn't suppress publishing its
+   siblings — a small strengthening beyond the plan's literal wording, in the same spirit as its
+   "so one failure doesn't suppress the others" edge case.
+2. Added the Prometheus counter the plan flagged as "a reasonable near-term addition... if time
+   allows" (`macp_post_commit_side_effect_failures_total`, labeled by `step`) rather than
+   deferring it — it's genuinely the operational signal for the failure mode this phase makes
+   silent, and the cost was small.
+3. **Judgment call, logged to `ASSUMPTIONS.md` (P5):** the new `consumeLoop` `.catch()` safety
+   net marks the stream marker `finalized`/`aborted` and logs, but deliberately does **not** call
+   `finalizeRun`/`markFailed` — calling another fallible async operation from inside the one
+   place that must not throw would risk recreating the exact hazard being closed. See the
+   `ASSUMPTIONS.md` entry for the full reasoning and blast radius (mitigated by
+   `RunRecoveryService.onApplicationBootstrap()` re-attaching non-terminal runs on restart).
+
+All 5 acceptance criteria met; see PROGRESS.md for the verify round and test summary.
 **Delivers:** A persistent (non-transient) failure in post-commit side effects (metrics recording, SSE publish, control-plane event emission) no longer causes the stream consumer to re-fetch and re-apply an already-durably-persisted envelope on every reconnect, and can no longer crash the process via an uncaught rejection.
 **Depends on:** none.
 **Files:**

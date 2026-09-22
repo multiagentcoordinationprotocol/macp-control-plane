@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { StreamConsumerService } from './stream-consumer.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { EventNormalizerService } from '../events/event-normalizer.service';
@@ -745,6 +746,44 @@ describe('StreamConsumerService', () => {
         expect(gapEmitted).toBe(false); // no duplicate gap event
         expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
         expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
+      });
+    });
+
+    describe('consumeLoop safety net (Phase 5, runtime 0.8.0 absorption)', () => {
+      it('prevents an unhandled promise rejection when something escapes consumeLoop\'s own error handling', async () => {
+        // consumeLoop's poll-fallback loop calls eventService.emitControlPlaneEvents
+        // (the "reconnecting" session.stream.opened event) outside any try/catch of
+        // its own. Before this phase, that promise chain (wired in start(), not
+        // consumeLoop itself) had no .catch() at all, so a rejection here would
+        // become an unhandled promise rejection and crash the process. Simulate
+        // exactly that: getSession resolves to a non-terminal state (so the poll
+        // loop falls through to the reconnect-event call) and
+        // emitControlPlaneEvents rejects on that call.
+        const mockProvider = {
+          getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RUNNING' })
+        };
+        runtimeRegistry.get.mockReturnValue(mockProvider as any);
+        eventService.emitControlPlaneEvents.mockRejectedValueOnce(
+          new Error('unexpected control-plane emit failure')
+        );
+        const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+
+        try {
+          await service.start({ ...baseParams, runId: 'run-safety-net' });
+          const marker = (service as any).active.get('run-safety-net');
+          expect(marker).toBeDefined();
+
+          // If the new .catch() weren't wired up, this await would reject and fail
+          // the test with the "unexpected control-plane emit failure" error instead
+          // of resolving — proving the safety net actually absorbs the rejection.
+          await expect(marker.loopPromise).resolves.toBeUndefined();
+
+          expect(marker.finalized).toBe(true);
+          expect(marker.aborted).toBe(true);
+          expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('unexpected control-plane emit failure'));
+        } finally {
+          errorSpy.mockRestore();
+        }
       });
     });
   });

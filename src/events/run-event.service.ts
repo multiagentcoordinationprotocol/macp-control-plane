@@ -1,12 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { CanonicalEvent } from '../contracts/control-plane';
+import { CanonicalEvent, RunStateProjection } from '../contracts/control-plane';
 import { RawRuntimeEvent } from '../contracts/runtime';
 import { DatabaseService } from '../db/database.service';
 import { MetricsService } from '../metrics/metrics.service';
 import { ProjectionService, PROJECTION_SCHEMA_VERSION } from '../projection/projection.service';
 import { EventRepository } from '../storage/event.repository';
 import { RunRepository } from '../storage/run.repository';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { TraceService } from '../telemetry/trace.service';
 import { StreamHubService } from './stream-hub.service';
 
@@ -37,6 +38,8 @@ const KEY_EVENT_SPAN_ANNOTATIONS: Record<
 
 @Injectable()
 export class RunEventService {
+  private readonly logger = new Logger(RunEventService.name);
+
   constructor(
     private readonly database: DatabaseService,
     private readonly runRepository: RunRepository,
@@ -44,7 +47,8 @@ export class RunEventService {
     private readonly projectionService: ProjectionService,
     private readonly metricsService: MetricsService,
     private readonly streamHub: StreamHubService,
-    private readonly traceService: TraceService
+    private readonly traceService: TraceService,
+    private readonly instrumentation: InstrumentationService
   ) {}
 
   async emitControlPlaneEvents(
@@ -82,10 +86,7 @@ export class RunEventService {
         })
     );
 
-    this.recordSpanEvents(runId, events);
-    await this.metricsService.recordEvents(runId, events);
-    events.forEach((event) => this.streamHub.publishEvent(event));
-    this.streamHub.publishSnapshot(runId, projection);
+    await this.runPostCommitSideEffects(runId, events, projection);
     return events;
   }
 
@@ -125,11 +126,63 @@ export class RunEventService {
         })
     );
 
-    this.recordSpanEvents(runId, normalized);
-    await this.metricsService.recordEvents(runId, normalized);
-    normalized.forEach((event) => this.streamHub.publishEvent(event));
-    this.streamHub.publishSnapshot(runId, projection);
+    await this.runPostCommitSideEffects(runId, normalized, projection);
     return normalized;
+  }
+
+  /**
+   * Runs the post-commit side effects (span annotations, metrics, SSE
+   * publish) for a batch of events whose DB transaction has already
+   * committed. None of these steps can undo that commit, so a failure here
+   * must never propagate to the caller: `StreamConsumerService` treats a
+   * rejected promise as "not yet durable" and re-ingests the same envelope on
+   * the next reconnect, appending duplicate rows (see the comment on
+   * `envelopeOrdinal` in `handleRawEventInner`). The metrics/publish/snapshot
+   * steps are each caught and logged independently so one failure (e.g. a
+   * metrics backend outage) doesn't suppress the others (e.g. SSE publish
+   * still reaching connected clients). `recordSpanEvents` itself is left
+   * unwrapped: it's a pure in-memory annotation over already-decoded fields
+   * (no I/O), and `TraceService.addRunSpanEvent` is a no-throw-by-contract
+   * OTel call that no-ops when there's no active run span.
+   */
+  private async runPostCommitSideEffects(
+    runId: string,
+    events: CanonicalEvent[],
+    projection: RunStateProjection
+  ): Promise<void> {
+    this.recordSpanEvents(runId, events);
+
+    try {
+      await this.metricsService.recordEvents(runId, events);
+    } catch (error) {
+      this.instrumentation.postCommitSideEffectFailuresTotal.inc({ step: 'metrics' });
+      this.logger.error(
+        `metrics recording failed for run ${runId} after commit (${events.length} event(s) already durable): ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
+    for (const event of events) {
+      try {
+        this.streamHub.publishEvent(event);
+      } catch (error) {
+        this.instrumentation.postCommitSideEffectFailuresTotal.inc({ step: 'publish_event' });
+        this.logger.error(
+          `SSE publish failed for run ${runId}, event ${event.id} after commit: ` +
+            `${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+
+    try {
+      this.streamHub.publishSnapshot(runId, projection);
+    } catch (error) {
+      this.instrumentation.postCommitSideEffectFailuresTotal.inc({ step: 'publish_snapshot' });
+      this.logger.error(
+        `snapshot publish failed for run ${runId} after commit: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   private recordSpanEvents(runId: string, events: CanonicalEvent[]): void {

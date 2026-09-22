@@ -85,10 +85,29 @@ export class StreamConsumerService implements OnModuleDestroy {
     };
     this.active.set(params.runId, marker);
     this.instrumentation.activeStreams.inc();
-    marker.loopPromise = this.consumeLoop(marker, params).finally(() => {
-      this.instrumentation.activeStreams.dec();
-      this.active.delete(params.runId);
-    });
+    marker.loopPromise = this.consumeLoop(marker, params)
+      .catch((error) => {
+        // Last-resort safety net (Phase 5, runtime 0.8.0 absorption). consumeLoop's
+        // own per-iteration try/catch blocks handle every known stream/poll failure;
+        // this only fires for something that still escapes them — e.g. a future bug
+        // in a post-commit side effect — and exists solely to stop an unhandled
+        // promise rejection from crashing the process (Node >=15 default), since this
+        // promise chain previously had no .catch() at all. Deliberately does NOT call
+        // finalizeRun()/markFailed(): those are themselves async and fallible, and
+        // invoking a fallible operation from inside this net would risk recreating
+        // the exact unhandled-rejection hazard being closed here. Marking the marker
+        // directly is enough to stop the loop and let the .finally() below clean up.
+        this.logger.error(
+          `consumeLoop for run ${params.runId} failed unexpectedly and was stopped: ` +
+            `${error instanceof Error ? error.message : String(error)}`
+        );
+        marker.finalized = true;
+        marker.aborted = true;
+      })
+      .finally(() => {
+        this.instrumentation.activeStreams.dec();
+        this.active.delete(params.runId);
+      });
   }
 
   async stop(runId: string): Promise<void> {
@@ -477,16 +496,16 @@ export class StreamConsumerService implements OnModuleDestroy {
     // already only advances after a successful persist via
     // updateStreamCursor below.
     //
-    // "Persist failure" here also covers a *post-commit* failure inside
-    // persistRawAndCanonical — the DB transaction (raw + canonical rows +
-    // projection) commits first, and metrics recording / StreamHub publish run
-    // after it, outside the transaction. If either of those throws, the events
-    // are already durable but this line is never reached, so the ordinal does
-    // not advance and the runtime redelivers the same envelope on resubscribe.
-    // That redelivery appends duplicate rows (fresh id + seq, so
-    // onConflictDoNothing cannot dedup it) rather than being lost. This is
-    // deliberate: duplication is the intentionally-chosen failure mode here,
-    // preferred over the silent loss the pre-fix ordinal advancement produced.
+    // Updated contract (Phase 5, runtime 0.8.0 absorption): `persistRawAndCanonical`
+    // now only throws for a genuine *pre-commit* (transaction) failure — the events
+    // were never durably persisted, so re-ingesting them on the next reconnect is
+    // correct and this line is rightly never reached. A *post-commit* failure
+    // (metrics recording, StreamHub publish) can no longer throw at all: RunEventService
+    // catches and logs each of those independently once the transaction has committed,
+    // so this line always runs once the events are durable, and the ordinal always
+    // advances with them. The old duplication-over-loss trade-off this comment used to
+    // describe no longer applies — there is nothing left to duplicate, since a
+    // post-commit failure is now silent (logged) rather than a thrown rejection.
     if (raw.kind === 'stream-envelope' && raw.envelope) {
       marker.envelopeOrdinal += 1;
     }

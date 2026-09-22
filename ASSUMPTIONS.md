@@ -404,3 +404,42 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   that change; it would surface only as an operator-reported registration failure after a runtime
   upgrade.
 - **Status:** UNCONFIRMED
+
+## P5 (v0.8.0) — consumeLoop's last-resort `.catch()` marks the stream marker finalized/aborted but never calls `finalizeRun`/`markFailed`
+- **Plan:** `plans/absorb-runtime-v0.8.0.md` (Phase 5)
+- **Assumed:** The plan asked for a `.catch()` on `consumeLoop`'s promise chain (wired in `start()`)
+  as a last-resort net against an unhandled promise rejection, "marking the consumer's marker as
+  errored/finalized." It did not specify whether that should also finalize the *run* in the
+  database (calling `finalizeRun(runId, marker, 'failed', error)`, which itself calls
+  `runManager.markFailed`) or only update the in-memory marker.
+- **Chose:** Only update the marker (`marker.finalized = true; marker.aborted = true`) and log via
+  `Logger.error` — deliberately not calling `finalizeRun`. Calling `finalizeRun` from inside this
+  catch handler would introduce a second async, fallible operation (`markFailed` is itself a DB
+  write, and `finalizeRun` awaits a promise chain that can itself throw) into the exact place this
+  fix exists to make safe — a throw from *that* call would again be an unhandled rejection, just
+  one line later, recreating the hazard this phase closes rather than closing it. The marker-only
+  fix is strictly safer at the point this net fires (something already unexpected, past every
+  known error path), even though it's a narrower fix than fully finalizing the run.
+- **Alternatives:** (a) Call `finalizeRun(..., 'failed', error)` from the catch handler — rejected
+  for the reason above (reintroduces a fallible async call at the one place that must not fail);
+  (b) wrap the `finalizeRun` call in its own nested `try/catch` inside the `.catch()` handler so it
+  degrades gracefully even if `markFailed` throws — a more complete fix than what shipped, not
+  implemented this phase to keep the change minimal and match the plan's literal "mark the
+  marker" wording; worth reconsidering if this safety net is ever observed firing in practice.
+- **Blast radius if wrong:** If this catch ever fires in production (expected to be rare — it's a
+  belt-and-suspenders net for something that escapes every already-handled path), the affected
+  run's marker is removed from `StreamConsumerService`'s active-stream map (via the existing
+  `.finally()`) but the run's own DB `status` is never transitioned to `failed` — it stays whatever
+  it was (most likely `running`), with no active consumer for it. `streamHub.complete(runId)` also
+  never fires for this run (that only happens inside `finalizeRun`), so any live-connected SSE
+  client keeps its connection open with no more events and no explicit completion signal — bounded,
+  not a leak (the memory strategy's per-run `Subject` is reaped by the existing subscriber-count
+  cleanup timer once the client disconnects), but a degraded client experience for that one run. The
+  run would appear stuck to an operator/UI until some other reconciliation path touches it — chiefly
+  `RunRecoveryService.onApplicationBootstrap()` (`src/runs/run-recovery.service.ts`), which
+  re-attaches a stream consumer for every non-terminal run on the next process restart; it's gated
+  on `RUN_RECOVERY_ENABLED`, which defaults `true` (`app-config.service.ts:170`), so this mitigation
+  is on by default, not opt-in. This is strictly better than the pre-fix behavior (a crashed process
+  taking down every other active run's stream too), but is not a complete fix for the one run that
+  hit it, and does require a restart (or manual intervention) to actually reconcile.
+- **Status:** UNCONFIRMED
