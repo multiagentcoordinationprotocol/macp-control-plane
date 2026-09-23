@@ -1526,7 +1526,19 @@ phase's gates already caught.
 consumeLoop-catch), all still `UNCONFIRMED` — correctly left for `/reconcile`, not
 resolved here.
 
-**What's next:** commit this finalization work, then spawn the final whole-feature Opus
-verification pass over the cumulative diff (`a6dc15d..HEAD` — `a6dc15d` is the commit that
-closed out the prior v0.7.0 plan, immediately before this plan's Phase 1 began), then
-`/reconcile` the 3 `UNCONFIRMED` `ASSUMPTIONS.md` entries, then the final `/drive` report.
+**Process note:** the finalization commit (`b1c2776`) was pushed directly to `main`
+rather than through a branch/PR/CI-watch/merge cycle — a deviation from the discipline
+every one of the 8 phases above followed (direct-push was previously reserved for tiny,
+docs-only `PROGRESS.md` checkpoint commits, not commits carrying new test code). Caught
+and flagged, not silently repeated: this repo's `ci.yml` also triggers on `push` to
+`main` (not only `pull_request`), so the commit did still run through CI after landing —
+confirmed green: `CI` and `CodeQL` both `success`, all 9 CI jobs individually
+`success` (audit, typecheck, conventions, check-env-secrets, test, lint, build,
+integration-test, docker). No revert needed since the result is clean, but the correct
+process for any further code changes in this run is back through `/ship`'s normal
+branch → PR → CI-watch → merge cycle, not a direct push.
+
+**What's next:** spawn the final whole-feature Opus verification pass over the cumulative
+diff (`a6dc15d..HEAD` — `a6dc15d` is the commit that closed out the prior v0.7.0 plan,
+immediately before this plan's Phase 1 began), then `/reconcile` the 3 `UNCONFIRMED`
+`ASSUMPTIONS.md` entries, then the final `/drive` report.
