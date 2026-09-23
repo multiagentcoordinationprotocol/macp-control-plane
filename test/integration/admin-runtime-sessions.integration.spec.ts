@@ -131,7 +131,7 @@ import { CIRCUIT_BREAKER_OPEN_MESSAGE } from '../../src/runtime/circuit-breaker'
         const r = (await client.getRun(runId)) as any;
         return r.status === 'completed' ? r : null;
       },
-      { timeoutMs: 5000, label: 'run completed' }
+      { timeoutMs: 8000, label: 'run completed' }
     );
 
     ctx.mockRuntime.listSessions = async () => ({

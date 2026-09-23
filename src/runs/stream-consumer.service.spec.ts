@@ -900,6 +900,52 @@ describe('StreamConsumerService', () => {
           jest.useRealTimers();
         }
       });
+
+      it('logs the orphaned finalizeRun outcome if it settles after the last-resort timeout already gave up', async () => {
+        // Once the timeout wins the race, the original finalizeRun call keeps
+        // running in the background — it can't be cancelled. Its eventual
+        // outcome must not vanish silently; it should be logged for
+        // observability even though nothing awaits it anymore.
+        jest.useFakeTimers();
+        try {
+          const mockProvider = {
+            getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RUNNING' })
+          };
+          runtimeRegistry.get.mockReturnValue(mockProvider as any);
+          eventService.emitControlPlaneEvents.mockRejectedValueOnce(new Error('unexpected control-plane emit failure'));
+
+          let resolveMarkFailed: () => void = () => undefined;
+          runManager.markFailed.mockImplementationOnce(
+            () =>
+              new Promise((resolve) => {
+                resolveMarkFailed = () => resolve({} as any);
+              })
+          );
+          const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+          const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+          await service.start({ ...baseParams, runId: 'run-finalize-late' });
+          const marker = (service as any).active.get('run-finalize-late');
+          expect(marker).toBeDefined();
+
+          await jest.advanceTimersByTimeAsync((StreamConsumerService as any).LAST_RESORT_FINALIZE_TIMEOUT_MS + 100);
+          await marker.loopPromise; // the timeout branch has already given up by now
+
+          // The orphaned finalizeRun call finally settles after the timeout won.
+          resolveMarkFailed();
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+
+          expect(warnSpy).toHaveBeenCalledWith(
+            expect.stringContaining('orphaned finalizeRun for run run-finalize-late eventually succeeded')
+          );
+          errorSpy.mockRestore();
+          warnSpy.mockRestore();
+        } finally {
+          jest.useRealTimers();
+        }
+      });
     });
   });
 

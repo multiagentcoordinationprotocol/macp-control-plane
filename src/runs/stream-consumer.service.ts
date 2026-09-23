@@ -96,16 +96,9 @@ export class StreamConsumerService implements OnModuleDestroy {
         // this only fires for something that still escapes them — e.g. a future bug
         // in a post-commit side effect — and exists solely to stop an unhandled
         // promise rejection from crashing the process (Node >=15 default), since this
-        // promise chain previously had no .catch() at all.
-        //
-        // Attempts finalizeRun('failed') (reconcile, ASSUMPTIONS.md P5 v0.8.0) so the
-        // run doesn't sit stuck at its pre-crash status until a restart-triggered
-        // RunRecoveryService sweep reconciles it. finalizeRun's doFinalize() sets
-        // marker.finalized/aborted as its first synchronous step, before the fallible
-        // DB write — so even if markFailed/emitControlPlaneEvents throws below, the
-        // marker ends up in the same safe state this net previously produced directly.
-        // The nested try/catch guarantees this handler itself never rejects, which is
-        // what would recreate the unhandled-rejection hazard this net exists to close.
+        // promise chain previously had no .catch() at all. The nested try/catch below
+        // guarantees this handler itself never rejects, which is what would recreate
+        // that same hazard.
         this.logger.error(
           `consumeLoop for run ${params.runId} failed unexpectedly and was stopped: ` +
             `${error instanceof Error ? error.message : String(error)}`
@@ -143,17 +136,19 @@ export class StreamConsumerService implements OnModuleDestroy {
         // would leak the runId from `this.active` forever, permanently
         // blocking start()'s reentry guard and preventing RunRecoveryService
         // from ever restarting this stream in-process.
+        const finalizeAttempt = this.finalizeRun(params.runId, marker, 'failed', error);
+        let timedOut = false;
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            timedOut = true;
+            reject(new Error('finalizeRun timed out in consumeLoop last-resort catch'));
+          }, StreamConsumerService.LAST_RESORT_FINALIZE_TIMEOUT_MS);
+          timeoutHandle.unref();
+        });
+
         try {
-          await Promise.race([
-            this.finalizeRun(params.runId, marker, 'failed', error),
-            new Promise<never>((_, reject) => {
-              const timer = setTimeout(
-                () => reject(new Error('finalizeRun timed out in consumeLoop last-resort catch')),
-                StreamConsumerService.LAST_RESORT_FINALIZE_TIMEOUT_MS
-              );
-              timer.unref();
-            })
-          ]);
+          await Promise.race([finalizeAttempt, timeoutPromise]);
         } catch (finalizeError) {
           this.logger.error(
             `finalizeRun also failed while handling consumeLoop's last-resort catch for run ${params.runId}: ` +
@@ -167,6 +162,32 @@ export class StreamConsumerService implements OnModuleDestroy {
           // hanging forever waiting for a terminal event this stream will now
           // never deliver (reconcile, ASSUMPTIONS.md P5 v0.8.0 follow-up).
           this.streamHub.complete(params.runId);
+
+          if (timedOut) {
+            // finalizeAttempt lost the race but is still running — we can't
+            // cancel a promise. It's never left truly unhandled (Promise.race
+            // itself already attached a handler to it internally), but its
+            // eventual outcome would otherwise vanish with no log trace. If it
+            // later succeeds, the run ends up correctly marked failed after
+            // all. If it later fails, run.repository.ts's transitionTo status-
+            // machine guard rejects a transition that no longer applies (e.g.
+            // this run was already finalized some other way by then) rather
+            // than clobbering it — so this is observability only, not a
+            // correctness fix.
+            finalizeAttempt.then(
+              () =>
+                this.logger.warn(
+                  `orphaned finalizeRun for run ${params.runId} eventually succeeded after the last-resort timeout`
+                ),
+              (lateError) =>
+                this.logger.warn(
+                  `orphaned finalizeRun for run ${params.runId} eventually failed after the last-resort timeout: ` +
+                    `${lateError instanceof Error ? lateError.message : String(lateError)}`
+                )
+            );
+          }
+        } finally {
+          if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
         }
       })
       .finally(() => {

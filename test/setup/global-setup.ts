@@ -80,19 +80,7 @@ export default async function globalSetup(): Promise<void> {
     `Integration test global setup: needPostgres=${needPostgres} needRuntime=${needRuntime} (CI=${Boolean(process.env.CI)}, runtimeMode=${runtimeMode})`
   );
 
-  let startedContainers = false;
   if (needPostgres || needRuntime) {
-    // Track "we attempted to start something" rather than "docker compose
-    // reported success". `up --wait`'s own health-check can time out AFTER
-    // containers were actually created — that's a partial failure, not a
-    // no-op, and it's exactly the case cleanupAfterFailedSetup below exists
-    // for. Gating cleanup on success left that case unhandled: execSync
-    // throwing kept startedContainers false, so a postgres-readiness failure
-    // right after would skip cleanup and leak the containers docker compose
-    // had just created. `docker compose down` / `rm -sf` are idempotent
-    // no-ops against containers that were never created, so attempting
-    // cleanup unconditionally here is always safe.
-    startedContainers = true;
     try {
       execSync(startCommand(needPostgres, needRuntime), {
         stdio: 'inherit',
@@ -128,7 +116,13 @@ export default async function globalSetup(): Promise<void> {
       }
     }
   } catch (err) {
-    if (startedContainers) cleanupAfterFailedSetup(needPostgres, needRuntime);
+    // `up --wait`'s own health-check can time out AFTER containers were
+    // actually created — that's a partial failure, not a no-op, so cleanup is
+    // attempted whenever we may have started something, not only when
+    // docker compose itself reported success. `docker compose down` / `rm -sf`
+    // are idempotent no-ops against containers that were never created, so
+    // this is always safe even when the execSync above never ran.
+    if (needPostgres || needRuntime) cleanupAfterFailedSetup(needPostgres, needRuntime);
     throw err;
   }
 

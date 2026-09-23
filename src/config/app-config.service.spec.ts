@@ -375,6 +375,21 @@ describe('AppConfigService', () => {
       expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_PAGE_SIZE must be a positive integer');
     });
 
+    it('should throw if RUNTIME_LIST_SESSIONS_MAX_PAGES is non-numeric, not silently fall back to the default (follow-up fix)', () => {
+      // Same class of gap as RUNTIME_LIST_SESSIONS_PAGE_SIZE above — this field
+      // is also "validated at startup" and must let an invalid value through
+      // as NaN instead of readNumber's plain default-on-NaN behavior masking it.
+      process.env.RUNTIME_LIST_SESSIONS_MAX_PAGES = '200MB';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_MAX_PAGES must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_LIST_SESSIONS_TIMEOUT_MS is non-numeric, not silently fall back to the default (follow-up fix)', () => {
+      process.env.RUNTIME_LIST_SESSIONS_TIMEOUT_MS = '60s';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_TIMEOUT_MS must be a positive integer');
+    });
+
     it('should throw if RUNTIME_LIST_SESSIONS_MAX_PAGES is fractional (GAP 4)', () => {
       process.env.RUNTIME_LIST_SESSIONS_MAX_PAGES = '10.5';
       const config = new AppConfigService();
