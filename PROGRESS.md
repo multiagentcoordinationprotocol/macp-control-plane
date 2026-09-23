@@ -1458,3 +1458,75 @@ merged #87 (squash, `1adc8f4`, branch deleted)
 
 **Phase 7 fully closed.** Next: confirm Phase 8's already-merged status (PR #80,
 pre-dates this plan), then `/implement`'s finalization pass (§4) across the whole plan.
+
+**Phase 8 re-confirmed on current `main` (post-#87 merge):** `package.json` resolves
+`@multiagentcoordinationprotocol/proto` to `^0.1.10`, `package-lock.json` resolves it to
+`0.1.10` — both of Phase 8's acceptance criteria independently satisfied, no action
+needed. All 8 phases of `plans/absorb-runtime-v0.8.0.md` are now `Status: DONE`.
+
+## Finalization pass (§4) — 2026-09-22
+
+**Tests, re-run from a clean `main` (post-Phase-7-merge, `4a440df`):** `npx tsc --noEmit`
+clean, `npm test` **826/826** (56/56 suites), `npm run build` clean, `npm run lint` clean.
+
+**Integration tests — the seam this plan's phases hadn't collectively covered:** Ran the
+full integration suite (isolated one-off `postgres:16-alpine` container on port 5434,
+`DATABASE_URL` override, per this session's established pattern — the repo's own default
+port 5433 remains squatted by an unrelated sibling repo's container,
+`aitp-control-plane-postgres-test`, never touched). Baseline (before adding anything new):
+22/24 suites, 106/110 tests — 2 suites (`list-sessions-pagination.integration.spec.ts`,
+`stream-resume-live.integration.spec.ts`) skip because they require a real, non-mock
+runtime (already documented as such via `ASSUMPTIONS.md`'s pre-existing `P1` entries — not
+a gap this plan introduced, not newly discovered here).
+
+Looking at the 8 phases collectively rather than phase-by-phase, one real seam gap stood
+out: **Phase 7's admin drift-detection endpoint had zero integration coverage** — its own
+phase tests (`admin.controller.spec.ts`) mock both `RustRuntimeProvider` and
+`RunRepository` directly, so nothing had ever exercised the endpoint's diff logic against a
+real Postgres-backed run record or a real HTTP round trip through auth + the global
+exception filter. Every other phase either shipped its own integration test (Phase 6) or
+only touched code paths already covered by the existing integration suite (Phases 1-5, 8).
+
+Added `test/integration/admin-runtime-sessions.integration.spec.ts` — 6 new cases, each
+against a real booted app + real test-DB, with `ctx.mockRuntime.listSessions` overridden
+per-test (the scripted mock's own `listSessions()` is a stub returning empty, with a
+comment inviting exactly this kind of override, same as `watchSessions`/`watchSignals`):
+1. Auth is required (401 without a key), like every other admin route.
+2. No drift: a real run created via `POST /runs`, its bound session echoed back by the
+   (overridden) mock as `SESSION_STATE_OPEN` → `untrackedSessions: []`,
+   `missingFromRuntime: []`, `liveRuntimeSessionCount: 1`.
+3. An orphan runtime session with no matching tracked run → correctly reported as
+   `untrackedSessions` drift.
+4. A tracked, bound run whose session the runtime no longer reports at all →
+   `missingFromRuntime`.
+5. **The retention-window regression, proven end to end:** a real run driven all the way
+   to `completed` (dropping out of `listActiveRuns()` the instant its terminal event is
+   observed, exactly as production does), with the runtime still reporting its now-
+   `SESSION_STATE_RESOLVED` session (as it would within its retention window) →
+   `untrackedSessions: []`, `liveRuntimeSessionCount: 0` — the actual production condition
+   the ship-gate's fix protects against, now provable through the full pipeline rather
+   than only at the controller-unit level.
+6. `complete: false` (truncated drain) surfaces verbatim, `missingFromRuntime` comes back
+   `null`.
+
+All 6 pass. Full integration suite re-run with the new file included: 23/25 suites,
+112/116 tests (same 2 pre-existing live-runtime-only skips). `npx tsc --noEmit` clean;
+`npm run lint` clean; `npx prettier --check`/`--write` applied once (an indentation/wrap
+style deviation in the new file, fixed automatically, re-confirmed clean).
+
+**Docs:** No further doc updates needed — each phase's own doc changes (CLAUDE.md,
+docs/API.md) were already applied and verified as part of that phase's own gates; nothing
+in the cumulative diff introduced new documented-but-stale behavior beyond what each
+phase's gates already caught.
+
+**Tracked files:** `plans/absorb-runtime-v0.8.0.md` — all 8 phases `Status: DONE`.
+`PROGRESS.md` — full checkpoint trail present for every phase (commit → verify → close-out
+→ push → PR → CI → merge). `ASSUMPTIONS.md` — 3 entries tagged to this plan
+(`P2 (v0.8.0)` errorCode, `P3 (v0.8.0)` stricter-than-runtime, `P5 (v0.8.0)`
+consumeLoop-catch), all still `UNCONFIRMED` — correctly left for `/reconcile`, not
+resolved here.
+
+**What's next:** commit this finalization work, then spawn the final whole-feature Opus
+verification pass over the cumulative diff (`a6dc15d..HEAD` — `a6dc15d` is the commit that
+closed out the prior v0.7.0 plan, immediately before this plan's Phase 1 began), then
+`/reconcile` the 3 `UNCONFIRMED` `ASSUMPTIONS.md` entries, then the final `/drive` report.
