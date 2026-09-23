@@ -400,7 +400,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | P4 explicit gRPC channel options | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `fe6c70d` (squash) | merged #84 |
 | P5 non-blocking post-commit publish side effects | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `2a6e1d2` (squash) | merged #85 |
 | P6 handoff implicit-accept integration test | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) + 1 (ship-gate: 1 GAPS→closed) | Opus (fresh subagent, all rounds) | `e8258fc` (squash) | merged #86 |
-| P7 listSessions() admin drift-detection endpoint | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) + 2 (ship-gate: 1 GAPS→closed + 1 re-verify PASS) | Opus (fresh subagent, all rounds) | `d9709c5` + `4d46b0c` (ship-gate fixes) | (pending — ships via `/ship`) |
+| P7 listSessions() admin drift-detection endpoint | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) + 2 (ship-gate: 1 GAPS→closed + 1 re-verify PASS) | Opus (fresh subagent, all rounds) | `1adc8f4` (squash) | merged #87 |
 | P8 bump @multiagentcoordinationprotocol/proto to 0.1.10 | DONE (independently, PR #80, pre-dates this plan) | 0 | n/a | 23db607 (#80) | #80 (already merged) |
 
 ## Repo map
@@ -1440,3 +1440,21 @@ open PR, watch CI, merge — then confirm Phase 8's already-merged status and mo
 
 pushed absorb-runtime-v0.8.0-p7 77dcaaf
 PR #87 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/87
+
+**CI note:** `gh pr checks --watch` returned early (exit 0) after seeing only the
+`call / auto-merge` check in a terminal `skipping` state, before CI/CodeQL had even started
+— not trusted as a completion signal. Cross-confirmed directly via the Actions API
+(`gh api .../actions/runs/<id>` polled to `status: completed`) against the actual current
+head SHA (`46f2672`, post the push/PR-checkpoint commit), which showed all jobs `success`:
+conventions, test, typecheck, audit, check-env-secrets, lint, integration-test, build,
+docker, and CodeQL analyze — 11/11 green, cross-confirmed again via `gh pr checks 87` before
+merging. Two CI runs were in flight briefly (one against the ship-gate-fix commit `77dcaaf`,
+superseded by one against the checkpoint commit `46f2672`, per this repo's
+`cancel-in-progress: true` pull_request concurrency group) — same general shape as Phase 6's
+duplicate-run situation, but this time the older run was correctly cancelled/superseded and
+only the newer run's result was used to decide the merge.
+
+merged #87 (squash, `1adc8f4`, branch deleted)
+
+**Phase 7 fully closed.** Next: confirm Phase 8's already-merged status (PR #80,
+pre-dates this plan), then `/implement`'s finalization pass (§4) across the whole plan.
