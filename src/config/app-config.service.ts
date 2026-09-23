@@ -13,6 +13,23 @@ function readNumber(name: string, defaultValue: number): number {
   return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
+/**
+ * Like `readNumber`, but does NOT fall back to `defaultValue` when the env
+ * var is *set* to something non-numeric ("abc", "16MB") — only when it's
+ * unset entirely. Use this for any field `validate()` below checks with a
+ * "must be a positive integer" guard: `readNumber`'s silent default-on-NaN
+ * behavior would mask exactly the misconfiguration those checks exist to
+ * catch, since the field would already hold a valid value by the time
+ * `validate()` runs. A present-but-invalid value instead comes through as
+ * `NaN`, which `Number.isInteger(NaN)` (used by every such check) correctly
+ * rejects.
+ */
+function readValidatedNumber(name: string, defaultValue: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return defaultValue;
+  return Number(raw);
+}
+
 function readStringList(name: string): string[] {
   const raw = process.env[name];
   if (!raw) return [];
@@ -73,8 +90,8 @@ export class AppConfigService implements OnModuleInit {
    *   ≈ 1.06 MiB`), so this client-side send ceiling is headroom above a
    *   limit the runtime enforces first, not the binding one itself.
    */
-  readonly runtimeMaxReceiveMessageBytes = readNumber('RUNTIME_MAX_RECEIVE_MESSAGE_BYTES', 16777216);
-  readonly runtimeMaxSendMessageBytes = readNumber('RUNTIME_MAX_SEND_MESSAGE_BYTES', 4194304);
+  readonly runtimeMaxReceiveMessageBytes = readValidatedNumber('RUNTIME_MAX_RECEIVE_MESSAGE_BYTES', 16777216);
+  readonly runtimeMaxSendMessageBytes = readValidatedNumber('RUNTIME_MAX_SEND_MESSAGE_BYTES', 4194304);
   /**
    * Control-plane's own single Bearer token. The control-plane has exactly one
    * runtime identity, least-privilege (`can_start_sessions: false`). Per-agent
@@ -118,9 +135,9 @@ export class AppConfigService implements OnModuleInit {
    * - The overall timeout bounds the whole drain (not per-page), replacing an
    *   unbounded worst case of maxPages * per-call deadlines.
    */
-  readonly runtimeListSessionsPageSize = readNumber('RUNTIME_LIST_SESSIONS_PAGE_SIZE', 200);
-  readonly runtimeListSessionsMaxPages = readNumber('RUNTIME_LIST_SESSIONS_MAX_PAGES', 200);
-  readonly runtimeListSessionsTimeoutMs = readNumber('RUNTIME_LIST_SESSIONS_TIMEOUT_MS', 60000);
+  readonly runtimeListSessionsPageSize = readValidatedNumber('RUNTIME_LIST_SESSIONS_PAGE_SIZE', 200);
+  readonly runtimeListSessionsMaxPages = readValidatedNumber('RUNTIME_LIST_SESSIONS_MAX_PAGES', 200);
+  readonly runtimeListSessionsTimeoutMs = readValidatedNumber('RUNTIME_LIST_SESSIONS_TIMEOUT_MS', 60000);
 
   /**
    * When `MACP_AUTH_SERVICE_URL` is set, the credential resolver mints a

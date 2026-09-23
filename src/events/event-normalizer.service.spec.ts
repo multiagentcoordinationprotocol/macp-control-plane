@@ -729,6 +729,66 @@ describe('EventNormalizerService', () => {
       });
     });
 
+    it('should fall back to parsing `code` when `message` is empty (RustRuntimeProvider defaults an omitted message to "", follow-up fix)', () => {
+      // Without the fallback, parsePolicyDenyReasons('') returns [''] — a
+      // single meaningless empty-string reason — even though `code` (built
+      // from the same server-side status.message() as message would be)
+      // still carries the real "PolicyDenied: <reasons>" text.
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-inline-error',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        inlineError: {
+          code: 'PolicyDenied: too risky',
+          message: '',
+          sessionId: 'session-1',
+          messageId: ''
+        }
+      };
+      const ctx = makeContext();
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const policyDenied = events.find((e) => e.type === 'policy.denied');
+      expect(policyDenied).toBeDefined();
+      expect(policyDenied!.data.decodedPayload).toEqual({
+        decision: 'deny',
+        reasons: ['too risky']
+      });
+    });
+
+    it('still emits policy.denied with correctly parsed reasons when the denial text itself contains the word "compaction" (adversarial overlap with the compacted-history detector)', () => {
+      // stream-consumer.service.ts's own compacted-history regex
+      // (COMPACTED_HISTORY_RE) requires the full phrase "history before
+      // ordinal N was compacted", not just the substring "compact" — so this
+      // input should never be mistaken for a compacted-history gap there. This
+      // test instead proves the OTHER half of that non-interaction: the
+      // normalizer's own isPolicyDeny/parsePolicyDenyReasons logic is
+      // unaffected by mentioning "compaction" inside the denial text, since it
+      // only anchors on the "PolicyDenied:" prefix. Uses the exact adversarial
+      // string stream-consumer.service.spec.ts feeds to prove ITS guard, to
+      // show both layers agree on the same real-world input.
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-inline-error',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        inlineError: {
+          code: 'PolicyDenied: log compaction window exceeded',
+          message: 'PolicyDenied: log compaction window exceeded',
+          sessionId: 'session-1',
+          messageId: ''
+        }
+      };
+      const ctx = makeContext();
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const policyDenied = events.find((e) => e.type === 'policy.denied');
+      expect(policyDenied).toBeDefined();
+      expect(policyDenied!.data.decodedPayload).toEqual({
+        decision: 'deny',
+        reasons: ['log compaction window exceeded']
+      });
+    });
+
     it('should NOT emit policy.denied from an inline stream error unrelated to policy', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-inline-error',

@@ -345,7 +345,7 @@ describe('AppConfigService', () => {
       expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_TIMEOUT_MS must be a positive integer');
     });
 
-    it('should throw if RUNTIME_LIST_SESSIONS_TIMEOUT_MS is a blank string (Number(\'\') === 0 bypasses the default)', () => {
+    it("should throw if RUNTIME_LIST_SESSIONS_TIMEOUT_MS is a blank string (Number('') === 0 bypasses the default)", () => {
       process.env.RUNTIME_LIST_SESSIONS_TIMEOUT_MS = '';
       const config = new AppConfigService();
       expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_TIMEOUT_MS must be a positive integer');
@@ -355,6 +355,18 @@ describe('AppConfigService', () => {
       process.env.RUNTIME_LIST_SESSIONS_TIMEOUT_MS = '-1000';
       const config = new AppConfigService();
       expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_TIMEOUT_MS must be a positive integer');
+    });
+
+    it('should throw if RUNTIME_LIST_SESSIONS_PAGE_SIZE is non-numeric, not silently fall back to the default (follow-up fix)', () => {
+      // readNumber's plain default-on-NaN behavior (see 'readNumber edge cases'
+      // above) would make this field already hold a valid 200 by the time
+      // validate() runs, so a garbage value like "200MB" would never trip the
+      // check below — exactly the silent-degradation class this field's own
+      // "validated at startup" contract promises to catch. readValidatedNumber
+      // must let the invalid value through as NaN instead.
+      process.env.RUNTIME_LIST_SESSIONS_PAGE_SIZE = '200MB';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_LIST_SESSIONS_PAGE_SIZE must be a positive integer');
     });
 
     it('should throw if RUNTIME_LIST_SESSIONS_PAGE_SIZE is fractional (GAP 4)', () => {
@@ -410,13 +422,24 @@ describe('AppConfigService', () => {
       expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_RECEIVE_MESSAGE_BYTES must be a positive integer');
     });
 
+    it('should throw if RUNTIME_MAX_RECEIVE_MESSAGE_BYTES is non-numeric, not silently fall back to the default (follow-up fix)', () => {
+      // Same class of gap as RUNTIME_LIST_SESSIONS_PAGE_SIZE above: before the
+      // readValidatedNumber fix, readNumber's default-on-NaN behavior meant a
+      // value like "16MB" (a natural, wrong way to express this env var) never
+      // reached this check at all — it silently became the correct default
+      // instead of failing fast at startup as documented.
+      process.env.RUNTIME_MAX_RECEIVE_MESSAGE_BYTES = '16MB';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_RECEIVE_MESSAGE_BYTES must be a positive integer');
+    });
+
     it('should throw if RUNTIME_MAX_RECEIVE_MESSAGE_BYTES is fractional', () => {
       process.env.RUNTIME_MAX_RECEIVE_MESSAGE_BYTES = '1.5';
       const config = new AppConfigService();
       expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_RECEIVE_MESSAGE_BYTES must be a positive integer');
     });
 
-    it('should throw if RUNTIME_MAX_RECEIVE_MESSAGE_BYTES is a blank string (Number(\'\') === 0 bypasses the default)', () => {
+    it("should throw if RUNTIME_MAX_RECEIVE_MESSAGE_BYTES is a blank string (Number('') === 0 bypasses the default)", () => {
       process.env.RUNTIME_MAX_RECEIVE_MESSAGE_BYTES = '';
       const config = new AppConfigService();
       expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_RECEIVE_MESSAGE_BYTES must be a positive integer');
@@ -434,13 +457,19 @@ describe('AppConfigService', () => {
       expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_SEND_MESSAGE_BYTES must be a positive integer');
     });
 
+    it('should throw if RUNTIME_MAX_SEND_MESSAGE_BYTES is non-numeric, not silently fall back to the default (follow-up fix)', () => {
+      process.env.RUNTIME_MAX_SEND_MESSAGE_BYTES = '4MB';
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_SEND_MESSAGE_BYTES must be a positive integer');
+    });
+
     it('should throw if RUNTIME_MAX_SEND_MESSAGE_BYTES is fractional', () => {
       process.env.RUNTIME_MAX_SEND_MESSAGE_BYTES = '1.5';
       const config = new AppConfigService();
       expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_SEND_MESSAGE_BYTES must be a positive integer');
     });
 
-    it('should throw if RUNTIME_MAX_SEND_MESSAGE_BYTES is a blank string (Number(\'\') === 0 bypasses the default)', () => {
+    it("should throw if RUNTIME_MAX_SEND_MESSAGE_BYTES is a blank string (Number('') === 0 bypasses the default)", () => {
       process.env.RUNTIME_MAX_SEND_MESSAGE_BYTES = '';
       const config = new AppConfigService();
       expect(() => config.onModuleInit()).toThrow('RUNTIME_MAX_SEND_MESSAGE_BYTES must be a positive integer');

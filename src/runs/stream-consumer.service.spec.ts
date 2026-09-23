@@ -824,8 +824,80 @@ describe('StreamConsumerService', () => {
           expect(marker.finalized).toBe(true);
           expect(marker.aborted).toBe(true);
           expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('DB unavailable during finalize'));
+          // Follow-up fix: the run genuinely failed (finalizeRun just couldn't
+          // persist that) — SSE subscribers must still get told the stream is
+          // over, or they'd hang forever waiting for a terminal event this
+          // stream will now never deliver.
+          expect(streamHub.complete).toHaveBeenCalledWith('run-safety-net-nested-fail');
         } finally {
           errorSpy.mockRestore();
+        }
+      });
+
+      it('does not mark the run failed when the escaping error races an intentional stop (marker.aborted already true)', async () => {
+        // stop() / onModuleDestroy() set marker.aborted BEFORE consumeLoop's own
+        // per-iteration checks would normally return cleanly — but a fallible
+        // post-commit emit can still escape between those checks (e.g. hitting a
+        // DB pool that's mid-teardown during shutdown). That's an intentional
+        // stop racing a transient error, not a genuine run failure: calling
+        // finalizeRun('failed') here would permanently mis-record a healthy run.
+        const mockProvider = {
+          getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RUNNING' })
+        };
+        runtimeRegistry.get.mockReturnValue(mockProvider as any);
+        eventService.emitControlPlaneEvents.mockRejectedValueOnce(new Error('pool is draining'));
+        const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+
+        try {
+          await service.start({ ...baseParams, runId: 'run-aborted-race' });
+          const marker = (service as any).active.get('run-aborted-race');
+          expect(marker).toBeDefined();
+          marker.aborted = true; // simulate onModuleDestroy()/stop() racing the escaping error
+
+          await expect(marker.loopPromise).resolves.toBeUndefined();
+
+          expect(marker.finalized).toBe(true);
+          expect(runManager.markFailed).not.toHaveBeenCalled();
+          expect(streamHub.complete).not.toHaveBeenCalled();
+        } finally {
+          errorSpy.mockRestore();
+        }
+      });
+
+      it('bounds the last-resort finalizeRun attempt with a timeout instead of hanging forever', async () => {
+        // A wedged DB connection could make markFailed never settle — without a
+        // bound, this whole .catch() handler would never resolve, `.finally()`
+        // would never run, and the run would stay in `this.active` forever,
+        // permanently blocking start()'s reentry guard for this runId.
+        jest.useFakeTimers();
+        try {
+          const mockProvider = {
+            getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RUNNING' })
+          };
+          runtimeRegistry.get.mockReturnValue(mockProvider as any);
+          eventService.emitControlPlaneEvents.mockRejectedValueOnce(new Error('unexpected control-plane emit failure'));
+          runManager.markFailed.mockImplementationOnce(() => new Promise(() => {})); // never resolves
+          const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+
+          await service.start({ ...baseParams, runId: 'run-finalize-hang' });
+          const marker = (service as any).active.get('run-finalize-hang');
+          expect(marker).toBeDefined();
+
+          let settled = false;
+          void marker.loopPromise.then(() => {
+            settled = true;
+          });
+
+          await jest.advanceTimersByTimeAsync((StreamConsumerService as any).LAST_RESORT_FINALIZE_TIMEOUT_MS + 100);
+
+          expect(settled).toBe(true);
+          expect(marker.finalized).toBe(true);
+          expect(marker.aborted).toBe(true);
+          expect(streamHub.complete).toHaveBeenCalledWith('run-finalize-hang');
+          expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('timed out'));
+          errorSpy.mockRestore();
+        } finally {
+          jest.useRealTimers();
         }
       });
     });

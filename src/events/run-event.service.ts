@@ -139,20 +139,31 @@ export class RunEventService {
    * must never propagate to the caller: `StreamConsumerService` treats a
    * rejected promise as "not yet durable" and re-ingests the same envelope on
    * the next reconnect, appending duplicate rows (see the comment on
-   * `envelopeOrdinal` in `handleRawEventInner`). The metrics/publish/snapshot
-   * steps are each caught and logged independently so one failure (e.g. a
-   * metrics backend outage) doesn't suppress the others (e.g. SSE publish
-   * still reaching connected clients). `recordSpanEvents` itself is left
-   * unwrapped: it's a pure in-memory annotation over already-decoded fields
-   * (no I/O), and `TraceService.addRunSpanEvent` is a no-throw-by-contract
-   * OTel call that no-ops when there's no active run span.
+   * `envelopeOrdinal` in `handleRawEventInner`). Every step — including
+   * `recordSpanEvents` — is caught and logged independently so one failure
+   * (e.g. a metrics backend outage) doesn't suppress the others (e.g. SSE
+   * publish still reaching connected clients). `recordSpanEvents` was
+   * previously left unwrapped on the assumption it was pure in-memory
+   * annotation with no fallible step; that stopped being true once it started
+   * running attributes through `RedactionService.redact()` (reconcile,
+   * ASSUMPTIONS.md P2 v0.8.0), which evaluates operator-supplied
+   * `MACP_REDACT_PATTERNS` regexes against event data and so is no longer
+   * guaranteed not to throw (or pathologically backtrack) for arbitrary input.
    */
   private async runPostCommitSideEffects(
     runId: string,
     events: CanonicalEvent[],
     projection: RunStateProjection
   ): Promise<void> {
-    this.recordSpanEvents(runId, events);
+    try {
+      this.recordSpanEvents(runId, events);
+    } catch (error) {
+      this.instrumentation.postCommitSideEffectFailuresTotal.inc({ step: 'span_events' });
+      this.logger.error(
+        `span event recording failed for run ${runId} after commit (${events.length} event(s) already durable): ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+    }
 
     try {
       await this.metricsService.recordEvents(runId, events);

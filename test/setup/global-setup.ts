@@ -1,9 +1,7 @@
 import { execSync } from 'node:child_process';
 import { Client } from 'pg';
 
-const TEST_DB_URL =
-  process.env.DATABASE_URL ??
-  'postgres://postgres:postgres@localhost:5433/macp_control_plane_test';
+const TEST_DB_URL = process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5433/macp_control_plane_test';
 
 function startCommand(needPostgres: boolean, needRuntime: boolean): string {
   if (needPostgres && needRuntime) {
@@ -84,18 +82,26 @@ export default async function globalSetup(): Promise<void> {
 
   let startedContainers = false;
   if (needPostgres || needRuntime) {
+    // Track "we attempted to start something" rather than "docker compose
+    // reported success". `up --wait`'s own health-check can time out AFTER
+    // containers were actually created — that's a partial failure, not a
+    // no-op, and it's exactly the case cleanupAfterFailedSetup below exists
+    // for. Gating cleanup on success left that case unhandled: execSync
+    // throwing kept startedContainers false, so a postgres-readiness failure
+    // right after would skip cleanup and leak the containers docker compose
+    // had just created. `docker compose down` / `rm -sf` are idempotent
+    // no-ops against containers that were never created, so attempting
+    // cleanup unconditionally here is always safe.
+    startedContainers = true;
     try {
       execSync(startCommand(needPostgres, needRuntime), {
         stdio: 'inherit',
         cwd: process.cwd()
       });
-      startedContainers = true;
     } catch {
-      // Not started by us (docker compose itself failed) — nothing to clean up
-      // if the wait below throws, since we can't distinguish "already running"
-      // from "genuinely absent" here.
       console.warn(
-        'Could not start docker compose. Assuming services are already running.'
+        'docker compose up reported a failure — proceeding in case services are already running; ' +
+          'cleanup will still be attempted below if the readiness wait also fails.'
       );
     }
   }

@@ -61,6 +61,13 @@ export class StreamConsumerService implements OnModuleDestroy {
     await Promise.race([Promise.allSettled(pending), new Promise<void>((resolve) => setTimeout(resolve, 2000))]);
   }
 
+  /**
+   * Bounds the last-resort finalizeRun('failed') attempt in start()'s .catch()
+   * handler below — see the comment there for why an unbounded wait would
+   * leak the run from `this.active` forever.
+   */
+  private static readonly LAST_RESORT_FINALIZE_TIMEOUT_MS = 10_000;
+
   async start(params: {
     runId: string;
     execution: RunDescriptor;
@@ -103,8 +110,50 @@ export class StreamConsumerService implements OnModuleDestroy {
           `consumeLoop for run ${params.runId} failed unexpectedly and was stopped: ` +
             `${error instanceof Error ? error.message : String(error)}`
         );
+
+        if (marker.aborted) {
+          // marker.aborted is already true here, and finalizeRun's own
+          // doFinalize() is what would normally set it first — meaning
+          // something else did: onModuleDestroy() (graceful shutdown) or
+          // stop() (explicit cancel). The escaping error raced an intentional
+          // stop, not a genuine run failure (e.g. a post-commit emit hitting a
+          // DB pool that's mid-teardown) — calling finalizeRun('failed') here
+          // would permanently mis-record a healthy (or already-terminal) run
+          // as failed, instead of leaving it for RunRecoveryService to
+          // reconcile correctly on the next restart. Match the original
+          // marker-only fallback exactly: no run-status write, no SSE
+          // completion signal — the run isn't actually over, just this
+          // instance's stream on it.
+          marker.finalized = true;
+          return;
+        }
+
+        // Attempts finalizeRun('failed') (reconcile, ASSUMPTIONS.md P5 v0.8.0)
+        // so the run doesn't sit stuck at its pre-crash status until a
+        // restart-triggered RunRecoveryService sweep reconciles it.
+        // finalizeRun's doFinalize() sets marker.finalized/aborted as its
+        // first synchronous step, before the fallible DB write — so even if
+        // markFailed/emitControlPlaneEvents throws below, the marker ends up
+        // in the same safe state this net previously produced directly.
+        // Bounded by a fixed timeout: database.service.ts sets connection/idle
+        // timeouts but no statement_timeout, so a wedged pg socket could
+        // otherwise hang markFailed forever — and since `.finally()` below
+        // (which decrements activeStreams and frees `this.active`) runs only
+        // once this whole .catch() handler settles, an unbounded hang here
+        // would leak the runId from `this.active` forever, permanently
+        // blocking start()'s reentry guard and preventing RunRecoveryService
+        // from ever restarting this stream in-process.
         try {
-          await this.finalizeRun(params.runId, marker, 'failed', error);
+          await Promise.race([
+            this.finalizeRun(params.runId, marker, 'failed', error),
+            new Promise<never>((_, reject) => {
+              const timer = setTimeout(
+                () => reject(new Error('finalizeRun timed out in consumeLoop last-resort catch')),
+                StreamConsumerService.LAST_RESORT_FINALIZE_TIMEOUT_MS
+              );
+              timer.unref();
+            })
+          ]);
         } catch (finalizeError) {
           this.logger.error(
             `finalizeRun also failed while handling consumeLoop's last-resort catch for run ${params.runId}: ` +
@@ -112,6 +161,12 @@ export class StreamConsumerService implements OnModuleDestroy {
           );
           marker.finalized = true;
           marker.aborted = true;
+          // Unlike the intentional-stop branch above, this run genuinely
+          // failed — finalizeRun just couldn't persist that (or timed out
+          // trying). Signal SSE completion anyway so subscribers aren't left
+          // hanging forever waiting for a terminal event this stream will now
+          // never deliver (reconcile, ASSUMPTIONS.md P5 v0.8.0 follow-up).
+          this.streamHub.complete(params.runId);
         }
       })
       .finally(() => {

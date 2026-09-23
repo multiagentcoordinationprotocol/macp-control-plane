@@ -274,6 +274,39 @@ describe('RunEventService', () => {
         expect.objectContaining({ errorCode: '[REDACTED]' })
       );
     });
+
+    it('resolves on a recordSpanEvents failure instead of throwing, and still runs metrics/publish (follow-up fix)', async () => {
+      // recordSpanEvents was historically unwrapped on the assumption it was
+      // pure in-memory work with no fallible step — that assumption broke the
+      // moment it started running attributes through RedactionService.redact(),
+      // which evaluates operator-supplied MACP_REDACT_PATTERNS regexes and so
+      // can throw for arbitrary input. Prove it's now guarded like every other
+      // post-commit step: a throw here must not propagate to the caller (that
+      // would resurrect the duplicate-re-ingestion bug Phase 5 fixed), and must
+      // not suppress the metrics/publish steps that come after it.
+      redactionService.redact.mockImplementationOnce(() => {
+        throw new Error('catastrophic redaction pattern failure');
+      });
+
+      const partialEvents = [
+        {
+          ts: '2026-01-01T00:00:00.000Z',
+          type: 'policy.denied' as const,
+          source: { kind: 'macp-control-plane' as const, name: 'run-manager' },
+          subject: { kind: 'run' as const, id: 'run-1' },
+          data: { errorCode: 'PolicyDenied: rejected by operator' }
+        }
+      ];
+
+      const result = await service.emitControlPlaneEvents('run-1', partialEvents);
+
+      expect(result).toHaveLength(1);
+      expect(metricsService.recordEvents).toHaveBeenCalled();
+      expect(streamHub.publishEvent).toHaveBeenCalled();
+      expect(streamHub.publishSnapshot).toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('catastrophic redaction pattern failure'));
+      expect(postCommitSideEffectFailuresTotal.inc).toHaveBeenCalledWith({ step: 'span_events' });
+    });
   });
 
   describe('persistRawAndCanonical', () => {
@@ -460,6 +493,23 @@ describe('RunEventService', () => {
 
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('stream hub unavailable'));
       expect(postCommitSideEffectFailuresTotal.inc).toHaveBeenCalledWith({ step: 'publish_event' });
+    });
+
+    it('resolves on a post-commit snapshot-publish failure (the third post-commit step, previously untested)', async () => {
+      runRepository.allocateSequence.mockResolvedValue(1);
+      streamHub.publishSnapshot.mockImplementationOnce(() => {
+        throw new Error('snapshot publish unavailable');
+      });
+
+      const result = await service.persistRawAndCanonical('run-1', rawEvent, canonicalEvents);
+      expect(result).toHaveLength(2);
+
+      // Sibling steps still ran despite the snapshot publish throwing.
+      expect(metricsService.recordEvents).toHaveBeenCalledWith('run-1', result);
+      expect(streamHub.publishEvent).toHaveBeenCalledTimes(2);
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('snapshot publish unavailable'));
+      expect(postCommitSideEffectFailuresTotal.inc).toHaveBeenCalledWith({ step: 'publish_snapshot' });
     });
   });
 

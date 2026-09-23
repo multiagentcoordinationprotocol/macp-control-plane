@@ -147,9 +147,7 @@ export class EventNormalizerService implements EventNormalizer {
       // (anchored so unrelated text can't false-match) on both fields, since
       // either could in principle carry it.
       const isPolicyDeny =
-        err.code === 'POLICY_DENIED' ||
-        /^PolicyDenied(:|$)/.test(err.code) ||
-        /^PolicyDenied(:|$)/.test(err.message);
+        err.code === 'POLICY_DENIED' || /^PolicyDenied(:|$)/.test(err.code) || /^PolicyDenied(:|$)/.test(err.message);
       if (isPolicyDeny) {
         events.push(
           this.makeEvent(
@@ -160,7 +158,7 @@ export class EventNormalizerService implements EventNormalizer {
             {
               errorCode: err.code,
               errorMessage: err.message,
-              decodedPayload: { decision: 'deny', reasons: this.parsePolicyDenyReasons(err.message) }
+              decodedPayload: { decision: 'deny', reasons: this.parsePolicyDenyReasons(err.message, err.code) }
             },
             'stream-inline-error'
           )
@@ -522,16 +520,24 @@ export class EventNormalizerService implements EventNormalizer {
    * internally is mis-split, and a reason containing ": " internally loses
    * everything before the first occurrence (the delimiter between the
    * "PolicyDenied" prefix and the reasons).
+   *
+   * Falls back to `code` when `message` is empty — `RustRuntimeProvider`
+   * defaults an inline error's `message` field to `''` when the wire frame
+   * omits it, while `code` (also built from `status.message()` server-side)
+   * still carries the full "PolicyDenied: <reasons>" text in that case.
+   * Parsing an empty `message` would otherwise yield `['']`, a single
+   * meaningless empty-string reason, instead of the real denial text.
    */
-  private parsePolicyDenyReasons(message: string): string[] {
-    const delimiterIndex = message.indexOf(': ');
-    if (delimiterIndex === -1) return [message];
-    const reasons = message
+  private parsePolicyDenyReasons(message: string, code: string): string[] {
+    const source = message || code;
+    const delimiterIndex = source.indexOf(': ');
+    if (delimiterIndex === -1) return [source];
+    const reasons = source
       .slice(delimiterIndex + 2)
       .split('; ')
       .map((r) => r.trim())
       .filter((r) => r.length > 0);
-    return reasons.length > 0 ? reasons : [message];
+    return reasons.length > 0 ? reasons : [source];
   }
 }
 

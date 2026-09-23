@@ -1,7 +1,9 @@
 import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { TestClient } from '../helpers/test-client';
-import { decisionModeRequest, decisionHappyScript } from '../fixtures/decision-mode';
+import { decisionModeRequest, decisionSlowScript } from '../fixtures/decision-mode';
 import { waitFor } from '../helpers/wait-for';
+import { isRealRuntime } from '../helpers/real-runtime-gate';
+import { CIRCUIT_BREAKER_OPEN_MESSAGE } from '../../src/runtime/circuit-breaker';
 
 /**
  * End-to-end coverage for `GET /admin/runtime/sessions` (Phase 7 of
@@ -17,13 +19,27 @@ import { waitFor } from '../helpers/wait-for';
  * `ctx.mockRuntime.listSessions` directly to script the runtime-side half of
  * the diff, while the control-plane-side half comes from a real run created
  * through the HTTP API and persisted in the real test database.
+ *
+ * Gated mock-only (isRealRuntime ? describe.skip : describe), matching
+ * handoff-implicit-accept.integration.spec.ts — this depends on
+ * ScriptedMockRuntimeProvider's `listSessions` being directly overridable
+ * per test, not real-runtime behavior. Without this gate, `beforeEach`
+ * assigning to `ctx.mockRuntime.listSessions` throws under
+ * `INTEGRATION_RUNTIME=docker|remote` (`test-app.ts` sets `mockRuntime = null`
+ * for those modes), hard-failing every test in this file.
+ *
+ * Uses `decisionSlowScript()` (not `decisionHappyScript()`) so a run stays in
+ * `running` for ~2s instead of racing to `completed` in ~35-177ms — several
+ * tests below need the run to still be active while they script
+ * `listSessions()` and call the endpoint; the one test that specifically
+ * needs a *completed* run waits for that state explicitly.
  */
-describe('GET /admin/runtime/sessions (integration, Phase 7 finalization)', () => {
+(isRealRuntime ? describe.skip : describe)('GET /admin/runtime/sessions (integration, Phase 7 finalization)', () => {
   let ctx: TestAppContext;
   let client: TestClient;
 
   beforeAll(async () => {
-    ctx = await createTestApp(decisionHappyScript());
+    ctx = await createTestApp(decisionSlowScript(2000));
     client = ctx.client;
   });
 
@@ -45,12 +61,16 @@ describe('GET /admin/runtime/sessions (integration, Phase 7 finalization)', () =
 
   it('reports no drift when a real, bound run is echoed back as a live runtime session', async () => {
     const { runId, sessionId } = await client.createRun(decisionModeRequest());
+    // `runtimeSessionId` is pre-allocated at run creation, before the runtime
+    // session exists — waiting on it would be a no-op. Wait for `running`
+    // instead, which only happens after RunExecutorService's bindSession
+    // succeeds, i.e. the session genuinely exists on the (mock) runtime side.
     await waitFor(
       async () => {
         const r = (await client.getRun(runId)) as any;
-        return r.runtimeSessionId === sessionId ? r : null;
+        return r.status === 'running' ? r : null;
       },
-      { timeoutMs: 3000, label: 'run.runtimeSessionId populated' }
+      { timeoutMs: 3000, label: 'run reached running' }
     );
 
     ctx.mockRuntime.listSessions = async () => ({
@@ -85,9 +105,9 @@ describe('GET /admin/runtime/sessions (integration, Phase 7 finalization)', () =
     await waitFor(
       async () => {
         const r = (await client.getRun(runId)) as any;
-        return r.runtimeSessionId === sessionId ? r : null;
+        return r.status === 'running' ? r : null;
       },
-      { timeoutMs: 3000, label: 'run.runtimeSessionId populated' }
+      { timeoutMs: 3000, label: 'run reached running' }
     );
 
     // Runtime reports no sessions at all — the tracked run's session is gone.
@@ -127,13 +147,13 @@ describe('GET /admin/runtime/sessions (integration, Phase 7 finalization)', () =
   }, 10000);
 
   it('surfaces complete: false verbatim and returns missingFromRuntime as null under a truncated drain', async () => {
-    const { runId, sessionId } = await client.createRun(decisionModeRequest());
+    const { runId } = await client.createRun(decisionModeRequest());
     await waitFor(
       async () => {
         const r = (await client.getRun(runId)) as any;
-        return r.runtimeSessionId === sessionId ? r : null;
+        return r.status === 'running' ? r : null;
       },
-      { timeoutMs: 3000, label: 'run.runtimeSessionId populated' }
+      { timeoutMs: 3000, label: 'run reached running' }
     );
 
     ctx.mockRuntime.listSessions = async () => ({ sessions: [], complete: false, pagesFetched: 200 });
@@ -142,5 +162,35 @@ describe('GET /admin/runtime/sessions (integration, Phase 7 finalization)', () =
     expect(result.complete).toBe(false);
     expect(result.missingFromRuntime).toBeNull();
     expect(result.untrackedSessions).toEqual([]);
+  });
+
+  it('still reports a genuine untracked (orphan) session under a truncated drain — the forward diff stays sound even when the reverse one is suppressed', async () => {
+    const orphanSessionId = '22222222-2222-4222-8222-222222222222';
+    ctx.mockRuntime.listSessions = async () => ({
+      sessions: [{ sessionId: orphanSessionId, mode: 'macp.mode.handoff.v1', state: 'SESSION_STATE_OPEN' as const }],
+      complete: false,
+      pagesFetched: 200
+    });
+
+    const result = (await client.request('GET', '/admin/runtime/sessions')) as any;
+    expect(result.complete).toBe(false);
+    expect(result.missingFromRuntime).toBeNull();
+    expect(result.untrackedSessions).toEqual([
+      { sessionId: orphanSessionId, mode: 'macp.mode.handoff.v1', state: 'SESSION_STATE_OPEN' }
+    ]);
+  });
+
+  it('translates a circuit-breaker-open failure into a real HTTP 503, not a bare 500', async () => {
+    ctx.mockRuntime.listSessions = async () => {
+      throw new Error(CIRCUIT_BREAKER_OPEN_MESSAGE);
+    };
+
+    const res = await ctx.client.requestNoAuth('GET', '/admin/runtime/sessions', {
+      headers: { Authorization: 'Bearer test-key-integration' }
+    });
+
+    expect(res.status).toBe(503);
+    const body = res.body as Record<string, unknown>;
+    expect(body.errorCode).toBe('CIRCUIT_BREAKER_OPEN');
   });
 });
