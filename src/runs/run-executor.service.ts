@@ -411,8 +411,14 @@ export class RunExecutorService {
           );
         }
       } catch (pollError) {
-        if (pollError instanceof AppException) throw pollError;
-        // getSession failing with NotFound is normal while the agent hasn't called SessionStart yet.
+        // getSession failing with NOT_FOUND is normal while the agent hasn't called
+        // SessionStart yet — retryable whether it arrives as a raw provider error or
+        // (since grpc-helpers.ts's mapGrpcError started translating gRPC status codes
+        // to AppExceptions) pre-wrapped as an AppException(ErrorCode.NOT_FOUND, ...).
+        // Any other AppException — SESSION_EXPIRED thrown above, or a genuine
+        // mode/version mismatch — still bypasses the retry loop.
+        const isRetryableNotFound = pollError instanceof AppException && pollError.errorCode === ErrorCode.NOT_FOUND;
+        if (pollError instanceof AppException && !isRetryableNotFound) throw pollError;
         this.logger.debug(
           `getSession(${sessionId}) attempt ${attempt + 1}: ${pollError instanceof Error ? pollError.message : String(pollError)}`
         );
