@@ -1584,3 +1584,7 @@ a proper feature branch this time).
 
 pushed reconcile/absorb-runtime-v0.8.0 ecd482c
 PR #88 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/88
+merged #88 (e682eaf)
+
+**`/reconcile` is complete. This closes the entire `absorb-runtime-v0.8.0` `/drive` run:
+plan → implement (8 phases) → finalization pass → reconcile (3 entries) → ship (PR #88).**
