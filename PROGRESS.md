@@ -1583,3 +1583,4 @@ all 3 convention greps empty. All 3 decisions logged to `DECISIONS.md`
 a proper feature branch this time).
 
 pushed reconcile/absorb-runtime-v0.8.0 ecd482c
+PR #88 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/88
