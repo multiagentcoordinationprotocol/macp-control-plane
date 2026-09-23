@@ -658,6 +658,55 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       );
     });
 
+    it('retries past a GetSession NOT_FOUND AppException instead of failing fast (regression for #90)', async () => {
+      // mapGrpcError (grpc-helpers.ts) wraps a raw gRPC NOT_FOUND into an
+      // AppException(ErrorCode.NOT_FOUND, ...) before it reaches pollForOpenSession's
+      // catch block. Before the fix, any AppException tripped an unconditional
+      // rethrow, so every run failed on its very first poll attempt even though
+      // NOT_FOUND while the initiator hasn't opened the session yet is expected.
+      const handle = makeReadOnlyHandle();
+      mockProvider.subscribeSession.mockReturnValue(handle);
+
+      mockProvider.getSession
+        .mockRejectedValueOnce(
+          new AppException(ErrorCode.NOT_FOUND, "Session 'sess-ok' not found", 404, { grpcCode: 5 })
+        )
+        .mockRejectedValueOnce(
+          new AppException(ErrorCode.NOT_FOUND, "Session 'sess-ok' not found", 404, { grpcCode: 5 })
+        )
+        .mockResolvedValueOnce({
+          sessionId: 'sess-ok',
+          state: 'SESSION_STATE_OPEN',
+          mode: 'decision',
+          initiator: 'agent-1'
+        });
+
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-ok' }));
+
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 400));
+
+      expect(mockRunManager.markFailed).not.toHaveBeenCalled();
+      expect(mockRunManager.bindSession).toHaveBeenCalled();
+      expect(mockStreamConsumer.start).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'run-ok', sessionHandle: handle, subscriberId: 'agent-1' })
+      );
+    });
+
+    it('still fails fast on a non-NOT_FOUND AppException from GetSession (no retry)', async () => {
+      mockProvider.getSession.mockRejectedValue(new AppException(ErrorCode.MODE_NOT_SUPPORTED, 'mode mismatch', 400));
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-mode-mismatch' }));
+
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(mockRunManager.markFailed).toHaveBeenCalledWith(
+        'run-mode-mismatch',
+        expect.objectContaining({ errorCode: ErrorCode.MODE_NOT_SUPPORTED })
+      );
+      expect(mockProvider.getSession).toHaveBeenCalledTimes(1);
+    });
+
     it('marks run failed with SESSION_EXPIRED if the session expires before an agent opens it', async () => {
       mockProvider.getSession.mockResolvedValue({
         sessionId: 'sess-expired',
@@ -690,6 +739,26 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
         'run-timeout',
         expect.objectContaining({ errorCode: ErrorCode.RUNTIME_TIMEOUT })
       );
+    });
+
+    it('marks run failed with RUNTIME_TIMEOUT (not NOT_FOUND) when GetSession NOT_FOUND persists for a genuinely bad sessionId', async () => {
+      // Closes a gap flagged by the /ship verifier on the #90 fix: a permanent
+      // NOT_FOUND (e.g. a bad sessionId, not just "agent hasn't opened it yet")
+      // must still time out via RUNTIME_TIMEOUT, not retry forever or leak the
+      // raw NOT_FOUND as the run's failure reason.
+      mockProvider.getSession.mockRejectedValue(
+        new AppException(ErrorCode.NOT_FOUND, "Session 'sess-bad' not found", 404, { grpcCode: 5 })
+      );
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-notfound-timeout' }));
+
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 1200));
+
+      expect(mockRunManager.markFailed).toHaveBeenCalledWith(
+        'run-notfound-timeout',
+        expect.objectContaining({ errorCode: ErrorCode.RUNTIME_TIMEOUT })
+      );
+      expect(mockProvider.getSession.mock.calls.length).toBeGreaterThan(1);
     });
   });
 
