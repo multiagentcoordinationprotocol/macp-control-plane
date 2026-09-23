@@ -68,3 +68,94 @@ pins `mock`. Resolves when someone decides whether a live suite runs in CI at al
    absence is why the legacy ordinal-0 reconstruction has no safe data source, and why a too-high
    resume is undetectable in principle.
 3. Failing (1), document the compaction message string as a stable contract.
+
+# DECISIONS — absorb-runtime-v0.8.0 (2026-09-22)
+
+Outcome of `/reconcile` over the 3 `ASSUMPTIONS.md` entries tagged
+`Plan: plans/absorb-runtime-v0.8.0.md` (P2, P3, P5), run as the final step of that plan's
+`/drive` pipeline after all 8 phases shipped and `/implement`'s finalization pass (§4)
+passed. All three ranked low blast radius / reversible in a commit (no schema shape, public
+contract, auth model, or irreversible migration in play) — each analyzed and settled by a
+fresh Opus subagent per the Autonomy ladder, none escalated to Fable or to the user.
+
+**Result: 3 CONFIRMED (2 with a same-day correction applied, 1 as-is). 0 NEEDS-CHANGE.
+0 DEFER.** All settled without the user. Both corrections are additive/defensive-only
+changes (a redaction wrap, a nested try/catch fallback) — neither touches a public
+contract or changes existing behavior on the happy path.
+
+## Entry: P2 — inline `policy.denied`'s `errorCode` carries unbounded operator text, not the
+ack path's fixed constant
+
+- **Original assumption:** Ship the inline path's `errorCode` as free-text (`err.code`
+  verbatim), not normalized to the ack path's `"POLICY_DENIED"` constant — correct per the
+  plan's explicit shape, but left unredacted before reaching the trace span.
+- **Analysis (Opus):** The field-shape choice is still correct — normalizing loses the raw
+  denial text for no compensating benefit, and the choice was in-scope and deliberate.
+  But `RunEventService.recordSpanEvents` wrote every key-event span attribute (including
+  this unbounded `errorCode` string) straight to `TraceService.addRunSpanEvent` with zero
+  redaction, unlike the LLM-signal path elsewhere in the codebase which already redacts via
+  `RedactionService`. Recommended: wire `RedactionService` into `recordSpanEvents` before
+  the `addRunSpanEvent` call — a small, safe, purely additive fix (the service is
+  identity-passthrough when `MACP_REDACT_PATTERNS` is unconfigured).
+- **Decided by:** Opus (auto-settled, low blast radius).
+- **Verdict:** Applied the fix. `RunEventService` constructor takes `RedactionService` as
+  a 9th parameter; `recordSpanEvents` calls `this.redaction.redact(attrs)` before emitting.
+  New test in `run-event.service.spec.ts` (mutation-tested — fails when the redact call is
+  removed). Full suite green (828/828), typecheck/build/lint/prettier clean.
+- **Resulting status:** `CONFIRMED (2026-09-22)` — field-shape choice confirmed as-is,
+  redaction gap closed same-day.
+
+## Entry: P3 — the CP's `schemaVersion` pre-check is now deliberately stricter than the
+runtime's own admission gate, with no tracked trigger to widen it
+
+- **Original assumption:** Hardcode the pre-check to the closed set `{1,2,3}`, matching the
+  runtime's evaluator-time authoritative set rather than its looser registration-time
+  admission check — correct today, but with no automated staleness detector if the runtime
+  later widens its set.
+- **Analysis (Opus):** Confirmed as the strongest available option. The runtime's manifest
+  exposes no supported-schema-version field to derive the set from at startup, so fetching
+  it dynamically isn't currently possible; dropping the local check entirely reintroduces
+  the exact silent-registration-then-silent-evaluation-failure bug this phase fixed. The
+  lack of a staleness detector is an accepted, low-probability, non-silent gap (a visible
+  400, a one-line fix) rather than something that justifies new CI/monitoring machinery for
+  a three-item enum. The in-code comment already shipped (`2ac9dc6`) pointing at the
+  runtime's authoritative source is adequate mitigation — a future maintainer updating this
+  repo for a new runtime release has a direct pointer to what to check.
+- **Decided by:** Opus (auto-settled, low blast radius).
+- **Verdict:** No code change — confirmed as-is.
+- **Resulting status:** `CONFIRMED (2026-09-22)`.
+
+## Entry: P5 — `consumeLoop`'s last-resort `.catch()` marks the stream marker
+finalized/aborted but never calls `finalizeRun`/`markFailed`
+
+- **Original assumption:** Only update the in-memory marker from the last-resort catch
+  handler, deliberately not calling `finalizeRun` — reasoned at the time that adding a
+  second fallible async operation into the one place that must not throw would just
+  relocate the unhandled-rejection hazard one line later. Alternative (b) (a nested
+  try/catch around a `finalizeRun` attempt) was identified but not implemented, to keep the
+  phase minimal.
+- **Analysis (Opus):** Recommended implementing the previously-deferred alternative (b).
+  `finalizeRun`'s `doFinalize` closure sets `marker.finalized`/`marker.aborted` as its first
+  two synchronous statements, before any fallible `await` — so wrapping the `finalizeRun`
+  call in its own nested try/catch is strictly safe: even if the inner DB write throws, the
+  marker ends up in exactly the same safe state the old marker-only code produced directly,
+  while the common case (successful `markFailed`) now actually finalizes the run instead of
+  leaving it stuck until a restart-triggered `RunRecoveryService` sweep reconciles it.
+- **Decided by:** Opus (auto-settled, low blast radius).
+- **Verdict:** Applied the fix. The `.catch()` handler in `stream-consumer.service.ts`'s
+  `start()` now `await`s `this.finalizeRun(params.runId, marker, 'failed', error)` inside a
+  nested `try/catch` that falls back to the original marker-only behavior on failure.
+  Existing safety-net test extended with `markFailed`/`streamHub.complete` assertions; new
+  test added for the nested-fallback path (mutation-tested — fails when the nested attempt
+  is removed). Full suite green (828/828), typecheck/build/lint/prettier clean.
+- **Resulting status:** `CONFIRMED (2026-09-22)` — original safety reasoning confirmed,
+  completeness gap closed same-day.
+
+## Summary
+
+3 confirmed (2 with a same-day correction, 1 as-is), 0 changed-with-follow-up, 0 deferred.
+All 3 settled without the user (Opus, low blast radius per the Autonomy ladder). The P2 and
+P5 code changes (4 files: `run-event.service.ts`/`.spec.ts`,
+`stream-consumer.service.ts`/`.spec.ts`) need to go through `/ship`'s normal
+branch→PR→CI-watch→merge cycle before this reconcile pass is fully closed — not yet shipped
+as of this entry.

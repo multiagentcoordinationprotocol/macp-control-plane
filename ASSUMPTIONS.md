@@ -381,7 +381,21 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   on this path regardless, so the incremental exposure from `errorCode` carrying it too is low —
   but it is an unbounded-cardinality string landing in a trace attribute if tracing is later
   enabled, worth revisiting before this repo turns OTel on for policy-heavy deployments.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-09-22) — reconciled with a correction. A fresh Opus analysis
+  (`/reconcile`) confirmed the field-shape choice above but recommended closing the
+  redaction gap it flagged: `recordSpanEvents` (`run-event.service.ts:190-201`) wrote
+  `errorCode` and every other key-event span attribute to the trace unredacted, unlike the
+  LLM-signal path's redaction. Fixed same-day: `RunEventService` now takes a
+  `RedactionService` (9th constructor param) and `recordSpanEvents` passes its built
+  `attrs` through `this.redaction.redact(attrs)` before calling `addRunSpanEvent`
+  (`run-event.service.ts:11,53,199`). `RedactionService.redact` is a config-driven,
+  identity-passthrough-when-unconfigured redactor (`MACP_REDACT_PATTERNS`), so this is
+  additive and zero-risk when no patterns are configured — the original field-shape
+  decision (inline `errorCode` stays free-text, not normalized to the ack path's constant)
+  is unchanged and still correct. Test: `run-event.service.spec.ts` "recordSpanEvents
+  redaction (reconcile, ASSUMPTIONS.md P2 v0.8.0)" — mutation-tested (fails when the
+  redact call is removed). Decided by Opus (reversible, low blast radius); logged in
+  `DECISIONS.md`.
 
 ## P3 (v0.8.0) — the CP's schemaVersion pre-check is now deliberately stricter than the runtime's own admission gate, with no tracked trigger to widen it
 - **Plan:** `plans/absorb-runtime-v0.8.0.md` (Phase 3)
@@ -411,7 +425,16 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   reversible by a one-line constant change — but currently has no CI/monitoring signal to prompt
   that change; it would surface only as an operator-reported registration failure after a runtime
   upgrade.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-09-22) — no change. A fresh Opus analysis (`/reconcile`)
+  confirmed the hardcoded `{1,2,3}` enum is still the strongest available option: the
+  runtime's manifest exposes no supported-schema-version field to derive the set from, and
+  the alternative (no local check) reintroduces the bug this phase fixed. The absence of a
+  staleness detector is accepted as a known, low-probability, non-silent gap (visible 400,
+  one-line fix) rather than something worth building CI/monitoring for now — the existing
+  in-code cross-reference comment pointing at the runtime's authoritative source
+  (`runtime.controller.ts`, shipped in `2ac9dc6`) is the accepted mitigation: a future
+  maintainer updating this repo for a new runtime release has a direct pointer to what to
+  check. Decided by Opus (reversible, low blast radius); logged in `DECISIONS.md`.
 
 ## P5 (v0.8.0) — consumeLoop's last-resort `.catch()` marks the stream marker finalized/aborted but never calls `finalizeRun`/`markFailed`
 - **Plan:** `plans/absorb-runtime-v0.8.0.md` (Phase 5)
@@ -450,4 +473,20 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   is on by default, not opt-in. This is strictly better than the pre-fix behavior (a crashed process
   taking down every other active run's stream too), but is not a complete fix for the one run that
   hit it, and does require a restart (or manual intervention) to actually reconcile.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-09-22) — reconciled with a correction. A fresh Opus analysis
+  (`/reconcile`) recommended implementing alternative (b) from above (already identified at
+  implementation time but deferred to keep the phase minimal): attempt
+  `finalizeRun(runId, marker, 'failed', error)` from the last-resort `.catch()`, wrapped in
+  its own nested `try/catch` so a failure inside `finalizeRun` itself still degrades to the
+  marker-only fallback instead of re-escaping as an unhandled rejection. This closes the
+  "run appears stuck until restart" gap for the common case (successful `markFailed`) while
+  preserving the original fix's safety property for the rare case (`finalizeRun` itself
+  throws). Safe because `finalizeRun`'s `doFinalize` sets `marker.finalized`/`marker.aborted`
+  as its first synchronous statements, before any fallible `await` — so the nested-catch
+  fallback path ends in the exact same marker state the old code produced directly. Fixed
+  same-day: `stream-consumer.service.ts`'s `.catch()` handler (in `start()`). Tests:
+  `stream-consumer.service.spec.ts`'s existing safety-net test extended with
+  `markFailed`/`streamHub.complete` assertions, plus a new test
+  "still marks the marker finalized/aborted without throwing when finalizeRun itself fails
+  (nested fallback)" — mutation-tested (fails when the nested attempt is removed). Decided
+  by Opus (reversible, low blast radius); logged in `DECISIONS.md`.
