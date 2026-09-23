@@ -389,7 +389,9 @@ describe('StreamConsumerService', () => {
 
     it('increments the envelope ordinal only for stream envelopes and persists it', async () => {
       let seq = 0;
-      eventService.persistRawAndCanonical.mockImplementation(async () => [{ seq: ++seq, type: 'message.received', data: {} }] as any);
+      eventService.persistRawAndCanonical.mockImplementation(
+        async () => [{ seq: ++seq, type: 'message.received', data: {} }] as any
+      );
 
       const marker = newMarker();
       const handleRawEventInner = (service as any).handleRawEventInner.bind(service);
@@ -425,7 +427,11 @@ describe('StreamConsumerService', () => {
       const handle2 = makeHandle([
         envelope('m3'),
         envelope('m4'),
-        { kind: 'session-snapshot', receivedAt: 't', sessionSnapshot: { sessionId: 'session-1', mode: '', state: 'SESSION_STATE_RESOLVED' } }
+        {
+          kind: 'session-snapshot',
+          receivedAt: 't',
+          sessionSnapshot: { sessionId: 'session-1', mode: '', state: 'SESSION_STATE_RESOLVED' }
+        }
       ]);
       const mockProvider = { subscribeSession: jest.fn().mockReturnValueOnce(handle2), getSession: jest.fn() };
       runtimeRegistry.get.mockReturnValue(mockProvider as any);
@@ -476,7 +482,11 @@ describe('StreamConsumerService', () => {
       // NOT bump the ordinal past 1 before the resubscribe reads it.
       const handle1 = makeHandle([envelope('m1'), envelope('m2')]);
       const handle2 = makeHandle([
-        { kind: 'session-snapshot', receivedAt: 't', sessionSnapshot: { sessionId: 'session-1', mode: '', state: 'SESSION_STATE_RESOLVED' } }
+        {
+          kind: 'session-snapshot',
+          receivedAt: 't',
+          sessionSnapshot: { sessionId: 'session-1', mode: '', state: 'SESSION_STATE_RESOLVED' }
+        }
       ]);
       const mockProvider = { subscribeSession: jest.fn().mockReturnValueOnce(handle2), getSession: jest.fn() };
       runtimeRegistry.get.mockReturnValue(mockProvider as any);
@@ -750,7 +760,7 @@ describe('StreamConsumerService', () => {
     });
 
     describe('consumeLoop safety net (Phase 5, runtime 0.8.0 absorption)', () => {
-      it('prevents an unhandled promise rejection when something escapes consumeLoop\'s own error handling', async () => {
+      it("prevents an unhandled promise rejection when something escapes consumeLoop's own error handling", async () => {
         // consumeLoop's poll-fallback loop calls eventService.emitControlPlaneEvents
         // (the "reconnecting" session.stream.opened event) outside any try/catch of
         // its own. Before this phase, that promise chain (wired in start(), not
@@ -763,9 +773,7 @@ describe('StreamConsumerService', () => {
           getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RUNNING' })
         };
         runtimeRegistry.get.mockReturnValue(mockProvider as any);
-        eventService.emitControlPlaneEvents.mockRejectedValueOnce(
-          new Error('unexpected control-plane emit failure')
-        );
+        eventService.emitControlPlaneEvents.mockRejectedValueOnce(new Error('unexpected control-plane emit failure'));
         const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
 
         try {
@@ -781,6 +789,41 @@ describe('StreamConsumerService', () => {
           expect(marker.finalized).toBe(true);
           expect(marker.aborted).toBe(true);
           expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('unexpected control-plane emit failure'));
+          // Reconcile (ASSUMPTIONS.md P5 v0.8.0): the safety net now attempts a real
+          // finalizeRun('failed') instead of only marking the marker, so the run
+          // transitions to `failed` in the DB immediately rather than sitting stuck
+          // until a restart-triggered RunRecoveryService sweep reconciles it.
+          expect(runManager.markFailed).toHaveBeenCalledWith('run-safety-net', expect.any(Error));
+          expect(streamHub.complete).toHaveBeenCalledWith('run-safety-net');
+        } finally {
+          errorSpy.mockRestore();
+        }
+      });
+
+      it('still marks the marker finalized/aborted without throwing when finalizeRun itself fails (nested fallback)', async () => {
+        // The escaped error is real, but so is the DB write finalizeRun attempts in
+        // response — if that write also fails, the nested try/catch must still leave
+        // the marker in the same safe state the pre-fix code produced unconditionally,
+        // and the outer .catch() handler itself must never reject (that would recreate
+        // the exact unhandled-rejection hazard this whole safety net exists to close).
+        const mockProvider = {
+          getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RUNNING' })
+        };
+        runtimeRegistry.get.mockReturnValue(mockProvider as any);
+        eventService.emitControlPlaneEvents.mockRejectedValueOnce(new Error('unexpected control-plane emit failure'));
+        runManager.markFailed.mockRejectedValueOnce(new Error('DB unavailable during finalize'));
+        const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+
+        try {
+          await service.start({ ...baseParams, runId: 'run-safety-net-nested-fail' });
+          const marker = (service as any).active.get('run-safety-net-nested-fail');
+          expect(marker).toBeDefined();
+
+          await expect(marker.loopPromise).resolves.toBeUndefined();
+
+          expect(marker.finalized).toBe(true);
+          expect(marker.aborted).toBe(true);
+          expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('DB unavailable during finalize'));
         } finally {
           errorSpy.mockRestore();
         }
@@ -804,7 +847,11 @@ describe('StreamConsumerService', () => {
 
       await handleRawEventInner(
         'run-cancel-state',
-        { kind: 'session-snapshot', receivedAt: new Date().toISOString(), sessionSnapshot: { state: 'SESSION_STATE_CANCELLED' } },
+        {
+          kind: 'session-snapshot',
+          receivedAt: new Date().toISOString(),
+          sessionSnapshot: { state: 'SESSION_STATE_CANCELLED' }
+        },
         { knownParticipants: new Set<string>(), execution: {}, runtimeSessionId: 'sess-x' },
         'sess-x',
         marker

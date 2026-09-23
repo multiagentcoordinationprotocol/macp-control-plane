@@ -58,10 +58,7 @@ export class StreamConsumerService implements OnModuleDestroy {
     // in-flight persistRawAndCanonical before returning, so the DB pool
     // isn't closed under them. Capped to avoid blocking shutdown on stuck
     // gRPC calls.
-    await Promise.race([
-      Promise.allSettled(pending),
-      new Promise<void>((resolve) => setTimeout(resolve, 2000))
-    ]);
+    await Promise.race([Promise.allSettled(pending), new Promise<void>((resolve) => setTimeout(resolve, 2000))]);
   }
 
   async start(params: {
@@ -86,23 +83,36 @@ export class StreamConsumerService implements OnModuleDestroy {
     this.active.set(params.runId, marker);
     this.instrumentation.activeStreams.inc();
     marker.loopPromise = this.consumeLoop(marker, params)
-      .catch((error) => {
+      .catch(async (error) => {
         // Last-resort safety net (Phase 5, runtime 0.8.0 absorption). consumeLoop's
         // own per-iteration try/catch blocks handle every known stream/poll failure;
         // this only fires for something that still escapes them — e.g. a future bug
         // in a post-commit side effect — and exists solely to stop an unhandled
         // promise rejection from crashing the process (Node >=15 default), since this
-        // promise chain previously had no .catch() at all. Deliberately does NOT call
-        // finalizeRun()/markFailed(): those are themselves async and fallible, and
-        // invoking a fallible operation from inside this net would risk recreating
-        // the exact unhandled-rejection hazard being closed here. Marking the marker
-        // directly is enough to stop the loop and let the .finally() below clean up.
+        // promise chain previously had no .catch() at all.
+        //
+        // Attempts finalizeRun('failed') (reconcile, ASSUMPTIONS.md P5 v0.8.0) so the
+        // run doesn't sit stuck at its pre-crash status until a restart-triggered
+        // RunRecoveryService sweep reconciles it. finalizeRun's doFinalize() sets
+        // marker.finalized/aborted as its first synchronous step, before the fallible
+        // DB write — so even if markFailed/emitControlPlaneEvents throws below, the
+        // marker ends up in the same safe state this net previously produced directly.
+        // The nested try/catch guarantees this handler itself never rejects, which is
+        // what would recreate the unhandled-rejection hazard this net exists to close.
         this.logger.error(
           `consumeLoop for run ${params.runId} failed unexpectedly and was stopped: ` +
             `${error instanceof Error ? error.message : String(error)}`
         );
-        marker.finalized = true;
-        marker.aborted = true;
+        try {
+          await this.finalizeRun(params.runId, marker, 'failed', error);
+        } catch (finalizeError) {
+          this.logger.error(
+            `finalizeRun also failed while handling consumeLoop's last-resort catch for run ${params.runId}: ` +
+              `${finalizeError instanceof Error ? finalizeError.message : String(finalizeError)}`
+          );
+          marker.finalized = true;
+          marker.aborted = true;
+        }
       })
       .finally(() => {
         this.instrumentation.activeStreams.dec();

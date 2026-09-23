@@ -8,6 +8,7 @@ import { ProjectionService, PROJECTION_SCHEMA_VERSION } from '../projection/proj
 import { EventRepository } from '../storage/event.repository';
 import { RunRepository } from '../storage/run.repository';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
+import { RedactionService } from '../telemetry/redaction.service';
 import { TraceService } from '../telemetry/trace.service';
 import { StreamHubService } from './stream-hub.service';
 
@@ -48,7 +49,8 @@ export class RunEventService {
     private readonly metricsService: MetricsService,
     private readonly streamHub: StreamHubService,
     private readonly traceService: TraceService,
-    private readonly instrumentation: InstrumentationService
+    private readonly instrumentation: InstrumentationService,
+    private readonly redaction: RedactionService
   ) {}
 
   async emitControlPlaneEvents(
@@ -194,7 +196,7 @@ export class RunEventService {
         const v = fn(event);
         if (v !== undefined) attrs[k] = v;
       }
-      this.traceService.addRunSpanEvent(runId, event.type, attrs);
+      this.traceService.addRunSpanEvent(runId, event.type, this.redaction.redact(attrs));
     }
   }
 }

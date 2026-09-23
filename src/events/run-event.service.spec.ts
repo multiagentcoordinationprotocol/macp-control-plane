@@ -17,6 +17,13 @@ describe('RunEventService', () => {
   let projectionService: jest.Mocked<ProjectionService>;
   let metricsService: jest.Mocked<MetricsService>;
   let streamHub: jest.Mocked<StreamHubService>;
+  let traceService: {
+    withRunSpan: jest.Mock;
+    withSpan: jest.Mock;
+    addRunSpanEvent: jest.Mock;
+    getRunTraceContext: jest.Mock;
+  };
+  let redactionService: { redact: jest.Mock };
   let postCommitSideEffectFailuresTotal: { inc: jest.Mock };
   let errorSpy: jest.SpyInstance;
   let mockTx: Record<string, unknown>;
@@ -106,6 +113,14 @@ describe('RunEventService', () => {
 
     postCommitSideEffectFailuresTotal = { inc: jest.fn() };
 
+    traceService = {
+      withRunSpan: jest.fn(<T>(_runId: string, _name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
+      withSpan: jest.fn(<T>(_name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
+      addRunSpanEvent: jest.fn(),
+      getRunTraceContext: jest.fn().mockReturnValue(undefined)
+    };
+    redactionService = { redact: jest.fn((v) => v) };
+
     service = new RunEventService(
       database,
       runRepository,
@@ -113,13 +128,9 @@ describe('RunEventService', () => {
       projectionService,
       metricsService,
       streamHub,
-      {
-        withRunSpan: jest.fn(<T>(_runId: string, _name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
-        withSpan: jest.fn(<T>(_name: string, _attrs: unknown, fn: () => Promise<T>) => fn()),
-        addRunSpanEvent: jest.fn(),
-        getRunTraceContext: jest.fn().mockReturnValue(undefined)
-      } as any,
-      { postCommitSideEffectFailuresTotal } as any
+      traceService as any,
+      { postCommitSideEffectFailuresTotal } as any,
+      redactionService as any
     );
   });
 
@@ -231,6 +242,37 @@ describe('RunEventService', () => {
       // The transaction callback should have called both allocateSequence and appendCanonical
       expect(runRepository.allocateSequence).toHaveBeenCalled();
       expect(eventRepository.appendCanonical).toHaveBeenCalled();
+    });
+  });
+
+  describe('recordSpanEvents redaction (reconcile, ASSUMPTIONS.md P2 v0.8.0)', () => {
+    it('passes key-event span attrs through RedactionService before emitting them', async () => {
+      // A non-identity mock proves the wiring is real rather than merely present —
+      // an identity redact() would let this test pass even if the call site were
+      // accidentally removed.
+      redactionService.redact.mockImplementation((attrs: Record<string, unknown>) => ({
+        ...attrs,
+        errorCode: '[REDACTED]'
+      }));
+
+      const partialEvents = [
+        {
+          ts: '2026-01-01T00:00:00.000Z',
+          type: 'policy.denied' as const,
+          source: { kind: 'macp-control-plane' as const, name: 'run-manager' },
+          subject: { kind: 'run' as const, id: 'run-1' },
+          data: { errorCode: 'PolicyDenied: rejected by operator "do not deploy on Fridays"' }
+        }
+      ];
+
+      await service.emitControlPlaneEvents('run-1', partialEvents);
+
+      expect(redactionService.redact).toHaveBeenCalledWith({ seq: expect.any(Number), errorCode: expect.any(String) });
+      expect(traceService.addRunSpanEvent).toHaveBeenCalledWith(
+        'run-1',
+        'policy.denied',
+        expect.objectContaining({ errorCode: '[REDACTED]' })
+      );
     });
   });
 
