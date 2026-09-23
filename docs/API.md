@@ -616,19 +616,33 @@ Response:
 {
   "complete": true,
   "runtimeSessionCount": 42,
+  "liveRuntimeSessionCount": 40,
   "trackedRunCount": 40,
   "untrackedSessions": [ { "sessionId": "...", "mode": "...", "state": "..." } ],
   "missingFromRuntime": [ { "runId": "...", "runtimeSessionId": "..." } ]
 }
 ```
 
-Notes: `complete: false` means the underlying `listSessions()` drain was truncated (page
-cap or overall timeout) — `untrackedSessions` is still sound in that case (a session in the
-fetched prefix that isn't tracked really is untracked), but `missingFromRuntime` is not (a
-tracked run's session simply not yet fetched would otherwise look like a false positive), so
-it comes back as `null` rather than a partial, unsound list. A runtime error surfaces as
-`503 SERVICE_UNAVAILABLE` (`RUNTIME_UNAVAILABLE` when unreachable, `CIRCUIT_BREAKER_OPEN`
-when the breaker is open) — never a silently-empty diff.
+Notes: the runtime retains a terminal session (`SESSION_STATE_RESOLVED`/`_EXPIRED`/
+`_CANCELLED`) for a configurable window after it ends (default 1h —
+`MACP_SESSION_RETENTION_SECS` on the runtime side), while this service finalizes a run
+locally the instant it observes that terminal state. Both diff directions are therefore
+restricted to live sessions (`SESSION_STATE_OPEN`/`SESSION_STATE_SUSPENDED`) so a
+normally-completed run doesn't show up as false drift for the rest of the retention window;
+`runtimeSessionCount` is the raw count from `listSessions()` (diagnostic context only) while
+`liveRuntimeSessionCount` is what's actually diffed. `complete: false` means the underlying
+`listSessions()` drain was truncated (page cap or overall timeout) — `untrackedSessions` is
+still sound in that case (a live session in the fetched prefix that isn't tracked really is
+untracked), but `missingFromRuntime` is not (a tracked run's session simply not yet fetched
+would otherwise look like a false positive), so it comes back as `null` rather than a
+partial, unsound list. Because `listSessions()` and the local run lookup are two sequential,
+non-atomic reads, a run bound mid-drain can also transiently appear as a false positive in
+`missingFromRuntime` even when `complete: true` — treat this endpoint as an approximate,
+point-in-time signal, not a transactional snapshot. A runtime error propagates through
+unchanged: `503 SERVICE_UNAVAILABLE` (`RUNTIME_UNAVAILABLE` when unreachable,
+`CIRCUIT_BREAKER_OPEN` when the breaker is open), `504` (`RUNTIME_TIMEOUT`), `429`
+(`RATE_LIMITED`), `401` (`UNAUTHENTICATED`), or `500` for an unrecognized error — never a
+silently-empty diff.
 
 ---
 

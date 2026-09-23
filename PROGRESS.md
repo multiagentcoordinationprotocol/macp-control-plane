@@ -400,7 +400,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | P4 explicit gRPC channel options | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `fe6c70d` (squash) | merged #84 |
 | P5 non-blocking post-commit publish side effects | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `2a6e1d2` (squash) | merged #85 |
 | P6 handoff implicit-accept integration test | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) + 1 (ship-gate: 1 GAPS→closed) | Opus (fresh subagent, all rounds) | `e8258fc` (squash) | merged #86 |
-| P7 listSessions() admin drift-detection endpoint | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) | Opus (fresh subagent, both rounds) | `d9709c5` | (pending — ships via `/ship`) |
+| P7 listSessions() admin drift-detection endpoint | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) + 2 (ship-gate: 1 GAPS→closed + 1 re-verify PASS) | Opus (fresh subagent, all rounds) | `d9709c5` + ship-gate fix commit (pending) | (pending — ships via `/ship`) |
 | P8 bump @multiagentcoordinationprotocol/proto to 0.1.10 | DONE (independently, PR #80, pre-dates this plan) | 0 | n/a | 23db607 (#80) | #80 (already merged) |
 
 ## Repo map
@@ -1353,3 +1353,87 @@ newly logged.
 **What's next:** commit Phase 7, hand off to `/ship` (PR for Phase 7) — then confirm
 Phase 8's already-merged status (PR #80, pre-dates this plan) and move to `/implement`'s
 finalization pass (§4) across the whole plan.
+
+### Phase 7 — ship-gate — 2026-09-22
+
+**Ship-gate (round 1) — fresh Opus subagent, broader review (production-readiness, doc
+drift, tracked-file consistency): GAPS.** This is the first ship-gate in this entire
+8-phase run to find a genuine correctness bug the implement-gate had missed (Phases 4/5's
+ship-gates found zero issues; Phase 6's found one doc-only gap). Found 1 should-fix + 2
+minor + 3 advisory items:
+
+1. **(should-fix)** `untrackedSessions` was computed against the raw, unfiltered
+   `listSessions()` result with no session-state filter. The runtime retains a terminal
+   session (`SESSION_STATE_RESOLVED`/`_EXPIRED`/`_CANCELLED`) in `ListSessions` for a
+   configurable window after it ends (default 1h, `MACP_SESSION_RETENTION_SECS`), while
+   this control-plane finalizes — and stops tracking as "active" — a run the instant it
+   observes that session go terminal (`stream-consumer.service.ts:383-385`/`:526-529`,
+   `projection.service.ts:198`). Left as-is, every normally-completed run would have
+   spuriously shown up as "untracked drift" for up to an hour in ordinary steady-state
+   operation — real noise dominating the endpoint's primary signal, not just the
+   already-fixed truncated-drain edge case.
+2. **(minor)** `CLAUDE.md`'s two test-count mentions were stale ("815 tests") after this
+   phase's own new tests raised the count.
+3. **(minor)** `docs/API.md`'s error-contract section overstated that only `503` outcomes
+   are possible, omitting the real 504 (`RUNTIME_TIMEOUT`)/429 (`RATE_LIMITED`)/401
+   (`UNAUTHENTICATED`)/500 (unrecognized) paths that also propagate unchanged through the
+   controller's pass-through branch.
+4. **(advisory)** The exact string `'Circuit breaker is OPEN — runtime calls are
+   temporarily disabled'` was independently duplicated as a raw literal in
+   `circuit-breaker.ts` (the throw site), `admin.controller.ts` (the substring-match catch
+   site), and `admin.controller.spec.ts` (the test's mock error) — a future message-text
+   change could silently desync the matching sites.
+5. **(advisory)** Missing a one-sentence `docs/API.md` caveat that `listSessions()` and
+   `listActiveRuns()` are two sequential, non-atomic reads — a run bound mid-drain could
+   transiently appear as a false positive in `missingFromRuntime` even with
+   `complete: true`.
+6. **(non-blocking, confirmed no regression)** `RunRepository.listActiveRuns()`'s scale
+   characteristics (indexed status column, bounded active-run count in practice) reviewed
+   and found acceptable — no fix required.
+
+**Gaps closed:** (1) added a `liveSessions` filter
+(`state === 'SESSION_STATE_OPEN' || state === 'SESSION_STATE_SUSPENDED'`) applied to both
+diff directions (`runtimeSessionIds`/`missingFromRuntime` and `untrackedSessions`'s
+source), plus a new `liveRuntimeSessionCount` response field distinguishing the filtered
+count from the raw `runtimeSessionCount`; added two new regression tests — a terminal-state
+session with no tracked run must NOT appear in `untrackedSessions`, and a tracked run whose
+session has gone terminal DOES still correctly appear in `missingFromRuntime` (real drift,
+not retention noise). (2) `CLAUDE.md`'s two mentions updated to 826. (3) `docs/API.md`'s
+error-contract text rewritten to describe the full status range, cross-checked against
+`mapGrpcError`/`GRPC_STATUS_TO_HTTP` in `src/runtime/grpc-helpers.ts`. (4) Exported
+`CIRCUIT_BREAKER_OPEN_MESSAGE` from `circuit-breaker.ts`, used at its own throw site and at
+both the controller's catch-site match and the test's mock-error construction — no raw
+duplicate literal remains in any of the three originally-named files. (5) Added the
+non-atomicity caveat to `docs/API.md`. (6) Confirmed via `git diff --stat` that
+`run.repository.ts` was untouched by this fix round.
+
+**Re-verification after fixes:** typecheck clean, `npm test` **826/826** (56/56 suites —
+the +2 over the implement-gate's 824 being the two new ship-gate regression tests),
+`npm run build` clean, `npm run lint` clean, `npx prettier --check` clean on all four
+touched files, all 3 convention greps empty.
+
+**A process note on this round:** the first ship-gate re-verify subagent launched to
+confirm closure ran for over an hour without reaching a verdict — genuinely still working
+(confirmed via a direct status-check message mid-run, and its last known state before being
+stopped showed active, on-topic investigation, not a hang), just far more exploratory than
+the task warranted. It was stopped (`TaskStop`) and replaced with a second, tightly
+budgeted re-verify subagent (explicit file list, each verification command run exactly
+once, no open-ended exploration) which completed in ~2.5 minutes.
+
+**Verify (round 2, relaunch) — fresh Opus subagent: PASS.** Given the exact round-1 gap
+list. Independently confirmed all 6 items closed with `file:line` citations, independently
+re-ran the full verification suite (826/826 tests, clean typecheck/build/lint), and
+cross-checked the error-contract rewrite against real `grpc-helpers.ts` source rather than
+trusting the prose. One new non-blocking cosmetic nit found (a markdown line-wrap artifact
+in `docs/API.md` collapsing "normally-completed" into "normally -completed" when rendered)
+— fixed immediately, not requiring another round. `npx prettier --check` flagged
+`docs/API.md` as a whole, investigated and confirmed pre-existing (the file's hand-aligned
+markdown tables throughout, unrelated to this diff, always reformat under prettier) — not a
+regression introduced by this phase.
+
+`plans/absorb-runtime-v0.8.0.md`'s Phase 7 divergence note extended with the ship-gate
+round's finding and fix, alongside the implement-gate round's.
+
+**What's next:** commit Phase 7 (implement + ship-gate fixes as the phase's commits), push,
+open PR, watch CI, merge — then confirm Phase 8's already-merged status and move to
+`/implement`'s finalization pass (§4).

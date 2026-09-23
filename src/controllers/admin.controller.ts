@@ -1,6 +1,7 @@
 import { Controller, Get, HttpCode, HttpException, HttpStatus, Post, Query } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { RustRuntimeProvider } from '../runtime/rust-runtime.provider';
+import { CIRCUIT_BREAKER_OPEN_MESSAGE } from '../runtime/circuit-breaker';
 import { RunRepository } from '../storage/run.repository';
 import { AppException } from '../errors/app-exception';
 import { ErrorCode } from '../errors/error-codes';
@@ -58,7 +59,7 @@ export class AdminController {
       // fall through to an opaque 500 instead of the SERVICE_UNAVAILABLE this
       // endpoint's contract requires.
       if (error instanceof HttpException) throw error;
-      if (error instanceof Error && error.message.includes('Circuit breaker is OPEN')) {
+      if (error instanceof Error && error.message.includes(CIRCUIT_BREAKER_OPEN_MESSAGE)) {
         throw new AppException(ErrorCode.CIRCUIT_BREAKER_OPEN, error.message, HttpStatus.SERVICE_UNAVAILABLE);
       }
       throw error;
@@ -68,7 +69,20 @@ export class AdminController {
     const trackedSessionIds = new Set(
       activeRuns.map((run) => run.runtimeSessionId).filter((id): id is string => Boolean(id))
     );
-    const runtimeSessionIds = new Set(result.sessions.map((s) => s.sessionId));
+    // The runtime retains a terminal session (SESSION_STATE_RESOLVED / _EXPIRED /
+    // _CANCELLED) for a configurable window after it ends (default 1h —
+    // MACP_SESSION_RETENTION_SECS on the runtime side) before sweeping it out of
+    // `ListSessions`. `RunEventService`/`StreamConsumerService` finalize the run
+    // locally the moment that terminal state is observed, so a resolved session
+    // drops out of `listActiveRuns()` immediately — well before the runtime
+    // stops reporting it. Diffing against the raw session list would report
+    // every recently-completed run as "drift" for up to that whole retention
+    // window; restricting both directions of the diff to live states is what
+    // makes this endpoint measure actual drift instead of normal turnover.
+    const liveSessions = result.sessions.filter(
+      (s) => s.state === 'SESSION_STATE_OPEN' || s.state === 'SESSION_STATE_SUSPENDED'
+    );
+    const runtimeSessionIds = new Set(liveSessions.map((s) => s.sessionId));
 
     // The genuine gap this endpoint exists to detect: sessions the runtime
     // knows about but this service never recorded as an active run (e.g.
@@ -76,9 +90,12 @@ export class AdminController {
     // under a truncated drain — a session present in the fetched prefix that
     // isn't tracked really is untracked, regardless of what the rest of the
     // (unfetched) prefix might contain.
-    const untrackedSessions = result.sessions.filter((s) => !trackedSessionIds.has(s.sessionId));
+    const untrackedSessions = liveSessions.filter((s) => !trackedSessionIds.has(s.sessionId));
     // The reverse direction: runs this service still considers active whose
-    // bound session the runtime no longer reports at all. Unlike
+    // bound session the runtime no longer reports as live at all (including a
+    // session the runtime has already resolved/expired/cancelled — the CP
+    // hasn't caught up with a terminal state, which is real drift, not the
+    // retention-window noise `liveSessions` filters out above). Unlike
     // `untrackedSessions`, this direction is NOT sound under a truncated
     // drain: a tracked run's session simply not having been fetched yet
     // would otherwise show up here as a false positive (a run that IS still
@@ -93,7 +110,11 @@ export class AdminController {
 
     return {
       complete: result.complete,
+      // Raw count of everything `listSessions()` returned, terminal sessions
+      // still inside the runtime's retention window included — diagnostic
+      // context, not the basis for the diff below (see `liveSessions` above).
       runtimeSessionCount: result.sessions.length,
+      liveRuntimeSessionCount: liveSessions.length,
       trackedRunCount: activeRuns.length,
       untrackedSessions,
       missingFromRuntime

@@ -4,6 +4,7 @@ import { RustRuntimeProvider } from '../runtime/rust-runtime.provider';
 import { RunRepository } from '../storage/run.repository';
 import { AppException } from '../errors/app-exception';
 import { ErrorCode } from '../errors/error-codes';
+import { CIRCUIT_BREAKER_OPEN_MESSAGE } from '../runtime/circuit-breaker';
 
 describe('AdminController', () => {
   let controller: AdminController;
@@ -97,10 +98,47 @@ describe('AdminController', () => {
       expect(result).toEqual({
         complete: true,
         runtimeSessionCount: 1,
+        liveRuntimeSessionCount: 1,
         trackedRunCount: 1,
         untrackedSessions: [],
         missingFromRuntime: []
       });
+    });
+
+    it('excludes a recently-resolved runtime session from untrackedSessions (retention-window noise, not drift)', async () => {
+      // The runtime retains a terminal session for a while after it ends
+      // (default ~1h) before sweeping it out of ListSessions. The CP finalizes
+      // the run locally the instant it observes the terminal state, so the run
+      // drops out of listActiveRuns() well before the runtime forgets the
+      // session. Diffing against the raw (unfiltered) session list would
+      // falsely report every recently-completed run as drift.
+      const resolved = { sessionId: 'sess-done', mode: 'macp.mode.decision.v1', state: 'SESSION_STATE_RESOLVED' };
+      mockRustRuntime.listSessions.mockResolvedValue({
+        sessions: [resolved],
+        complete: true,
+        pagesFetched: 1
+      });
+      mockRunRepository.listActiveRuns.mockResolvedValue([]);
+
+      const result = await controller.getRuntimeSessionDrift();
+
+      expect(result.untrackedSessions).toEqual([]);
+      expect(result.runtimeSessionCount).toBe(1);
+      expect(result.liveRuntimeSessionCount).toBe(0);
+    });
+
+    it('reports a run as missing-from-runtime when its session is present but already resolved (real drift, not retention noise)', async () => {
+      const resolved = { sessionId: 'sess-done', mode: 'macp.mode.decision.v1', state: 'SESSION_STATE_RESOLVED' };
+      mockRustRuntime.listSessions.mockResolvedValue({
+        sessions: [resolved],
+        complete: true,
+        pagesFetched: 1
+      });
+      mockRunRepository.listActiveRuns.mockResolvedValue([{ id: 'run-stale', runtimeSessionId: 'sess-done' }]);
+
+      const result = await controller.getRuntimeSessionDrift();
+
+      expect(result.missingFromRuntime).toEqual([{ runId: 'run-stale', runtimeSessionId: 'sess-done' }]);
     });
 
     it('reports a runtime-only session as drift (untracked, not backfilled)', async () => {
@@ -182,9 +220,7 @@ describe('AdminController', () => {
     });
 
     it('translates a circuit-breaker-open error into AppException(CIRCUIT_BREAKER_OPEN, 503)', async () => {
-      mockRustRuntime.listSessions.mockRejectedValue(
-        new Error('Circuit breaker is OPEN — runtime calls are temporarily disabled')
-      );
+      mockRustRuntime.listSessions.mockRejectedValue(new Error(CIRCUIT_BREAKER_OPEN_MESSAGE));
 
       let caught: AppException | undefined;
       try {
