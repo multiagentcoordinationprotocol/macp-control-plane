@@ -1437,3 +1437,6 @@ round's finding and fix, alongside the implement-gate round's.
 **What's next:** commit Phase 7 (implement + ship-gate fixes as the phase's commits), push,
 open PR, watch CI, merge — then confirm Phase 8's already-merged status and move to
 `/implement`'s finalization pass (§4).
+
+pushed absorb-runtime-v0.8.0-p7 77dcaaf
+PR #87 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/87
