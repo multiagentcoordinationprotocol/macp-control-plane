@@ -1538,7 +1538,31 @@ integration-test, docker). No revert needed since the result is clean, but the c
 process for any further code changes in this run is back through `/ship`'s normal
 branch → PR → CI-watch → merge cycle, not a direct push.
 
-**What's next:** spawn the final whole-feature Opus verification pass over the cumulative
-diff (`a6dc15d..HEAD` — `a6dc15d` is the commit that closed out the prior v0.7.0 plan,
-immediately before this plan's Phase 1 began), then `/reconcile` the 3 `UNCONFIRMED`
-`ASSUMPTIONS.md` entries, then the final `/drive` report.
+**Final whole-feature verification — fresh Opus subagent, budgeted procedure: PASS.**
+Checked (1) the cumulative diff shape (37 files, 3619 insertions/268 deletions, matching
+this section's own claims), (2) the plan's all-8-`DONE` status with each phase's
+divergence note read in full and found internally consistent, (3) this finalization
+section's own claims cross-checked against a fresh re-run (826/826 unit tests, clean
+typecheck/build/lint), (4) three specific cross-phase interaction risks — Phase 5's
+non-blocking post-commit change couldn't mask a Phase 6 test failure (Phase 6's
+assertions read the projection, built pre-commit, not the post-commit side effects
+Phase 5 changed); Phase 7's admin endpoint calls the same circuit-breaker-wrapped
+`RustRuntimeProvider.listSessions()` Phase 4's channel options apply to, no bypass;
+Phase 1's harness changes and the finalization's new integration spec are mutually
+compatible (`test:integration`'s regex is unfiltered, CI runs the same command
+verbatim) — and (5) confirmed exactly 3 `ASSUMPTIONS.md` entries tagged to this plan,
+all genuinely `UNCONFIRMED`, substance verified true against current code.
+
+One non-blocking nit found and fixed immediately: `ASSUMPTIONS.md`'s `P2 (v0.8.0)` entry
+had two stale `file:line` citations (later edits to the same files had shifted them) —
+`event-normalizer.service.ts:96` → corrected to `:109`;
+`run-event.service.ts:135-145` → corrected to `:188-199` (Phase 5's new
+`runPostCommitSideEffects` block had pushed `recordSpanEvents` down ~53 lines). The
+claims themselves were accurate; only the pinpoint line numbers had drifted.
+
+**`/implement`'s finalization pass (§4) is complete.** All 8 phases `DONE`, whole-feature
+tests green, the one real inter-phase seam gap found and closed, tracked files
+consistent and honest.
+
+**What's next:** `/reconcile` the 3 `UNCONFIRMED` `ASSUMPTIONS.md` entries tagged to
+this plan, then the final `/drive` report.

@@ -357,10 +357,10 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
 - **Assumed:** The plan directs keeping the inline-path `policy.denied` event shape "identical to
   the ack path so `run-event.service.ts:25-27`'s existing span-annotation labeling keeps working."
   Mechanically true — both paths populate `data.errorCode` — but the *values* diverge: the ack path
-  sets the fixed constant `"POLICY_DENIED"` (`event-normalizer.service.ts:96`), while the inline
+  sets the fixed constant `"POLICY_DENIED"` (`event-normalizer.service.ts:109`), while the inline
   path (`:149-161`) sets `err.code` verbatim, which on this wire path is always
   `"PolicyDenied"` or `"PolicyDenied: <operator-authored reason text>"` — unbounded, free-text,
-  and emitted unredacted (`run-event.service.ts:135-145`'s span-annotation write applies no
+  and emitted unredacted (`run-event.service.ts:188-199`'s `recordSpanEvents` write applies no
   redaction; `RedactionService` is wired only to the LLM signal path at
   `event-normalizer.service.ts:220`, not this one).
 - **Chose:** Ship as specified rather than normalize inline `errorCode` to the constant
