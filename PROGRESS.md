@@ -400,7 +400,7 @@ _(one checkpoint per phase; `/implement` appends)_
 | P4 explicit gRPC channel options | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `fe6c70d` (squash) | merged #84 |
 | P5 non-blocking post-commit publish side effects | DONE | 1 (implement PASS) + 1 (ship-gate PASS, 0 gaps) | Opus (fresh subagent, both gates) | `2a6e1d2` (squash) | merged #85 |
 | P6 handoff implicit-accept integration test | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) + 1 (ship-gate: 1 GAPS→closed) | Opus (fresh subagent, all rounds) | `e8258fc` (squash) | merged #86 |
-| P7 listSessions() admin drift-detection endpoint | TODO | — | — | — | — |
+| P7 listSessions() admin drift-detection endpoint | DONE | 2 (implement: 1 GAPS→closed + 1 re-verify PASS) + 2 (ship-gate: 1 GAPS→closed + 1 re-verify PASS) | Opus (fresh subagent, all rounds) | `d9709c5` + `4d46b0c` (ship-gate fixes) | (pending — ships via `/ship`) |
 | P8 bump @multiagentcoordinationprotocol/proto to 0.1.10 | DONE (independently, PR #80, pre-dates this plan) | 0 | n/a | 23db607 (#80) | #80 (already merged) |
 
 ## Repo map
@@ -1265,3 +1265,178 @@ branch deleted).
 
 **Phase 6 fully closed.** Next: Phase 7 (`listSessions()` admin drift-detection
 endpoint).
+
+### Phase 7 — implement + verify — 2026-09-22
+Implemented per plan §Phase 7, on the working tree (branch not yet created — will be cut
+at commit time). Added `GET /admin/runtime/sessions` to `src/controllers/admin.controller.ts`:
+injects `RunRepository` alongside the existing `RustRuntimeProvider`, diffs
+`provider.listSessions()` against `RunRepository.listActiveRuns()` by `runtimeSessionId`,
+and returns `{ complete, runtimeSessionCount, trackedRunCount, untrackedSessions,
+missingFromRuntime }`. Errors: an already-translated `AppException` from `listSessions()`
+(e.g. `RUNTIME_UNAVAILABLE` via `mapGrpcError`) propagates unchanged; a circuit-breaker
+trip (a plain `Error`, not a gRPC status) is translated into
+`AppException(ErrorCode.CIRCUIT_BREAKER_OPEN, …, HttpStatus.SERVICE_UNAVAILABLE)` — no
+`@Public()` decorator, so the endpoint sits behind the same global `AuthGuard` as every
+other admin route. New tests in `src/controllers/admin.controller.spec.ts` covering no
+drift, runtime-only-session drift, reverse-direction drift, exclusion of a
+not-yet-bound run, `complete: false` passthrough, AppException passthrough,
+circuit-breaker-open translation, and an unrecognized-error passthrough. `CLAUDE.md`'s
+Administration list gained the new endpoint plus the previously-undocumented
+`GET /admin/circuit-breaker/history`.
+
+**Verify (round 1) — fresh Opus subagent: GAPS.** Independently reproduced every claimed
+test result (typecheck, 823/823 unit — the +8 baseline before this phase's tests, build,
+lint, all 3 convention greps) and traced the full `RUNTIME_UNAVAILABLE`/`CIRCUIT_BREAKER_OPEN`
+error-translation path through real source end to end, confirming the controller
+genuinely needs no separate `RUNTIME_UNAVAILABLE` branch (it arrives pre-translated via
+`mapGrpcError` inside `RustRuntimeProvider.unary()`) and DI wiring is real (both
+`AdminController`/`RunRepository` in the same `app.module.ts`). Found 1 real bug + 3
+minor + 5 advisory (all non-blocking) items:
+1. **(should-fix)** Under a truncated `listSessions()` drain (`complete: false`), the
+   original code computed `missingFromRuntime` unconditionally against the partial
+   session prefix — every tracked run would falsely show as "missing from runtime" even
+   though the runtime hadn't actually lost track of it; the drain just never reached it.
+   A misleading, fully-populated-but-unsound reverse diff sitting next to `complete:
+   false` rather than an honest "not computed."
+2. **(minor)** Test fixtures used `state: 'SESSION_STATE_RUNNING'`, not a real
+   `SessionState` union member (the live value is `SESSION_STATE_OPEN`) — harmless to
+   behavior (an untyped mock), but sloppy.
+3. **(minor)** A prettier-inconsistent line (an escaped single quote where the repo's
+   `singleQuote: true` config would normally avoid one).
+4. **(advisory, not required)** No `state` filter distinguishing runtime session
+   liveness, and `trackedRunCount` includes runs with no bound session yet — not drift
+   from the plan (which named `listActiveRuns()`'s exact status set explicitly), just an
+   observation about what the numbers do and don't mean.
+5. **(advisory)** `docs/API.md` documents every other admin endpoint but not this new
+   one — the plan's own Docs field named only `CLAUDE.md`, so not required, but a cheap
+   completeness win.
+6. Three more advisory/non-blocking notes on snapshot skew between the two data sources,
+   `listActiveRuns()` being an unbounded `SELECT *`, and `trackedRunCount` vs.
+   `runtimeSessionCount` not being directly comparable — none requiring action.
+7. Flagged that `ASSUMPTIONS.md`'s `P2 — listSessions() returns a result object` entry
+   (tagged to the prior v0.7.0 plan) asserted "no production behavior changes because
+   nothing calls it," which this diff now falsifies.
+
+**Gaps closed:** (1) `missingFromRuntime` now returns `null` (not computed) whenever
+`result.complete` is `false`, with a new test proving the closure (a tracked run under a
+truncated drain must NOT appear in `missingFromRuntime`, which must be `null`, not `[]`);
+`untrackedSessions` stays unconditional since that direction is sound even under
+truncation. (2) Test fixtures fixed to `SESSION_STATE_OPEN`. (3) The prettier deviation
+fixed. (5) `docs/API.md` gained a `### GET /admin/runtime/sessions` section matching the
+sibling `circuit-breaker/history` format, including a note on the truncation behavior.
+(7) `ASSUMPTIONS.md`'s stale entry updated: struck the falsified sentence (kept, not
+deleted, for the record), named the new caller, and moved `UNCONFIRMED` → `CONFIRMED`.
+Item 4's advisory left as-is (not drift from the plan, correctly scoped).
+
+**Re-verification after fixes:** typecheck clean, `npm test` **824/824** (56/56 suites —
+the +1 over round 1's 823 being the new truncation-closure test), `npm run build` clean,
+`npm run lint` clean, `npx prettier --check` clean on both touched files, all 3 convention
+greps empty.
+
+**Verify (round 2) — fresh Opus subagent: PASS.** Given the exact round-1 gap list.
+Confirmed all required items (the truncation fix, the fixture fix, the prettier fix)
+genuinely closed with file:line evidence, confirmed both optional items (`docs/API.md`,
+`ASSUMPTIONS.md`) were actually done and accurate (not overclaiming), confirmed the
+advisory item was correctly left alone rather than silently expanded or shrunk, and
+independently re-ran the full gate (824/824, typecheck/build/lint/prettier/convention
+greps all clean). One FYI, not affecting the verdict: the identical invalid
+`SESSION_STATE_RUNNING` literal pre-exists, untouched, in
+`src/runs/stream-consumer.service.spec.ts:763` — out of this phase's scope, noted for a
+future sweep.
+
+`plans/absorb-runtime-v0.8.0.md`'s Phase 7 section marked `Status: DONE` with a
+divergence note (the truncation-soundness fix, plus the two doc/assumption updates beyond
+what the phase's own Docs field named). No new `ASSUMPTIONS.md` entries from this phase
+itself — the one entry touched belongs to the prior v0.7.0 plan and was corrected, not
+newly logged.
+
+**What's next:** commit Phase 7, hand off to `/ship` (PR for Phase 7) — then confirm
+Phase 8's already-merged status (PR #80, pre-dates this plan) and move to `/implement`'s
+finalization pass (§4) across the whole plan.
+
+### Phase 7 — ship-gate — 2026-09-22
+
+**Ship-gate (round 1) — fresh Opus subagent, broader review (production-readiness, doc
+drift, tracked-file consistency): GAPS.** This is the first ship-gate in this entire
+8-phase run to find a genuine correctness bug the implement-gate had missed (Phases 4/5's
+ship-gates found zero issues; Phase 6's found one doc-only gap). Found 1 should-fix + 2
+minor + 3 advisory items:
+
+1. **(should-fix)** `untrackedSessions` was computed against the raw, unfiltered
+   `listSessions()` result with no session-state filter. The runtime retains a terminal
+   session (`SESSION_STATE_RESOLVED`/`_EXPIRED`/`_CANCELLED`) in `ListSessions` for a
+   configurable window after it ends (default 1h, `MACP_SESSION_RETENTION_SECS`), while
+   this control-plane finalizes — and stops tracking as "active" — a run the instant it
+   observes that session go terminal (`stream-consumer.service.ts:383-385`/`:526-529`,
+   `projection.service.ts:198`). Left as-is, every normally-completed run would have
+   spuriously shown up as "untracked drift" for up to an hour in ordinary steady-state
+   operation — real noise dominating the endpoint's primary signal, not just the
+   already-fixed truncated-drain edge case.
+2. **(minor)** `CLAUDE.md`'s two test-count mentions were stale ("815 tests") after this
+   phase's own new tests raised the count.
+3. **(minor)** `docs/API.md`'s error-contract section overstated that only `503` outcomes
+   are possible, omitting the real 504 (`RUNTIME_TIMEOUT`)/429 (`RATE_LIMITED`)/401
+   (`UNAUTHENTICATED`)/500 (unrecognized) paths that also propagate unchanged through the
+   controller's pass-through branch.
+4. **(advisory)** The exact string `'Circuit breaker is OPEN — runtime calls are
+   temporarily disabled'` was independently duplicated as a raw literal in
+   `circuit-breaker.ts` (the throw site), `admin.controller.ts` (the substring-match catch
+   site), and `admin.controller.spec.ts` (the test's mock error) — a future message-text
+   change could silently desync the matching sites.
+5. **(advisory)** Missing a one-sentence `docs/API.md` caveat that `listSessions()` and
+   `listActiveRuns()` are two sequential, non-atomic reads — a run bound mid-drain could
+   transiently appear as a false positive in `missingFromRuntime` even with
+   `complete: true`.
+6. **(non-blocking, confirmed no regression)** `RunRepository.listActiveRuns()`'s scale
+   characteristics (indexed status column, bounded active-run count in practice) reviewed
+   and found acceptable — no fix required.
+
+**Gaps closed:** (1) added a `liveSessions` filter
+(`state === 'SESSION_STATE_OPEN' || state === 'SESSION_STATE_SUSPENDED'`) applied to both
+diff directions (`runtimeSessionIds`/`missingFromRuntime` and `untrackedSessions`'s
+source), plus a new `liveRuntimeSessionCount` response field distinguishing the filtered
+count from the raw `runtimeSessionCount`; added two new regression tests — a terminal-state
+session with no tracked run must NOT appear in `untrackedSessions`, and a tracked run whose
+session has gone terminal DOES still correctly appear in `missingFromRuntime` (real drift,
+not retention noise). (2) `CLAUDE.md`'s two mentions updated to 826. (3) `docs/API.md`'s
+error-contract text rewritten to describe the full status range, cross-checked against
+`mapGrpcError`/`GRPC_STATUS_TO_HTTP` in `src/runtime/grpc-helpers.ts`. (4) Exported
+`CIRCUIT_BREAKER_OPEN_MESSAGE` from `circuit-breaker.ts`, used at its own throw site and at
+both the controller's catch-site match and the test's mock-error construction — no raw
+duplicate literal remains in any of the three originally-named files. (5) Added the
+non-atomicity caveat to `docs/API.md`. (6) Confirmed via `git diff --stat` that
+`run.repository.ts` was untouched by this fix round.
+
+**Re-verification after fixes:** typecheck clean, `npm test` **826/826** (56/56 suites —
+the +2 over the implement-gate's 824 being the two new ship-gate regression tests),
+`npm run build` clean, `npm run lint` clean, `npx prettier --check` clean on all four
+touched files, all 3 convention greps empty.
+
+**A process note on this round:** the first ship-gate re-verify subagent launched to
+confirm closure ran for over an hour without reaching a verdict — genuinely still working
+(confirmed via a direct status-check message mid-run, and its last known state before being
+stopped showed active, on-topic investigation, not a hang), just far more exploratory than
+the task warranted. It was stopped (`TaskStop`) and replaced with a second, tightly
+budgeted re-verify subagent (explicit file list, each verification command run exactly
+once, no open-ended exploration) which completed in ~2.5 minutes.
+
+**Verify (round 2, relaunch) — fresh Opus subagent: PASS.** Given the exact round-1 gap
+list. Independently confirmed all 6 items closed with `file:line` citations, independently
+re-ran the full verification suite (826/826 tests, clean typecheck/build/lint), and
+cross-checked the error-contract rewrite against real `grpc-helpers.ts` source rather than
+trusting the prose. One new non-blocking cosmetic nit found (a markdown line-wrap artifact
+in `docs/API.md` collapsing "normally-completed" into "normally -completed" when rendered)
+— fixed immediately, not requiring another round. `npx prettier --check` flagged
+`docs/API.md` as a whole, investigated and confirmed pre-existing (the file's hand-aligned
+markdown tables throughout, unrelated to this diff, always reformat under prettier) — not a
+regression introduced by this phase.
+
+`plans/absorb-runtime-v0.8.0.md`'s Phase 7 divergence note extended with the ship-gate
+round's finding and fix, alongside the implement-gate round's.
+
+**What's next:** commit Phase 7 (implement + ship-gate fixes as the phase's commits), push,
+open PR, watch CI, merge — then confirm Phase 8's already-merged status and move to
+`/implement`'s finalization pass (§4).
+
+pushed absorb-runtime-v0.8.0-p7 77dcaaf
+PR #87 opened: https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/87

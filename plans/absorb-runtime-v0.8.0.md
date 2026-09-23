@@ -329,7 +329,50 @@ Cite **RFC-MACP-0010 §5.1** in the new fixture/test comments, matching `project
 
 ### Phase 7 — `listSessions()` disposition: admin drift-detection endpoint
 
-**Status:** TODO
+**Status:** DONE (2026-09-22)
+
+**Divergence from plan:** Implemented as designed, with two rounds of correctness
+tightening found across two independent gates.
+
+*Implement-gate (round 1: GAPS, round 2: PASS after fixes).* Under a truncated
+`listSessions()` drain (`complete: false`), the reverse-direction diff
+(`missingFromRuntime`) is unsound if computed against the partial session prefix — a
+tracked run's session simply not having been fetched yet would otherwise show up as a
+false positive. Fixed by returning `missingFromRuntime: null` (not computed) whenever
+`complete` is `false`, while `untrackedSessions` stays computed unconditionally (that
+direction is sound even under truncation — a session in the fetched prefix that isn't
+tracked really is untracked). Also added the endpoint to `docs/API.md` (not named in this
+phase's own Docs field, which listed only `CLAUDE.md`, but the repo's existing convention
+documents every other admin endpoint there too) and updated a now-stale entry in
+`ASSUMPTIONS.md` (tagged to the prior v0.7.0 plan's Phase 2) that had asserted
+`listSessions()` had zero production callers — this phase gives it its first one, which
+validates rather than unsettles that entry's chosen return shape.
+
+*Ship-gate (round 1: GAPS, round 2: PASS).* A broader, separate review (distinct from the
+implement-gate, run just before pushing) found a second, more impactful correctness gap
+the implement-gate had missed: `untrackedSessions` was computed against the raw,
+unfiltered `listSessions()` result with no session-state filter. The runtime retains a
+terminal session (`SESSION_STATE_RESOLVED`/`_EXPIRED`/`_CANCELLED`) in `ListSessions` for a
+configurable retention window after it ends (default 1h, `MACP_SESSION_RETENTION_SECS`),
+while this control-plane finalizes — and stops tracking as "active" — a run the instant it
+observes that session go terminal. Left unfixed, every normally-completed run would have
+spuriously appeared as "untracked drift" for up to an hour in ordinary steady-state
+operation, dominating the endpoint's primary signal with noise rather than only affecting
+the already-fixed truncated-drain edge case. Fixed by adding a `liveSessions` filter
+(`state === 'SESSION_STATE_OPEN' || state === 'SESSION_STATE_SUSPENDED'`) applied to both
+diff directions, plus a new `liveRuntimeSessionCount` response field distinguishing the
+filtered count from the raw `runtimeSessionCount`; added regression tests proving a
+terminal-state session with no tracked run does not appear in `untrackedSessions`, and that
+a tracked run whose session has gone terminal still correctly appears in
+`missingFromRuntime` (real drift, not retention noise). The same ship-gate round also
+flagged and closed: stale `CLAUDE.md` test-count mentions (815 → 826), `docs/API.md`
+understating the endpoint's real error-status range (only 503 was documented; the real
+propagation path also produces 504/429/401/500), a duplicated raw circuit-breaker-message
+string literal across three files (now a single exported `CIRCUIT_BREAKER_OPEN_MESSAGE`
+constant in `circuit-breaker.ts`), and a missing `docs/API.md` caveat that
+`listSessions()`/`listActiveRuns()` are non-atomic sequential reads (a run bound mid-drain
+can transiently appear as a false positive in `missingFromRuntime` even when
+`complete: true`).
 **Delivers:** A read-only admin endpoint that surfaces drift between the runtime's live session list and this service's locally-tracked active runs — the one genuine gap `listSessions()` being uncalled was hiding, rather than a cosmetic doc-comment fix.
 **Depends on:** none.
 **Files:**

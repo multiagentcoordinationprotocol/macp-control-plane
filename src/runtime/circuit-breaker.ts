@@ -6,6 +6,14 @@ export type CircuitBreakerState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
 const STATE_VALUES: Record<CircuitBreakerState, number> = { CLOSED: 0, HALF_OPEN: 1, OPEN: 2 };
 const HISTORY_SIZE = 200;
 
+/**
+ * Exported so callers that need to distinguish "the breaker tripped" from any
+ * other thrown error (it isn't a gRPC status, so it can't be recognized via
+ * `mapGrpcError`) can match against this exact string instead of duplicating
+ * it — see `AdminController.getRuntimeSessionDrift`.
+ */
+export const CIRCUIT_BREAKER_OPEN_MESSAGE = 'Circuit breaker is OPEN — runtime calls are temporarily disabled';
+
 export interface CircuitBreakerStateChange {
   state: CircuitBreakerState;
   enteredAt: string;
@@ -66,7 +74,7 @@ export class CircuitBreaker {
     const currentState = this.getState();
 
     if (currentState === 'OPEN') {
-      throw new Error('Circuit breaker is OPEN — runtime calls are temporarily disabled');
+      throw new Error(CIRCUIT_BREAKER_OPEN_MESSAGE);
     }
 
     try {
