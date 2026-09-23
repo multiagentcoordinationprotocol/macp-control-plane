@@ -1566,3 +1566,20 @@ consistent and honest.
 
 **What's next:** `/reconcile` the 3 `UNCONFIRMED` `ASSUMPTIONS.md` entries tagged to
 this plan, then the final `/drive` report.
+
+## /reconcile — 2026-09-22
+
+Reconciled the 3 `UNCONFIRMED` `ASSUMPTIONS.md` entries tagged to this plan (P2, P3, P5).
+All ranked low blast radius / reversible per the Autonomy ladder — each analyzed by a
+fresh Opus subagent, in parallel. Verdicts: P3 CONFIRM no-change; P2 CHANGE (wire
+`RedactionService` into `RunEventService.recordSpanEvents`); P5 CHANGE (attempt
+`finalizeRun` with a nested try/catch fallback in `consumeLoop`'s last-resort `.catch()`).
+Both changes applied and unit-verified in isolation, then mutation-tested. Full suite
+re-run: 828/828 tests (56/56 suites, up from 826), typecheck/build/lint/prettier clean,
+all 3 convention greps empty. All 3 decisions logged to `DECISIONS.md`
+(`# DECISIONS — absorb-runtime-v0.8.0` section); `ASSUMPTIONS.md` statuses updated to
+`CONFIRMED (2026-09-22)`. Committed `ecd482c` on branch `reconcile/absorb-runtime-v0.8.0`
+(learning from the earlier direct-push-to-main deviation this session — this went through
+a proper feature branch this time).
+
+pushed reconcile/absorb-runtime-v0.8.0 ecd482c
