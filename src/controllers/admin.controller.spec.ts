@@ -165,13 +165,43 @@ describe('AdminController', () => {
       expect(result.missingFromRuntime).toEqual([{ runId: 'run-2', runtimeSessionId: 'sess-gone' }]);
     });
 
-    it('excludes an active run with no bound session yet from the reverse-direction diff', async () => {
+    it('excludes an active run with no bound session at all from the reverse-direction diff', async () => {
       mockRustRuntime.listSessions.mockResolvedValue({ sessions: [], complete: true, pagesFetched: 1 });
-      mockRunRepository.listActiveRuns.mockResolvedValue([{ id: 'run-starting', runtimeSessionId: undefined }]);
+      mockRunRepository.listActiveRuns.mockResolvedValue([{ id: 'run-unbound', runtimeSessionId: undefined }]);
 
       const result = await controller.getRuntimeSessionDrift();
 
       expect(result.missingFromRuntime).toEqual([]);
+    });
+
+    it('excludes a run still in `starting` status from missingFromRuntime, even though it already has a pre-allocated runtimeSessionId', async () => {
+      // RunManagerService persists runtimeSessionId at run creation (`queued`),
+      // before the runtime session exists — the initiator agent only creates
+      // it after receiving {runId, sessionId} back from POST /runs, and
+      // RunExecutorService doesn't reach bindSession until pollForOpenSession
+      // finds it (up to SESSION_POLL_TIMEOUT_MS, default 60s). A run in this
+      // window is normal, expected startup — not drift — even though its
+      // runtimeSessionId is already set and the runtime doesn't report that
+      // session yet.
+      mockRustRuntime.listSessions.mockResolvedValue({ sessions: [], complete: true, pagesFetched: 1 });
+      mockRunRepository.listActiveRuns.mockResolvedValue([
+        { id: 'run-starting', status: 'starting', runtimeSessionId: 'sess-not-yet-open' }
+      ]);
+
+      const result = await controller.getRuntimeSessionDrift();
+
+      expect(result.missingFromRuntime).toEqual([]);
+    });
+
+    it('still reports a `running` run missing from the runtime as real drift (the `starting` exclusion is status-specific, not blanket)', async () => {
+      mockRustRuntime.listSessions.mockResolvedValue({ sessions: [], complete: true, pagesFetched: 1 });
+      mockRunRepository.listActiveRuns.mockResolvedValue([
+        { id: 'run-running', status: 'running', runtimeSessionId: 'sess-gone' }
+      ]);
+
+      const result = await controller.getRuntimeSessionDrift();
+
+      expect(result.missingFromRuntime).toEqual([{ runId: 'run-running', runtimeSessionId: 'sess-gone' }]);
     });
 
     it('surfaces complete: false verbatim from a truncated listSessions() drain', async () => {

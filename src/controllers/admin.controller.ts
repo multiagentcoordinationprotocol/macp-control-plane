@@ -102,8 +102,19 @@ export class AdminController {
     // bound to a session the runtime holds, just one this drain never
     // reached) — report `null` (not computed) rather than let a partial
     // prefix produce a fully-populated but unsound reverse diff.
+    //
+    // A run in `starting` status is excluded for the same reason, on the
+    // other side of the race: `RunManagerService` pre-allocates and persists
+    // `runtimeSessionId` at run creation, before the runtime session exists —
+    // the initiator agent only creates it after receiving `{runId,
+    // sessionId}` back from `POST /runs`, and `RunExecutorService` doesn't
+    // reach `bindSession` until its `pollForOpenSession` finds it (up to
+    // `SESSION_POLL_TIMEOUT_MS`, default 60s). Without this exclusion, every
+    // run still in that normal startup window — not drift at all — would be
+    // reported as a session missing from the runtime.
     const missingFromRuntime = result.complete
       ? activeRuns
+          .filter((run) => run.status !== 'starting')
           .filter((run) => run.runtimeSessionId && !runtimeSessionIds.has(run.runtimeSessionId))
           .map((run) => ({ runId: run.id, runtimeSessionId: run.runtimeSessionId as string }))
       : null;

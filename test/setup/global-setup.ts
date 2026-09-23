@@ -1,9 +1,7 @@
 import { execSync } from 'node:child_process';
 import { Client } from 'pg';
 
-const TEST_DB_URL =
-  process.env.DATABASE_URL ??
-  'postgres://postgres:postgres@localhost:5433/macp_control_plane_test';
+const TEST_DB_URL = process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5433/macp_control_plane_test';
 
 function startCommand(needPostgres: boolean, needRuntime: boolean): string {
   if (needPostgres && needRuntime) {
@@ -82,20 +80,16 @@ export default async function globalSetup(): Promise<void> {
     `Integration test global setup: needPostgres=${needPostgres} needRuntime=${needRuntime} (CI=${Boolean(process.env.CI)}, runtimeMode=${runtimeMode})`
   );
 
-  let startedContainers = false;
   if (needPostgres || needRuntime) {
     try {
       execSync(startCommand(needPostgres, needRuntime), {
         stdio: 'inherit',
         cwd: process.cwd()
       });
-      startedContainers = true;
     } catch {
-      // Not started by us (docker compose itself failed) — nothing to clean up
-      // if the wait below throws, since we can't distinguish "already running"
-      // from "genuinely absent" here.
       console.warn(
-        'Could not start docker compose. Assuming services are already running.'
+        'docker compose up reported a failure — proceeding in case services are already running; ' +
+          'cleanup will still be attempted below if the readiness wait also fails.'
       );
     }
   }
@@ -122,7 +116,13 @@ export default async function globalSetup(): Promise<void> {
       }
     }
   } catch (err) {
-    if (startedContainers) cleanupAfterFailedSetup(needPostgres, needRuntime);
+    // `up --wait`'s own health-check can time out AFTER containers were
+    // actually created — that's a partial failure, not a no-op, so cleanup is
+    // attempted whenever we may have started something, not only when
+    // docker compose itself reported success. `docker compose down` / `rm -sf`
+    // are idempotent no-ops against containers that were never created, so
+    // this is always safe even when the execSync above never ran.
+    if (needPostgres || needRuntime) cleanupAfterFailedSetup(needPostgres, needRuntime);
     throw err;
   }
 

@@ -139,13 +139,18 @@ export class RunEventService {
    * must never propagate to the caller: `StreamConsumerService` treats a
    * rejected promise as "not yet durable" and re-ingests the same envelope on
    * the next reconnect, appending duplicate rows (see the comment on
-   * `envelopeOrdinal` in `handleRawEventInner`). The metrics/publish/snapshot
-   * steps are each caught and logged independently so one failure (e.g. a
-   * metrics backend outage) doesn't suppress the others (e.g. SSE publish
-   * still reaching connected clients). `recordSpanEvents` itself is left
-   * unwrapped: it's a pure in-memory annotation over already-decoded fields
-   * (no I/O), and `TraceService.addRunSpanEvent` is a no-throw-by-contract
-   * OTel call that no-ops when there's no active run span.
+   * `envelopeOrdinal` in `handleRawEventInner`). Every step — including
+   * `recordSpanEvents`, which guards itself per-event internally — is caught
+   * and logged independently so one failure (e.g. a metrics backend outage,
+   * or one event's redaction throwing) doesn't suppress the others (e.g. SSE
+   * publish still reaching connected clients, or span annotations for the
+   * rest of the batch). `recordSpanEvents` was previously left entirely
+   * unwrapped on the assumption it was pure in-memory annotation with no
+   * fallible step; that stopped being true once it started running
+   * attributes through `RedactionService.redact()` (reconcile,
+   * ASSUMPTIONS.md P2 v0.8.0), which evaluates operator-supplied
+   * `MACP_REDACT_PATTERNS` regexes against event data and so is no longer
+   * guaranteed not to throw (or pathologically backtrack) for arbitrary input.
    */
   private async runPostCommitSideEffects(
     runId: string,
@@ -191,12 +196,24 @@ export class RunEventService {
     for (const event of events) {
       const ann = KEY_EVENT_SPAN_ANNOTATIONS[event.type];
       if (!ann) continue;
-      const attrs: Record<string, string | number | boolean | undefined> = { seq: event.seq };
-      for (const [k, fn] of Object.entries(ann)) {
-        const v = fn(event);
-        if (v !== undefined) attrs[k] = v;
+      // Per-event try/catch (mirrors the publishEvent loop below): a
+      // redaction failure on one event's attrs must not drop span
+      // annotations for the rest of the batch, the same way one bad
+      // publishEvent doesn't block its siblings.
+      try {
+        const attrs: Record<string, string | number | boolean | undefined> = { seq: event.seq };
+        for (const [k, fn] of Object.entries(ann)) {
+          const v = fn(event);
+          if (v !== undefined) attrs[k] = v;
+        }
+        this.traceService.addRunSpanEvent(runId, event.type, this.redaction.redact(attrs));
+      } catch (error) {
+        this.instrumentation.postCommitSideEffectFailuresTotal.inc({ step: 'span_events' });
+        this.logger.error(
+          `span event recording failed for run ${runId}, event ${event.id} after commit: ` +
+            `${error instanceof Error ? error.message : String(error)}`
+        );
       }
-      this.traceService.addRunSpanEvent(runId, event.type, this.redaction.redact(attrs));
     }
   }
 }
