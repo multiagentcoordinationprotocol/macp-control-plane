@@ -462,7 +462,7 @@ export class RunManagerService {
   async getRun(runId: string) {
     const run = await this.runRepository.findById(runId);
     if (!run) throw new NotFoundException(`run ${runId} not found`);
-    return run;
+    return this.healStaleRunMetadata(run);
   }
 
   async findBySessionId(sessionId: string) {
@@ -509,6 +509,49 @@ export class RunManagerService {
     return projection;
   }
 
+  /**
+   * Repair a terminal run whose metadata enrichment (finalAction/finalConfidence/
+   * decisionCount) ran before the `decision.finalized` canonical event was
+   * durably persisted — the metadata-column counterpart of the cross-stream race
+   * `healStaleTerminalDecision` guards against for the projection above.
+   *
+   * Unlike that race, this one has no second in-process caller to retry: in
+   * practice `markCompleted`/`markFailed` are only ever called by
+   * SessionDiscoveryService (driven by the ambient `WatchSessions` stream), which
+   * can win the terminal-status transition and run `enrichRunMetadata` before
+   * StreamConsumerService's own per-session stream has finished persisting the
+   * final `Commitment` envelope as a `decision.finalized` event — observed live
+   * against a real runtime/LLM run, ~57ms apart. So this can only be corrected
+   * lazily, on read, reusing the same `metrics.decisionCount > 0` signal already
+   * trusted for this exact race above. Short-circuits to a single cheap
+   * `metricsService.get` once `finalAction` is present, or when no decision was
+   * ever committed (a legitimately-undecided terminal run) — never unbounded
+   * per-read cost.
+   */
+  private async healStaleRunMetadata<
+    T extends {
+      id: string;
+      status: string;
+      metadata?: Record<string, unknown> | null;
+      startedAt?: string | null;
+      endedAt?: string | null;
+    }
+  >(run: T): Promise<T> {
+    const terminal = ['completed', 'failed', 'cancelled'].includes(run.status);
+    if (!terminal || run.metadata?.finalAction !== undefined) return run;
+
+    const metrics = await this.metricsService.get(run.id);
+    if (!metrics || (metrics.decisionCount ?? 0) <= 0) return run;
+
+    await this.enrichRunMetadata(run.id, run, { recordDurationMetric: false });
+    const refreshed = await this.runRepository.findById(run.id);
+    if (refreshed && (refreshed.metadata as Record<string, unknown> | null)?.finalAction !== undefined) {
+      this.logger.warn(`self-healed stale run metadata for terminal run ${run.id}`);
+      return refreshed as unknown as T;
+    }
+    return refreshed ? (refreshed as unknown as T) : run;
+  }
+
   private async enrichRunMetadata(
     runId: string,
     run: {
@@ -516,7 +559,8 @@ export class RunManagerService {
       endedAt?: string | null;
       metadata?: Record<string, unknown> | null;
       status?: string;
-    }
+    },
+    options?: { recordDurationMetric?: boolean }
   ) {
     try {
       const [metrics, events] = await Promise.all([
@@ -533,7 +577,11 @@ export class RunManagerService {
           ? new Date(run.endedAt).getTime() - new Date(run.startedAt).getTime()
           : (metrics?.durationMs ?? undefined);
 
-      if (durationMs !== undefined && durationMs >= 0) {
+      // Retried self-heal calls (healStaleRunMetadata) must not re-observe this
+      // histogram — durationMs itself never changes on a retry, only the
+      // decision-derived fields below do, so recording it again would double-count
+      // the same run in macp_run_duration_seconds.
+      if (durationMs !== undefined && durationMs >= 0 && (options?.recordDurationMetric ?? true)) {
         const modeName =
           (run.metadata?.executionRequest as { session?: { modeName?: string } } | undefined)?.session?.modeName ??
           'unknown';
