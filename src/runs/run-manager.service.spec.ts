@@ -542,6 +542,116 @@ describe('RunManagerService', () => {
     });
   });
 
+  describe('getRun self-heals stale run metadata (healStaleRunMetadata)', () => {
+    // Regression tests for the metadata-column counterpart of
+    // healStaleTerminalDecision's projection race: in this codebase's actual
+    // completion path, markCompleted/markFailed are only ever called by
+    // SessionDiscoveryService (ambient WatchSessions) — there is no second
+    // in-process caller to retry enrichment. So when that call wins the terminal
+    // transition before StreamConsumerService's own per-session stream has
+    // finished persisting the final Commitment envelope as a decision.finalized
+    // event, finalAction/finalConfidence/decisionCount are permanently null
+    // unless something re-attempts enrichment later, on read. Reproduced live
+    // against a real runtime/LLM run via macp-playground (SessionDiscoveryService
+    // marked the run completed ~57ms *before* decision.finalized was persisted).
+    let metricsService: jest.Mocked<any>;
+    let eventRepository: jest.Mocked<any>;
+    let instrumentation: jest.Mocked<any>;
+
+    beforeEach(() => {
+      metricsService = (service as any).metricsService;
+      eventRepository = (service as any).eventRepository;
+      instrumentation = (service as any).instrumentation;
+    });
+
+    it('fills in finalAction/finalConfidence/decisionCount on read when a decision was committed after the initial enrichment', async () => {
+      const staleCompletedRun = makeRunRecord({
+        status: 'completed',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        endedAt: '2026-01-01T00:01:00.000Z',
+        metadata: { environment: 'staging', durationMs: 60000, eventCount: 15, signalCount: 3 }
+      });
+      const healedRun = makeRunRecord({
+        status: 'completed',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        endedAt: '2026-01-01T00:01:00.000Z',
+        metadata: {
+          environment: 'staging',
+          durationMs: 60000,
+          eventCount: 15,
+          signalCount: 3,
+          decisionCount: 1,
+          finalAction: 'approve',
+          finalConfidence: 0.92
+        }
+      });
+      runRepository.findById.mockResolvedValueOnce(staleCompletedRun as any).mockResolvedValueOnce(healedRun as any);
+
+      metricsService.get.mockResolvedValue({ eventCount: 15, signalCount: 3, decisionCount: 1 });
+      eventRepository.listCanonicalByRun.mockResolvedValue([
+        {
+          type: 'decision.finalized',
+          data: { decodedPayload: { action: 'approve', confidence: 0.92 } }
+        }
+      ]);
+
+      const result = await service.getRun('run-1');
+
+      expect(result).toEqual(healedRun);
+      expect(runRepository.update).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            environment: 'staging',
+            decisionCount: 1,
+            finalAction: 'approve',
+            finalConfidence: 0.92
+          })
+        })
+      );
+      // The duration histogram was already observed by the original enrichment
+      // pass — a read-time self-heal must not double-count it.
+      expect(instrumentation.runDuration.observe).not.toHaveBeenCalled();
+    });
+
+    it('does nothing once finalAction is already populated (fast path, no metrics lookup)', async () => {
+      const alreadyEnrichedRun = makeRunRecord({
+        status: 'completed',
+        metadata: { finalAction: 'approve', finalConfidence: 0.92, decisionCount: 1 }
+      });
+      runRepository.findById.mockResolvedValue(alreadyEnrichedRun as any);
+
+      const result = await service.getRun('run-1');
+
+      expect(result).toEqual(alreadyEnrichedRun);
+      expect(metricsService.get).not.toHaveBeenCalled();
+      expect(runRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('does nothing for a non-terminal run (fast path, no metrics lookup)', async () => {
+      const runningRun = makeRunRecord({ status: 'running', metadata: {} });
+      runRepository.findById.mockResolvedValue(runningRun as any);
+
+      const result = await service.getRun('run-1');
+
+      expect(result).toEqual(runningRun);
+      expect(metricsService.get).not.toHaveBeenCalled();
+      expect(runRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('leaves a legitimately-undecided terminal run alone (no decision was ever committed)', async () => {
+      const cancelledNoConsensusRun = makeRunRecord({ status: 'cancelled', metadata: {} });
+      runRepository.findById.mockResolvedValue(cancelledNoConsensusRun as any);
+
+      metricsService.get.mockResolvedValue({ eventCount: 4, decisionCount: 0 });
+
+      const result = await service.getRun('run-1');
+
+      expect(result).toEqual(cancelledNoConsensusRun);
+      expect(runRepository.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('listRuns', () => {
     it('passes environment, scenarioRef, and search filters to repository', async () => {
       const listSpy = jest.fn().mockResolvedValue([]);
