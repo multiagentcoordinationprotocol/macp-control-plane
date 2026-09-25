@@ -488,7 +488,7 @@ Body:
   "description": "Majority voting with veto support",
   "rules": {
     "voting": { "algorithm": "majority", "threshold": 0.5, "quorum": { "type": "count", "value": 2 } },
-    "objection_handling": { "block_severity_vetoes": true, "veto_threshold": 1 },
+    "objection_handling": { "critical_severity_vetoes": true, "veto_threshold": 1 },
     "commitment": { "authority": "initiator_only", "require_vote_quorum": true }
   },
   "schemaVersion": 1
