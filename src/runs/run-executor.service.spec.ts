@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
 import { RunExecutorService } from './run-executor.service';
 import { RunManagerService } from './run-manager.service';
 import { RunRepository } from '../storage/run.repository';
@@ -722,6 +722,44 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
         'run-exp',
         expect.objectContaining({ errorCode: ErrorCode.SESSION_EXPIRED })
       );
+    });
+
+    it.each([
+      ['SESSION_STATE_RESOLVED', ErrorCode.SESSION_ALREADY_RESOLVED],
+      ['SESSION_STATE_CANCELLED', ErrorCode.SESSION_CANCELLED]
+    ])('fails fast with the specific code when the session is already %s', async (state, errorCode) => {
+      mockProvider.getSession.mockResolvedValue({ sessionId: 'sess-term', state, mode: 'decision' });
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-term' }));
+
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(mockRunManager.markFailed).toHaveBeenCalledWith('run-term', expect.objectContaining({ errorCode }));
+      expect(mockProvider.getSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('warns once when the runtime version is outside the tested range, and logs info inside it', async () => {
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+      const log = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-ver' }));
+
+      await service.launch(makeRunDescriptor());
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 100));
+      expect(warn.mock.calls.filter(([m]) => String(m).includes('outside the tested range'))).toHaveLength(1);
+
+      mockProvider.initialize.mockResolvedValue({
+        selectedProtocolVersion: '1.0',
+        runtimeInfo: { name: 'macp-runtime', version: '0.8.6' },
+        supportedModes: ['decision'],
+        capabilities: {}
+      });
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 100));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('macp-runtime@0.8.6 (within tested range)'));
+
+      warn.mockRestore();
+      log.mockRestore();
     });
 
     it('marks run failed with RUNTIME_TIMEOUT when GetSession never returns OPEN before timeout', async () => {

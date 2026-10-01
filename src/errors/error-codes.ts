@@ -5,6 +5,10 @@ export enum ErrorCode {
   RUNTIME_TIMEOUT = 'RUNTIME_TIMEOUT',
   STREAM_EXHAUSTED = 'STREAM_EXHAUSTED',
   SESSION_EXPIRED = 'SESSION_EXPIRED',
+  // The session was already terminal (resolved/cancelled) when the observer first
+  // looked, so there is no OPEN window to bind to.
+  SESSION_ALREADY_RESOLVED = 'SESSION_ALREADY_RESOLVED',
+  SESSION_CANCELLED = 'SESSION_CANCELLED',
   VALIDATION_ERROR = 'VALIDATION_ERROR',
   INTERNAL_ERROR = 'INTERNAL_ERROR',
   MODE_NOT_SUPPORTED = 'MODE_NOT_SUPPORTED',

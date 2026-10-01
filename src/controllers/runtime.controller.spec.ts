@@ -144,6 +144,37 @@ describe('RuntimeController', () => {
       });
     });
 
+    it('defaults an omitted schemaVersion to 3', async () => {
+      mockProvider.registerPolicy.mockResolvedValue({ ok: true });
+
+      await controller.registerPolicy({
+        policyId: 'policy.test',
+        mode: 'macp.mode.decision.v1',
+        description: 'Test policy',
+        rules: { voting: { algorithm: 'majority' } }
+      });
+
+      expect(mockProvider.registerPolicy).toHaveBeenCalledWith({
+        descriptor: expect.objectContaining({ schemaVersion: 3 })
+      });
+    });
+
+    it('honours an explicit schemaVersion of 1', async () => {
+      mockProvider.registerPolicy.mockResolvedValue({ ok: true });
+
+      await controller.registerPolicy({
+        policyId: 'policy.test',
+        mode: 'macp.mode.decision.v1',
+        description: 'Test policy',
+        rules: { voting: { algorithm: 'majority' } },
+        schemaVersion: 1
+      });
+
+      expect(mockProvider.registerPolicy).toHaveBeenCalledWith({
+        descriptor: expect.objectContaining({ schemaVersion: 1 })
+      });
+    });
+
     it('throws BadRequestException on INVALID_POLICY_DEFINITION', async () => {
       mockProvider.registerPolicy.mockResolvedValue({
         ok: false,
@@ -318,22 +349,6 @@ describe('RuntimeController', () => {
 
       expect(result).toEqual({ ok: true });
       expect(mockProvider.registerPolicy).toHaveBeenCalled();
-    });
-
-    it('defaults omitted schemaVersion to 1 and succeeds', async () => {
-      mockProvider.registerPolicy.mockResolvedValue({ ok: true });
-
-      const result = await controller.registerPolicy({
-        policyId: 'policy.test',
-        mode: 'macp.mode.decision.v1',
-        description: 'Default version',
-        rules: { voting: { algorithm: 'majority' } }
-      });
-
-      expect(result).toEqual({ ok: true });
-      expect(mockProvider.registerPolicy).toHaveBeenCalledWith({
-        descriptor: expect.objectContaining({ schemaVersion: 1 })
-      });
     });
 
     it('rejects weighted algorithm without weights', async () => {

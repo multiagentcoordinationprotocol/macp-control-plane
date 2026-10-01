@@ -10,6 +10,7 @@ import { ErrorCode } from '../errors/error-codes';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { TraceService } from '../telemetry/trace.service';
+import { classifyRuntimeVersion, TESTED_RUNTIME_RANGE } from '../runtime/runtime-version';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
 import { RunManagerService } from './run-manager.service';
@@ -312,6 +313,8 @@ export class RunExecutorService {
         }
       );
 
+      this.checkRuntimeVersion(initResult.runtimeInfo?.name, initResult.runtimeInfo?.version);
+
       if (initResult.instructions) {
         this.logger.log(`runtime instructions: ${initResult.instructions}`);
       }
@@ -388,6 +391,25 @@ export class RunExecutorService {
     }
   }
 
+  /** Runtime versions already reported, so a busy control plane logs each once, not per run. */
+  private readonly reportedRuntimeVersions = new Set<string>();
+
+  private checkRuntimeVersion(name: string | undefined, version: string | undefined): void {
+    const key = `${name ?? 'unknown'}@${version ?? 'unknown'}`;
+    if (this.reportedRuntimeVersions.has(key)) return;
+    this.reportedRuntimeVersions.add(key);
+    const status = classifyRuntimeVersion(version);
+    if (status === 'tested') {
+      this.logger.log(`runtime ${key} (within tested range)`);
+    } else {
+      this.logger.warn(
+        `runtime ${key} is ${status === 'unknown' ? 'reporting no parseable version' : 'outside the tested range'} ` +
+          `(tested: >=${TESTED_RUNTIME_RANGE.min.join('.')} <${TESTED_RUNTIME_RANGE.maxExclusive.join('.')}); ` +
+          'behavior against this runtime is unverified'
+      );
+    }
+  }
+
   private async pollForOpenSession(
     provider: ReturnType<RuntimeProviderRegistry['get']>,
     runId: string,
@@ -408,6 +430,22 @@ export class RunExecutorService {
             ErrorCode.SESSION_EXPIRED,
             `session ${sessionId} expired before any agent opened it`,
             400
+          );
+        }
+        // Already terminal on first sight: there is no OPEN window to wait for, so fail
+        // fast instead of polling until RUNTIME_TIMEOUT.
+        if (snapshot.state === 'SESSION_STATE_RESOLVED') {
+          throw new AppException(
+            ErrorCode.SESSION_ALREADY_RESOLVED,
+            `session ${sessionId} was already resolved before the control plane observed it open`,
+            409
+          );
+        }
+        if (snapshot.state === 'SESSION_STATE_CANCELLED') {
+          throw new AppException(
+            ErrorCode.SESSION_CANCELLED,
+            `session ${sessionId} was cancelled before the control plane observed it open`,
+            409
           );
         }
       } catch (pollError) {

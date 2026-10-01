@@ -117,12 +117,8 @@ export class ProtoRegistryService implements OnModuleInit {
     // rather than throwing — the normalizer must be resilient to either wire format.
     try {
       const decoded = this.decodeMessage(typeName, payload);
-      // protobufjs can "successfully" decode JSON bytes into a garbage object
-      // (unknown fields get skipped). For flat value-string payloads (Contribute)
-      // require a real string `value`; otherwise treat it as the JSON path so a
-      // legacy `{"value":"..."}` envelope isn't silently swallowed.
-      if (VALUE_STRING_TYPES.has(typeName) && typeof decoded.value !== 'string') {
-        return this.decodeValueStringJson(payload);
+      if (VALUE_STRING_TYPES.has(typeName)) {
+        return this.resolveValueString(typeName, payload, decoded);
       }
       return decoded;
     } catch {
@@ -130,6 +126,43 @@ export class ProtoRegistryService implements OnModuleInit {
         return this.decodeValueStringJson(payload);
       }
       return this.tryDecodeUtf8(payload);
+    }
+  }
+
+  /**
+   * Disambiguate a flat value-string payload (Contribute) that protobufjs
+   * decoded without throwing. protobufjs can "successfully" decode JSON bytes
+   * (unknown fields get skipped), and conversely a canonical proto payload can
+   * also parse as JSON. Mirrors the runtime's semantics_rev 3 tie-break
+   * (macp-runtime #192): trust the proto reading only when the payload
+   * re-encodes byte-identically, i.e. it is canonical proto. Otherwise prefer a
+   * legacy `{"value":"..."}` reading, and keep the proto result only if the
+   * bytes are not such JSON.
+   */
+  private resolveValueString(
+    typeName: string,
+    payload: Buffer,
+    decoded: Record<string, unknown>
+  ): Record<string, unknown> | undefined {
+    if (typeof decoded.value === 'string' && this.isCanonicalProto(typeName, payload)) {
+      return decoded;
+    }
+    const json = this.decodeValueStringJson(payload);
+    if (json && typeof json.value === 'string' && json.encoding === undefined) {
+      return json;
+    }
+    // Not legacy JSON: a lenient proto decode with a real string value wins;
+    // otherwise surface the text/JSON fallback shape.
+    return typeof decoded.value === 'string' ? decoded : json;
+  }
+
+  private isCanonicalProto(typeName: string, payload: Buffer): boolean {
+    try {
+      const type = this.lookupType(typeName);
+      const reencoded = type.encode(type.decode(payload)).finish();
+      return Buffer.from(reencoded).equals(payload);
+    } catch {
+      return false;
     }
   }
 

@@ -30,6 +30,10 @@ For the agent-side bootstrap and how `sessionId` flows from `POST /runs` to the 
 - **TypeScript SDK** — [README.md § Agent Framework](../../macp-sdk-typescript/README.md#agent-framework) and [docs/guides/agent-framework.md](../../macp-sdk-typescript/docs/guides/agent-framework.md) (`fromBootstrap()` + strategies)
 - **Migration** — `../../macp-ui-console/plans/direct-agent-auth.md` (end-to-end story of the 2026-04-15 refactor)
 
+### Runtime v0.8.1–v0.8.6 absorption
+
+No proto or wire change (proto package stays `^0.1.10`). Lifecycle entries (`SessionSuspend`/`SessionResume`/`SessionCancel`/TTL expiry) are runtime-internal: they consume no ordinal and are never delivered on `StreamSession` (RFC-MACP-0006 §3.2), so suspend/resume reaches the control plane only through `WatchSessions` and `GetSession` state. `SessionResumePayload.banked_ms` now carries the remaining TTL at suspend; the control plane does not read it. `ext.multi_round.v1` `Contribute` decoding mirrors the runtime's semantics_rev 3 tie-break (proto trusted only if the payload re-encodes byte-identically, otherwise legacy JSON). `POST /runtime/policies` now defaults an omitted `schemaVersion` to 3.
+
 ### Commitment `supersedes.commitment_hash` must be canonical (runtime v0.7.0 / RFC-MACP-0013 §9)
 
 A ≥0.7.0 runtime hard-rejects any `CommitmentPayload.supersedes.commitment_hash` that
