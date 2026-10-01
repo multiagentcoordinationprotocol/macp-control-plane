@@ -1,4 +1,12 @@
-# PROGRESS — absorb-runtime-v0.7.0
+# PROGRESS
+
+> Per-plan logs below are historical and append-only. Latest absorption: **runtime v0.8.6**
+> (branch `feat/absorb-runtime-v0.8.6`): `schemaVersion` default → 3, Contribute round-trip
+> decode, `:0.8.6` test image, fail-fast on RESOLVED/CANCELLED sessions in `pollForOpenSession`,
+> runtime version check at `Initialize`. Earlier logs: absorb-runtime-v0.7.0 (this section)
+> and absorb-runtime-v0.8.0 (see `plans/absorb-runtime-v0.8.0.md`, below).
+
+# absorb-runtime-v0.7.0
 
 Plan: `plans/absorb-runtime-v0.7.0.md`
 Started: 2026-08-31 (via `/drive`)

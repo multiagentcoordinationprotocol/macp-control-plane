@@ -309,6 +309,8 @@ export interface RuntimeProvider {
 // evaluation-time denials.
 export const POLICY_SCHEMA_VERSIONS = [1, 2, 3] as const;
 export type PolicySchemaVersion = (typeof POLICY_SCHEMA_VERSIONS)[number];
+/** Applied by `POST /runtime/policies` when `schemaVersion` is omitted. */
+export const DEFAULT_POLICY_SCHEMA_VERSION: PolicySchemaVersion = 3;
 
 export interface RuntimePolicyDescriptor {
   policyId: string;

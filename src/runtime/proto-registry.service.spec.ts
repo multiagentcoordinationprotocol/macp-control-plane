@@ -153,6 +153,52 @@ describe('ProtoRegistryService', () => {
       });
     });
 
+    describe('Contribute (flat value-string) disambiguation', () => {
+      const decodeContribute = (payload: Buffer) =>
+        service.decodeKnown('ext.multi_round.v1', 'Contribute', payload);
+
+      it('trusts the proto reading when the payload re-encodes byte-identically, even if it also parses as JSON', () => {
+        // Canonical proto whose value is itself `{"value":"x"}` (the length-13 collision).
+        const payload = Buffer.concat([Buffer.from([0x0a, 0x0d]), Buffer.from('{"value":"x"}')]);
+        mockTypeInstance.toObject.mockReturnValue({ value: '{"value":"x"}' });
+        mockTypeInstance.encode.mockReturnValue({ finish: () => payload });
+
+        expect(decodeContribute(payload)).toEqual({ value: '{"value":"x"}' });
+      });
+
+      it('prefers legacy JSON when the lenient proto decode does not round-trip', () => {
+        // Whitespace-padded legacy JSON that protobufjs can lenient-decode.
+        const payload = Buffer.from('{"value":"x"}');
+        mockTypeInstance.toObject.mockReturnValue({ value: 'garbage' });
+        mockTypeInstance.encode.mockReturnValue({ finish: () => Buffer.from([0x0a, 0x07, 0x67]) });
+
+        expect(decodeContribute(payload)).toEqual({ value: 'x' });
+      });
+
+      it('keeps a lenient proto result with a string value when the bytes are not legacy JSON', () => {
+        const payload = Buffer.from([0x0a, 0x01, 0x61, 0x20]);
+        mockTypeInstance.toObject.mockReturnValue({ value: 'a' });
+        mockTypeInstance.encode.mockReturnValue({ finish: () => Buffer.from([0x0a, 0x01, 0x61]) });
+
+        expect(decodeContribute(payload)).toEqual({ value: 'a' });
+      });
+
+      it('falls back to legacy JSON when the proto decode yields no string value', () => {
+        const payload = Buffer.from('{"value":"y"}');
+        mockTypeInstance.toObject.mockReturnValue({});
+
+        expect(decodeContribute(payload)).toEqual({ value: 'y' });
+      });
+
+      it('falls back to legacy JSON when the proto decode throws', () => {
+        mockTypeInstance.decode.mockImplementation(() => {
+          throw new Error('invalid wire type');
+        });
+
+        expect(decodeContribute(Buffer.from('{"value":"z"}'))).toEqual({ value: 'z' });
+      });
+    });
+
     it('returns undefined for unknown types with empty payload', () => {
       const result = service.decodeKnown('unknown.mode', 'CustomMessage', Buffer.alloc(0));
 

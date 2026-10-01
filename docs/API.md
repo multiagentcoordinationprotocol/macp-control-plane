@@ -495,7 +495,7 @@ Body:
 }
 ```
 
-`schemaVersion` must be `1`, `2`, or `3` (omit for the default of `1`) — any other value, including
+`schemaVersion` must be `1`, `2`, or `3` (omit for the default of `3`, which is fail-closed on an empty decisive tally; pass `1` or `2` explicitly for the legacy fail-open reading) — any other value, including
 a value the runtime's own registration-time admission check would still accept, returns
 `400 Bad Request` locally without reaching the runtime. This is deliberately stricter than the
 runtime's admission gate: it matches the runtime's *evaluation-time* authoritative set instead, so

@@ -13,7 +13,7 @@ import {
   RuntimeUnregisterPolicyResultDto
 } from '../dto/runtime-responses.dto';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
-import { POLICY_SCHEMA_VERSIONS, PolicySchemaVersion } from '../contracts/runtime';
+import { DEFAULT_POLICY_SCHEMA_VERSION, POLICY_SCHEMA_VERSIONS, PolicySchemaVersion } from '../contracts/runtime';
 
 @ApiTags('runtime')
 @Controller('runtime')
@@ -74,7 +74,10 @@ export class RuntimeController {
     if (body.policyId === 'policy.default') {
       throw new BadRequestException('policy.default is reserved and cannot be registered');
     }
-    const schemaVersion = body.schemaVersion ?? 1;
+    // Default 3 (fail-closed on an empty decisive tally; RFC-MACP-0012 §3 SHOULDs
+    // 3 for new policies and both SDKs default to it). Callers that need the
+    // legacy fail-open reading must pass 1 or 2 explicitly.
+    const schemaVersion = body.schemaVersion ?? DEFAULT_POLICY_SCHEMA_VERSION;
     if (!POLICY_SCHEMA_VERSIONS.includes(schemaVersion as PolicySchemaVersion)) {
       throw new BadRequestException(`schemaVersion must be one of ${POLICY_SCHEMA_VERSIONS.join(', ')}`);
     }
