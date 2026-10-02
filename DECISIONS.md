@@ -159,3 +159,19 @@ P5 code changes (4 files: `run-event.service.ts`/`.spec.ts`,
 `stream-consumer.service.ts`/`.spec.ts`) need to go through `/ship`'s normal
 branch→PR→CI-watch→merge cycle before this reconcile pass is fully closed — not yet shipped
 as of this entry.
+
+---
+
+# DECISIONS — absorb-runtime-v0.8.6
+
+**Default policy `schemaVersion` is 3 (2026-10-02).** `POST /runtime/policies` defaults an omitted
+`schemaVersion` to `DEFAULT_POLICY_SCHEMA_VERSION = 3` (`src/contracts/runtime.ts`). RFC-MACP-0012 §3
+says new policies SHOULD use 3, and both SDKs default to 3. Behavioural difference: 1/2 are fail-open
+on an empty decisive tally, 3 is fail-closed. Callers wanting the legacy reading must pass `1`/`2`
+explicitly. Callers that omit the field (e.g. `macp-ui-console`) were not audited from this repo.
+Reversible: change the constant. Shipped in #96.
+
+**Already-RESOLVED session at poll time fails the run (409), not success.** `pollForOpenSession` throws
+`SESSION_ALREADY_RESOLVED` / `SESSION_CANCELLED`. Treating RESOLVED as success with history replay is
+deferred. **`MESSAGE_TYPE_MAP` additions skipped:** the runtime emits no PolicyResolved /
+PolicyCommitmentEvaluated envelopes, so entries would be dead.

@@ -34,7 +34,11 @@ export class RuntimePolicyDescriptorDto {
       'Parsed policy rules object (RFC-MACP-0012 per-mode schema: voting, objection_handling, evaluation, commitment for decision; threshold, abstention, commitment for quorum; etc.)'
   })
   rules!: Record<string, unknown>;
-  @ApiProperty() schemaVersion!: number;
+  @ApiProperty({
+    description:
+      'Policy schema version. 1 and 2 are fail-open on an empty decisive tally; 3 is fail-closed (default for new policies, RFC-MACP-0012 §3).'
+  })
+  schemaVersion!: number;
   @ApiPropertyOptional() registeredAtUnixMs?: number;
 }
 
