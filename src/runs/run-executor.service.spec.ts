@@ -738,6 +738,19 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       expect(mockProvider.getSession).toHaveBeenCalledTimes(1);
     });
 
+    it('stops polling without failing the run when shut down mid-poll (run-recovery resumes it)', async () => {
+      mockProvider.getSession.mockResolvedValue({ sessionId: 'sess-sd', state: 'SESSION_STATE_UNSPECIFIED' });
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-sd' }));
+
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 30));
+      service.onModuleDestroy();
+      await new Promise((r) => setTimeout(r, 400));
+
+      expect(mockRunManager.markFailed).not.toHaveBeenCalled();
+      expect(mockRunManager.bindSession).not.toHaveBeenCalled();
+    });
+
     it('warns once when the runtime version is outside the tested range, and logs info inside it', async () => {
       const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
       const log = jest.spyOn(Logger.prototype, 'log').mockImplementation();

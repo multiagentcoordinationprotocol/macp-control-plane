@@ -256,6 +256,26 @@ describe('SignalConsumerService', () => {
     expect(mockProvider.watchSignals).toHaveBeenCalledTimes(1);
     expect((service as unknown as { reconnectTimer?: unknown }).reconnectTimer).toBeUndefined();
   });
+
+  it('onModuleDestroy cancels a WatchSignals stream parked on an idle next()', async () => {
+    let release!: () => void;
+    const parked = new Promise<IteratorResult<RawRuntimeEvent>>((resolve) => {
+      release = () => resolve({ done: true, value: undefined });
+    });
+    const returnFn = jest.fn(async () => {
+      release();
+      return { done: true as const, value: undefined };
+    });
+    mockProvider.watchSignals.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => parked, return: returnFn })
+    });
+
+    await service.onModuleInit();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    await service.onModuleDestroy();
+
+    expect(returnFn).toHaveBeenCalled();
+  });
 });
 
 async function flushAsync(): Promise<void> {

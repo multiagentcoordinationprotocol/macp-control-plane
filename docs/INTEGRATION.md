@@ -284,6 +284,13 @@ npm run test:integration
 INTEGRATION_RUNTIME=remote RUNTIME_ADDRESS=127.0.0.1:50051 npm run test:integration
 ```
 
+`stream-resume-live.integration.spec.ts` additionally needs a hand-managed local
+runtime it can restart: `INTEGRATION_RUNTIME=remote`, `MACP_RUNTIME_AUTH_TOKENS_FILE`
+pointing at a tokens file (see the spec header for the contents), and a built binary
+at `$MACP_RUNTIME_DIR/target/debug/macp-runtime`. Otherwise it is skipped with the
+reason logged — it never runs against the docker-compose runtime (dev-auth mode,
+no per-agent token identities, no restartable process).
+
 The integration suites cover the full run lifecycle plus suspend/resume, webhook
 delivery (HMAC + retry against a local receiver), replay, retention purge,
 stream-gap recovery, batch operations, and SSE resume. Deterministic mock

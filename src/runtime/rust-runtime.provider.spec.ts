@@ -855,3 +855,42 @@ describe('RustRuntimeProvider.createClient — explicit gRPC channel options (Ph
     });
   });
 });
+
+describe('RustRuntimeProvider — shutdown (issue #99)', () => {
+  it('watchSignals().return() unblocks a next() parked on an idle stream and cancels the gRPC call', async () => {
+    const signalStream = makeFakeStream();
+    const { provider } = makeProvider(
+      () => makeFakeStream(),
+      {},
+      () => signalStream
+    );
+    const iterator = provider.watchSignals()[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    await new Promise((r) => setImmediate(r));
+
+    await iterator.return!();
+
+    await expect(pending).resolves.toEqual({ done: true, value: undefined });
+    expect(signalStream.cancel).toHaveBeenCalled();
+  });
+
+  it('watchSessions().return() issued before the call is created cancels it once created', async () => {
+    const sessionStream = makeFakeStream();
+    const { provider } = makeProvider(() => makeFakeStream());
+    (provider as unknown as { client: Record<string, unknown> }).client.WatchSessions = jest.fn(() => sessionStream);
+    const iterator = provider.watchSessions()[Symbol.asyncIterator]();
+    await iterator.return!();
+    await new Promise((r) => setImmediate(r));
+
+    expect(sessionStream.cancel).toHaveBeenCalled();
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
+
+  it('onModuleDestroy closes the gRPC client', () => {
+    const { provider } = makeProvider(() => makeFakeStream());
+    const close = jest.fn();
+    (provider as unknown as { client: unknown }).client = { close };
+    provider.onModuleDestroy();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});

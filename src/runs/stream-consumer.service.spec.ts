@@ -251,6 +251,21 @@ describe('StreamConsumerService', () => {
     });
   });
 
+  describe('onModuleDestroy() — live handle', () => {
+    it('cancels the live subscription handle and wakes a pending backoff sleep', async () => {
+      const abort = jest.fn();
+      const wake = jest.fn();
+      const marker: any = { aborted: false, finalized: false, connected: true, handle: { abort }, wake };
+      (service as any).active.set('run-h', marker);
+
+      await service.onModuleDestroy();
+
+      expect(marker.aborted).toBe(true);
+      expect(abort).toHaveBeenCalledTimes(1);
+      expect(wake).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('isHealthy()', () => {
     it('should return true when no active streams', () => {
       expect(service.isHealthy()).toBe(true);

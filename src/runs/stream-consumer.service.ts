@@ -28,6 +28,10 @@ interface ActiveStream {
   finalizingPromise?: Promise<void>;
   /** Tracks the consumeLoop so shutdown can await in-flight persistence. */
   loopPromise?: Promise<void>;
+  /** Live subscription handle, so shutdown can cancel the gRPC call. */
+  handle?: { abort(): void };
+  /** Resolves a pending backoff sleep early (shutdown). */
+  wake?: () => void;
 }
 
 @Injectable()
@@ -52,13 +56,41 @@ export class StreamConsumerService implements OnModuleDestroy {
     for (const [runId, marker] of this.active) {
       marker.aborted = true;
       this.logger.log(`aborting stream for run ${runId} on shutdown`);
+      marker.wake?.();
+      try {
+        marker.handle?.abort();
+      } catch {
+        /* already closed */
+      }
       if (marker.loopPromise) pending.push(marker.loopPromise);
     }
     // Bounded drain: wait for consumeLoops to observe abort and finish any
     // in-flight persistRawAndCanonical before returning, so the DB pool
     // isn't closed under them. Capped to avoid blocking shutdown on stuck
     // gRPC calls.
-    await Promise.race([Promise.allSettled(pending), new Promise<void>((resolve) => setTimeout(resolve, 2000))]);
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.allSettled(pending),
+      new Promise<void>((resolve) => {
+        drainTimer = setTimeout(resolve, 2000);
+        drainTimer.unref();
+      })
+    ]);
+    if (drainTimer) clearTimeout(drainTimer);
+  }
+
+  /** Backoff sleep that shutdown can cut short and that never holds the event loop open. */
+  private sleep(marker: ActiveStream, ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(done, ms);
+      timer.unref();
+      function done() {
+        clearTimeout(timer);
+        marker.wake = undefined;
+        resolve();
+      }
+      marker.wake = done;
+    });
   }
 
   /**
@@ -346,6 +378,7 @@ export class StreamConsumerService implements OnModuleDestroy {
     // `session.stream.gap` and fall through to poll-only (resubscribing from 0
     // would re-ingest history — the CP has no message-id dedup).
     let handle = params.sessionHandle;
+    marker.handle = handle;
     if (handle && !params.pollOnly) {
       let streamRetries = 0;
       while (!marker.aborted && !marker.finalized) {
@@ -429,7 +462,7 @@ export class StreamConsumerService implements OnModuleDestroy {
         this.instrumentation.streamReconnectsTotal.inc();
         if (streamRetries > maxRetries) break; // exhausted → poll fallback
 
-        await new Promise((resolve) => setTimeout(resolve, this.backoffMs(streamRetries)));
+        await this.sleep(marker, this.backoffMs(streamRetries));
         if (marker.aborted || marker.finalized) return;
 
         // Resubscribe from the last delivered envelope ordinal (exclusive).
@@ -439,6 +472,7 @@ export class StreamConsumerService implements OnModuleDestroy {
             runtimeSessionId: params.runtimeSessionId,
             afterSequence: marker.envelopeOrdinal
           });
+          marker.handle = handle;
         } catch (error) {
           this.logger.warn(
             `resubscribe failed for run ${params.runId}: ${error instanceof Error ? error.message : String(error)}`
@@ -508,7 +542,7 @@ export class StreamConsumerService implements OnModuleDestroy {
           data: { status: 'reconnecting', detail: 'polling getSession for terminal state' }
         }
       ]);
-      await new Promise((resolve) => setTimeout(resolve, this.backoffMs(retries)));
+      await this.sleep(marker, this.backoffMs(retries));
     }
   }
 

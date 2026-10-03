@@ -205,7 +205,16 @@ async function drainBackgroundWork(
     safeGet(moduleRef, StreamConsumerService)
   ].filter((svc): svc is NonNullable<typeof svc> => svc !== undefined);
 
-  await Promise.allSettled(services.map((svc) => svc.onModuleDestroy()));
+  // Bounded: a wedged service must not turn into a jest hook timeout.
+  let drainTimer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.allSettled(services.map((svc) => svc.onModuleDestroy())),
+    new Promise<void>((resolve) => {
+      drainTimer = setTimeout(resolve, 10_000);
+      drainTimer.unref();
+    })
+  ]);
+  if (drainTimer) clearTimeout(drainTimer);
 }
 
 function safeGet<T>(moduleRef: TestingModule, token: new (...args: never[]) => T): T | undefined {
