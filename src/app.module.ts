@@ -17,6 +17,7 @@ import { ObservabilityController } from './controllers/observability.controller'
 import { RunInsightsController } from './controllers/run-insights.controller';
 import { RunsController } from './controllers/runs.controller';
 import { RuntimeController } from './controllers/runtime.controller';
+import { PolicyRulesValidatorService } from './policy/policy-rules-validator.service';
 import { DatabaseModule } from './db/database.module';
 import { ArtifactService } from './artifacts/artifact.service';
 import { AuditService } from './audit/audit.service';
@@ -128,6 +129,7 @@ import { WebhookService } from './webhooks/webhook.service';
     ArtifactService,
     AuditService,
     RunEventService,
+    PolicyRulesValidatorService,
     ReplayService,
     RunManagerService,
     StreamConsumerService,

@@ -1,3 +1,4 @@
+import { PolicyRulesValidatorService } from '../policy/policy-rules-validator.service';
 import { RuntimeController } from './runtime.controller';
 import { AppConfigService } from '../config/app-config.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
@@ -36,7 +37,8 @@ describe('RuntimeController', () => {
 
     controller = new RuntimeController(
       mockConfig as AppConfigService,
-      mockRuntimeRegistry as unknown as RuntimeProviderRegistry
+      mockRuntimeRegistry as unknown as RuntimeProviderRegistry,
+      new PolicyRulesValidatorService()
     );
   });
 
@@ -186,10 +188,47 @@ describe('RuntimeController', () => {
           policyId: 'policy.bad',
           mode: 'macp.mode.decision.v1',
           description: 'Bad policy',
-          rules: { invalid: true },
+          rules: { voting: { algorithm: 'majority' } },
           schemaVersion: 1
         })
       ).rejects.toThrow('INVALID_POLICY_DEFINITION');
+    });
+
+    it.each([
+      ['an unknown top-level key', 'macp.mode.decision.v1', { invalid: true }, 'unrecognized key "invalid"'],
+      [
+        'a misspelled nested key (veto_threshhold)',
+        'macp.mode.decision.v1',
+        { objection_handling: { veto_threshhold: 1 } },
+        'veto_threshhold'
+      ],
+      ['an unknown key under the wildcard mode', '*', { not_a_rule_key: 1 }, 'unrecognized key "not_a_rule_key"']
+    ])('rejects %s without calling the runtime', async (_label, mode, rules, expected) => {
+      await expect(
+        controller.registerPolicy({ policyId: 'policy.typo', mode, description: 'typo', rules, schemaVersion: 3 })
+      ).rejects.toThrow(expected);
+      expect(mockProvider.registerPolicy).not.toHaveBeenCalled();
+    });
+
+    it('accepts valid rules for a wildcard-mode policy and for an extension mode with no vendored schema', async () => {
+      mockProvider.registerPolicy.mockResolvedValue({ ok: true });
+
+      await controller.registerPolicy({
+        policyId: 'policy.wild',
+        mode: '*',
+        description: 'wildcard',
+        rules: { voting: { algorithm: 'majority' }, commitment: { authority: 'any_participant' } },
+        schemaVersion: 3
+      });
+      await controller.registerPolicy({
+        policyId: 'policy.ext',
+        mode: 'ext.custom.v1',
+        description: 'extension mode',
+        rules: { anything: { goes: true } },
+        schemaVersion: 3
+      });
+
+      expect(mockProvider.registerPolicy).toHaveBeenCalledTimes(2);
     });
 
     it('returns error result for non-validation errors', async () => {

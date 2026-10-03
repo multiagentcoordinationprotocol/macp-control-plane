@@ -424,7 +424,13 @@ describe('StreamConsumerService', () => {
       );
 
       expect(marker.envelopeOrdinal).toBe(2);
-      expect(runtimeSessionRepository.updateStreamCursor).toHaveBeenLastCalledWith('run-1', expect.any(Number), 2);
+      // The ordinal rides on the persist call (written in the same transaction), not a separate write.
+      expect(eventService.persistRawAndCanonical.mock.calls.map((c) => (c as any[])[3])).toEqual([
+        { envelopeOrdinal: 1 },
+        { envelopeOrdinal: 2 },
+        { envelopeOrdinal: 2 } // snapshot: ordinal unchanged
+      ]);
+      expect(runtimeSessionRepository.updateStreamCursor).not.toHaveBeenCalled();
     });
 
     it('resubscribes from the persisted envelope ordinal after a stream error', async () => {
@@ -476,7 +482,6 @@ describe('StreamConsumerService', () => {
       );
 
       expect(marker.envelopeOrdinal).toBe(0);
-      expect(runtimeSessionRepository.updateStreamCursor).not.toHaveBeenCalled();
     });
 
     it('resubscribes from the pre-failure envelope ordinal after a persist failure, not a corrupted post-increment value', async () => {

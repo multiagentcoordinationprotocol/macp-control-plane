@@ -491,7 +491,7 @@ Body:
     "objection_handling": { "critical_severity_vetoes": true, "veto_threshold": 1 },
     "commitment": { "authority": "initiator_only", "require_vote_quorum": true }
   },
-  "schemaVersion": 1
+  "schemaVersion": 3
 }
 ```
 
@@ -504,6 +504,12 @@ policy later, with no signal at registration time. The check is also type-strict
 range-strict: there is no `ValidationPipe` on this endpoint's body, so a JSON string like
 `"schemaVersion": "1"` previously coerced through to the runtime (proto-loader accepts a numeric
 string for an int32 field) and succeeded — it is now rejected the same as an out-of-range number.
+
+`rules` is also validated against the spec's closed-set rule schemas for the policy's `mode` (decision,
+quorum, proposal, task, handoff; `"*"` accepts a key that is legitimate under any of them). An unknown or
+misspelled key (e.g. `veto_threshhold`) or a wrong shape returns `400` naming the path and key, because the
+runtime itself ignores unknown keys. Keys starting with `_` or `$` are treated as annotations. Extension modes
+with no vendored schema are not validated.
 
 Returns: `{ "ok": true }` or `{ "ok": false, "error": "..." }`
 

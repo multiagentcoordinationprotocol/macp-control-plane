@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://macp.dev/schemas/policy/task-rules.schema.json",
+  "title": "Task Mode Governance Rules",
+  "description": "JSON Schema for governance rules applied to macp.mode.task.v1 sessions. See RFC-MACP-0012 Section 4.4.",
+  "type": "object",
+  "properties": {
+    "assignment": {
+      "type": "object",
+      "properties": {
+        "allow_reassignment_on_reject": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, a rejected task can be reassigned to a different participant."
+        }
+      },
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    },
+    "completion": {
+      "type": "object",
+      "properties": {
+        "require_output": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, TaskComplete must include a non-empty output field."
+        }
+      },
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    },
+    "commitment": {
+      "type": "object",
+      "properties": {
+        "authority": {
+          "type": "string",
+          "enum": [
+            "initiator_only",
+            "any_participant",
+            "designated_role"
+          ],
+          "default": "initiator_only"
+        },
+        "designated_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "Ported verbatim from decision-rules.schema.json, which has enforced this since it was written. `authority: \"designated_role\"` with no `designated_roles` declares that only designated roles may commit and then names none -- an unsatisfiable authority rule that either bricks the session or fails open depending on the runtime (issue #116). minItems 1 is part of the constraint: an empty array names no one either.",
+      "if": {
+        "properties": {
+          "commitment": {
+            "properties": {
+              "authority": {
+                "const": "designated_role"
+              }
+            },
+            "required": [
+              "authority"
+            ]
+          }
+        },
+        "required": [
+          "commitment"
+        ]
+      },
+      "then": {
+        "properties": {
+          "commitment": {
+            "required": [
+              "designated_roles"
+            ],
+            "properties": {
+              "designated_roles": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "patternProperties": {
+    "^[_$]": true
+  },
+  "additionalProperties": false
+}

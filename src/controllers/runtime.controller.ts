@@ -1,3 +1,4 @@
+import { PolicyRulesValidatorService } from '../policy/policy-rules-validator.service';
 import { BadRequestException, Body, Controller, Delete, Get, HttpStatus, Param, Post, Query } from '@nestjs/common';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { AppConfigService } from '../config/app-config.service';
@@ -20,7 +21,8 @@ import { DEFAULT_POLICY_SCHEMA_VERSION, POLICY_SCHEMA_VERSIONS, PolicySchemaVers
 export class RuntimeController {
   constructor(
     private readonly config: AppConfigService,
-    private readonly runtimeRegistry: RuntimeProviderRegistry
+    private readonly runtimeRegistry: RuntimeProviderRegistry,
+    private readonly policyRulesValidator: PolicyRulesValidatorService
   ) {}
 
   @Get('manifest')
@@ -100,6 +102,13 @@ export class RuntimeController {
       if (!Array.isArray(roles) || roles.length === 0) {
         throw new BadRequestException('designated_role authority requires non-empty designated_roles list');
       }
+    }
+
+    // Closed-set check (after the targeted checks above so their messages win) against the spec's rule schemas: the runtime ignores unknown keys,
+    // so a typo like `veto_threshhold` would otherwise register silently and never apply.
+    const ruleErrors = this.policyRulesValidator.validateRules(body.mode, body.rules);
+    if (ruleErrors.length > 0) {
+      throw new BadRequestException(`invalid policy rules for mode "${body.mode}": ${ruleErrors.join('; ')}`);
     }
 
     const provider = this.runtimeRegistry.get(this.config.runtimeKind);

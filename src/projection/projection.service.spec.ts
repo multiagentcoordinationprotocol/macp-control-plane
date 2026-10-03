@@ -992,6 +992,24 @@ describe('ProjectionService', () => {
       expect(result.run.extensionKeys).toEqual(['analytics', 'trace']);
     });
 
+    it.each([
+      ['decoded camelCase number', { maxSuspendMs: 30000 }, 30000],
+      ['decoded snake_case string', { max_suspend_ms: '45000' }, 45000],
+      ['zero (runtime default) is omitted', { maxSuspendMs: 0 }, undefined],
+      ['absent is omitted', {}, undefined]
+    ])('SessionStart surfaces maxSuspendMs in the run summary: %s', (_label, payload, expected) => {
+      const base = service.empty('run-1');
+
+      const result = service.applyEvents(base, [
+        makeEvent({
+          type: 'message.received',
+          data: { sender: 'agent-1', messageType: 'SessionStart', decodedPayload: payload }
+        })
+      ]);
+
+      expect(result.run.maxSuspendMs).toBe(expected);
+    });
+
     it('session.bound carries contextId/extensionKeys into run summary (T4b)', () => {
       const base = service.empty('run-1');
 
