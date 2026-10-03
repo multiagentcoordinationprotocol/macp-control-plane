@@ -19,6 +19,7 @@ export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
   private loopPromise?: Promise<void>;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private reconnectResolve?: () => void;
+  private activeIterator?: AsyncIterator<unknown>;
   private readonly knownSessions = new Set<string>();
 
   constructor(
@@ -44,7 +45,20 @@ export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
     if (this.reconnectResolve) this.reconnectResolve();
     // Await the discovery loop — including any in-flight handleSessionCreated
     // DB writes — before returning so the pool isn't closed under them.
-    if (this.loopPromise) await this.loopPromise.catch(() => undefined);
+    // Cancel the parked WatchSessions/WatchSignals call: the loop is blocked in
+    // iterator.next(), which only resolves on gRPC data/end/error.
+    await this.activeIterator?.return?.().catch(() => undefined);
+    if (this.loopPromise) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        this.loopPromise.catch(() => undefined),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, 2000);
+          timer.unref?.();
+        })
+      ]);
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private async startDiscoveryLoop(): Promise<void> {
@@ -70,8 +84,15 @@ export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
   private async consumeWatchStream(): Promise<void> {
     const provider = this.providerRegistry.get('rust');
     const stream = provider.watchSessions();
+    const iterable: AsyncIterable<SessionLifecycleEvent> = {
+      [Symbol.asyncIterator]: () => {
+        const iterator = stream[Symbol.asyncIterator]();
+        this.activeIterator = iterator;
+        return iterator;
+      }
+    };
 
-    for await (const event of stream) {
+    for await (const event of iterable) {
       if (this.aborted) return;
 
       const sessionId = event.session?.sessionId;

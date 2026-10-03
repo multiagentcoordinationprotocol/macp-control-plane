@@ -323,6 +323,26 @@ describe('SessionDiscoveryService', () => {
     expect(mockRunManager.markFailed).not.toHaveBeenCalled();
   });
 
+  it('onModuleDestroy cancels a WatchSessions stream parked on an idle next()', async () => {
+    let release!: () => void;
+    const parked = new Promise<IteratorResult<SessionLifecycleEvent>>((resolve) => {
+      release = () => resolve({ done: true, value: undefined });
+    });
+    const returnFn = jest.fn(async () => {
+      release();
+      return { done: true as const, value: undefined };
+    });
+    mockProvider.watchSessions.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => parked, return: returnFn })
+    });
+
+    await service.onModuleInit();
+    await flushAsync();
+    await service.onModuleDestroy();
+
+    expect(returnFn).toHaveBeenCalled();
+  });
+
   it('ignores events missing a sessionId', async () => {
     mockProvider.watchSessions.mockReturnValue(
       scriptedStream([

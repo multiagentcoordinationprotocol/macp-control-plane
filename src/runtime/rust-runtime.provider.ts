@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- gRPC dynamic proto loading returns untyped objects */
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import * as path from 'node:path';
@@ -90,7 +90,7 @@ const MAX_PAGE_SIZE_HALVINGS = 2;
  * paths were deleted in CP-3 because they violated §2, §3, and §5 of the plan's invariants.
  */
 @Injectable()
-export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
+export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnModuleDestroy {
   readonly kind = 'rust';
   private readonly logger = new Logger(RustRuntimeProvider.name);
   private client!: any;
@@ -144,6 +144,16 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     this.runtimeAddress = this.config.runtimeAddress;
     this.channelCreds = this.config.runtimeTls ? grpc.credentials.createSsl() : grpc.credentials.createInsecure();
     this.client = this.createClient();
+  }
+
+  onModuleDestroy(): void {
+    // Release the channel so open watch/stream calls don't keep the process (or a
+    // test worker) alive after shutdown.
+    try {
+      this.client?.close?.();
+    } catch {
+      /* already closed */
+    }
   }
 
   /** Create a fresh gRPC channel to the runtime. */
@@ -680,6 +690,11 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
             const metadata = buildMetadata(creds.metadata);
             const method = getClientMethod(client, 'WatchSessions');
             grpcCall = method.call(client, {}, metadata);
+            if (ended) {
+              // return() ran while credentials were resolving; cancel immediately.
+              grpcCall.cancel();
+              return;
+            }
 
             grpcCall.on('data', (chunk: any) => {
               const event = chunk.event;
@@ -738,6 +753,10 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
             }
           },
           async return(): Promise<IteratorResult<SessionLifecycleEvent>> {
+            // Settle a parked next() so a consumer blocked on an idle stream unblocks.
+            ended = true;
+            streamError = null;
+            notify();
             if (grpcCall) {
               try {
                 grpcCall.cancel();
@@ -784,6 +803,10 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
             const metadata = buildMetadata(creds.metadata);
             const method = getClientMethod(client, 'WatchSignals');
             grpcCall = method.call(client, {}, metadata);
+            if (ended) {
+              grpcCall.cancel();
+              return;
+            }
 
             grpcCall.on('data', (chunk: any) => {
               const receivedAt = new Date().toISOString();
@@ -827,6 +850,10 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
             }
           },
           async return(): Promise<IteratorResult<RawRuntimeEvent>> {
+            // Settle a parked next() so a consumer blocked on an idle stream unblocks.
+            ended = true;
+            streamError = null;
+            notify();
             if (grpcCall) {
               try {
                 grpcCall.cancel();

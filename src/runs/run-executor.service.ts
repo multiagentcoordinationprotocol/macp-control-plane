@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { RunDescriptor } from '../contracts/control-plane';
 import { ArtifactService } from '../artifacts/artifact.service';
@@ -44,8 +44,10 @@ function isValidSessionId(candidate: string): boolean {
  * forges SessionStart, kickoff, messages, signals, or context updates.
  */
 @Injectable()
-export class RunExecutorService {
+export class RunExecutorService implements OnModuleDestroy {
   private readonly logger = new Logger(RunExecutorService.name);
+  /** Set on shutdown so fire-and-forget pollForOpenSession loops stop touching a closing runtime/DB. */
+  private shuttingDown = false;
 
   constructor(
     private readonly runManager: RunManagerService,
@@ -333,6 +335,7 @@ export class RunExecutorService {
         { run_id: runId, runtime_kind: request.runtime.kind, session_id: sessionId },
         async () => this.pollForOpenSession(provider, runId, sessionId)
       );
+      if (!snapshot) return; // shutting down mid-poll; run-recovery resumes it on restart
 
       await this.runManager.bindSession(
         runId,
@@ -410,6 +413,10 @@ export class RunExecutorService {
     }
   }
 
+  onModuleDestroy(): void {
+    this.shuttingDown = true;
+  }
+
   private async pollForOpenSession(
     provider: ReturnType<RuntimeProviderRegistry['get']>,
     runId: string,
@@ -422,6 +429,8 @@ export class RunExecutorService {
     let attempt = 0;
 
     while (Date.now() - startedAt < totalTimeout) {
+      // Leave the run non-terminal so run-recovery can resume it after restart.
+      if (this.shuttingDown) return undefined;
       try {
         const snapshot = await provider.getSession({ runId, runtimeSessionId: sessionId });
         if (snapshot.state === 'SESSION_STATE_OPEN') return snapshot;
@@ -463,7 +472,9 @@ export class RunExecutorService {
       }
       attempt += 1;
       const delay = Math.min(base * 2 ** (attempt - 1), max);
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, delay).unref();
+      });
     }
 
     throw new AppException(

@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import * as protobuf from 'protobufjs';
-import { describeWithRealRuntime } from '../helpers/real-runtime-gate';
+import { describeWithLocalRuntime } from '../helpers/real-runtime-gate';
 import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { decisionModeRequest } from '../fixtures/decision-mode';
 import { waitFor } from '../helpers/wait-for';
@@ -23,8 +23,15 @@ import { RuntimeProviderRegistry } from '../../src/runtime/runtime-provider.regi
  * against the control-plane team's own model of the contract. This spec is
  * the one place that asks the *runtime* what the right answer is.
  *
- * Gated with `describeWithRealRuntime` — skipped (not failed) unless
- * `INTEGRATION_RUNTIME` selects a real gRPC runtime (CI pins `mock`).
+ * Gated with `describeWithLocalRuntime` — skipped (not failed, with the reason
+ * logged) unless ALL hold: `INTEGRATION_RUNTIME=remote`, an existing
+ * `MACP_RUNTIME_AUTH_TOKENS_FILE`, and a built runtime binary (see
+ * `test/helpers/real-runtime-gate.ts`). It is deliberately NOT run against the
+ * docker-compose runtime (`INTEGRATION_RUNTIME=docker`, issue #98): that runtime
+ * is in dev-auth mode (bearer string == sender, so the per-agent token identities
+ * below cannot authenticate) and its port is owned by Docker's forwarder, so the
+ * SIGINT/relaunch seam cannot restart it. Verified green against a locally built
+ * macp-runtime v0.8.6.
  *
  * The control-plane is a pure observer throughout: it never calls `Send`
  * (guarded separately by `src/runtime/observer-invariant.spec.ts`, untouched
@@ -413,7 +420,7 @@ async function fetchMessageIds(pool: { query: (q: string, p: unknown[]) => Promi
   return res.rows.map((r) => r.mid);
 }
 
-describeWithRealRuntime('Stream resume — live macp-runtime 0.7.0 (Phase 5)', () => {
+describeWithLocalRuntime('Stream resume — live macp-runtime 0.7.0 (Phase 5)', () => {
   let ctx: TestAppContext;
   let payloadTypes: PayloadTypes;
   let ServiceCtor: any; // eslint-disable-line @typescript-eslint/no-explicit-any

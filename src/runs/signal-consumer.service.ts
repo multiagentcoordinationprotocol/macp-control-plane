@@ -5,7 +5,7 @@ import { EventNormalizerService } from '../events/event-normalizer.service';
 import { RunEventService } from '../events/run-event.service';
 import { ProtoRegistryService } from '../runtime/proto-registry.service';
 import { AppConfigService } from '../config/app-config.service';
-import type { NormalizeContext } from '../contracts/runtime';
+import type { NormalizeContext, RawRuntimeEvent } from '../contracts/runtime';
 
 /**
  * Subscribes to the runtime's WatchSignals stream (separate from per-session
@@ -24,6 +24,7 @@ export class SignalConsumerService implements OnModuleInit, OnModuleDestroy {
   private loopPromise?: Promise<void>;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private reconnectResolve?: () => void;
+  private activeIterator?: AsyncIterator<unknown>;
 
   constructor(
     private readonly providerRegistry: RuntimeProviderRegistry,
@@ -48,7 +49,20 @@ export class SignalConsumerService implements OnModuleInit, OnModuleDestroy {
     if (this.reconnectResolve) this.reconnectResolve();
     // Await the consume loop so in-flight persistRawAndCanonical calls finish
     // before the DB pool closes.
-    if (this.loopPromise) await this.loopPromise.catch(() => undefined);
+    // Cancel the parked WatchSessions/WatchSignals call: the loop is blocked in
+    // iterator.next(), which only resolves on gRPC data/end/error.
+    await this.activeIterator?.return?.().catch(() => undefined);
+    if (this.loopPromise) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        this.loopPromise.catch(() => undefined),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, 2000);
+          timer.unref?.();
+        })
+      ]);
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private async startConsumeLoop(): Promise<void> {
@@ -74,8 +88,15 @@ export class SignalConsumerService implements OnModuleInit, OnModuleDestroy {
   private async consumeSignalStream(): Promise<void> {
     const provider = this.providerRegistry.get('rust');
     const stream = provider.watchSignals();
+    const iterable: AsyncIterable<RawRuntimeEvent> = {
+      [Symbol.asyncIterator]: () => {
+        const iterator = stream[Symbol.asyncIterator]();
+        this.activeIterator = iterator;
+        return iterator;
+      }
+    };
 
-    for await (const raw of stream) {
+    for await (const raw of iterable) {
       if (this.aborted) return;
       if (raw.kind !== 'stream-envelope' || !raw.envelope) continue;
 
