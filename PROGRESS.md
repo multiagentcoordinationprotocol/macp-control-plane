@@ -1596,3 +1596,19 @@ merged #88 (e682eaf)
 
 **`/reconcile` is complete. This closes the entire `absorb-runtime-v0.8.0` `/drive` run:
 plan → implement (8 phases) → finalization pass → reconcile (3 entries) → ship (PR #88).**
+
+---
+
+# Close-out — 2026-10-03
+
+Closed every open issue and deferred plan item, then archived the plans (`plans/archive/`).
+
+- #98 + #99 → PR #102: watch-stream/shutdown drain fix (`app.close()` no longer hangs against a live runtime);
+  `stream-resume-live` gated to a local restartable runtime (verified green against a local v0.8.6).
+- #100 → PR #103: an already-RESOLVED session at attach binds and completes the run (poll-only, no replay);
+  CANCELLED still fails. Recorded in `DECISIONS.md`.
+- Plan deferrals → PR #104: stream cursor written inside the event transaction; `run.maxSuspendMs`; task
+  orchestrator-not-in-pool fixture; closed-set policy `rules` validation (#79 item 1) via vendored spec schemas + ajv.
+- #101 → audit found no caller omitting `schemaVersion` (ui-console form always sends it; playground registers
+  over gRPC with explicit v3). Stale docs fixed: control-plane `docs/API.md`, macp-ui-console#48, website#55.
+- Final state: 902 unit tests (57+ suites), 117 mock integration tests; 0 open issues, 0 open PRs.

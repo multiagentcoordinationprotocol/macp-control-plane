@@ -1,5 +1,7 @@
 # macp-runtime: Docker publish workflow doesn't trigger on release-plz tags
 
+**Status: RESOLVED (2026-09-25)** — fixed in macp-runtime (issue #184, closed); `docker.yml` now triggers on `macp-runtime-v*` and `docker-compose.test.yml` here pins `:0.8.6`.
+
 **Target repo:** `multiagentcoordinationprotocol/macp-runtime`
 **Filed from:** `multiagentcoordinationprotocol/macp-control-plane`, `plans/absorb-runtime-v0.8.0.md` Phase 1
 **Type:** bug (CI/CD), not a code-behavior bug
