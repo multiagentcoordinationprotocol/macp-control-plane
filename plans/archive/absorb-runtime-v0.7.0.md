@@ -1,6 +1,6 @@
 # Absorb macp-runtime v0.7.0 (and 0.6.x) + macp-proto 0.1.9
 
-Status: **COMPLETE** (P1–P7 DONE; reconciled — see `DECISIONS.md`)
+Status: **COMPLETE** (P1–P7 DONE; reconciled — see `DECISIONS.md`). **Closed out 2026-10-03:** the verification-table rows that read "pending" are all covered (see the table); the deferred cursor-write-outside-the-transaction item landed in PR #104.
 Owner: control-plane maintainers
 Upstream inputs: `macp-runtime` v0.7.0 (`CHANGELOG.md` `[0.7.0] — 2026-08-31`, PRs #116 / #108, `docs/change-review-phases-a-e.md`), `@multiagentcoordinationprotocol/proto` 0.1.8 → 0.1.9.
 
@@ -720,17 +720,17 @@ To be completed as phases land — this is the artifact the final report is buil
 | Terminal page carries empty token | **live (P1)** | **CONFIRMED** — page 2 token empty |
 | CP's own `listSessions()` drains multi-page live | **live (P1)** | **CONFIRMED** — 150 total, 150 unique, ascending |
 | Committed integration spec executed end-to-end | **live (P1)** | **CONFIRMED** — passes against the live runtime, skips under mock. Run via a config omitting `globalSetup`; `npm run test:integration` itself still blocked on this host's Postgres |
-| `complete: false` on MAX_PAGES exhaustion | static (unit, P2) | pending |
-| Overall drain timeout | static (unit, P2) | pending |
-| Ordinal unchanged on persist failure | static (unit, P3) | pending |
-| Empty-`sessionId` envelope filtered | static (unit, P3) | pending |
+| `complete: false` on MAX_PAGES exhaustion | static (unit, P2) | **CONFIRMED** — `rust-runtime.provider.spec.ts` "stops at RUNTIME_LIST_SESSIONS_MAX_PAGES … complete:false" |
+| Overall drain timeout | static (unit, P2) | **CONFIRMED** — `rust-runtime.provider.spec.ts` "stops when the overall RUNTIME_LIST_SESSIONS_TIMEOUT_MS budget is exceeded" |
+| Ordinal unchanged on persist failure | static (unit, P3) | **CONFIRMED** — `stream-consumer.service.spec.ts` "leaves the envelope ordinal unchanged when persistRawAndCanonical throws"; now also atomic in-transaction (PR #104) |
+| Empty-`sessionId` envelope filtered | static (unit, P3) | **CONFIRMED** — `rust-runtime.provider.spec.ts` "drops an envelope with an empty sessionId …" |
 | Invariant 6 holds in code | static (read + existing spec) | **confirmed** — one frame, no `.end()`, `spec.ts:105` asserts it |
-| Invariant 6 holds live (post-subscribe envelopes delivered) | live (P5) | pending |
-| Exactly-once across a forced stream break | live (P5) | pending |
-| Compacted resume → `FAILED_PRECONDITION` → gap | live (P5) | pending |
+| Invariant 6 holds live (post-subscribe envelopes delivered) | live (P5) | **CONFIRMED** — `stream-resume-live.integration.spec.ts` criteria 1+2; re-verified green against runtime v0.8.6 (#98) |
+| Exactly-once across a forced stream break | live (P5) | **CONFIRMED** — same spec; re-verified against runtime v0.8.6 |
+| Compacted resume → `FAILED_PRECONDITION` → gap | live (P5) | **CONFIRMED** — same spec, criterion 3 parts 1+2; unit `run-recovery.service.spec.ts`; mock `stream-gap.integration.spec.ts` |
 | proto 0.1.8→0.1.9 is documentation-only | static (crate source diff) | **confirmed** |
 | No new `commitment_hash` wire field | static (PR #108 file list + proto diff) | **confirmed** |
-| Canonical/legacy hash classification | static (unit, P6) | pending |
+| Canonical/legacy hash classification | static (unit, P6) | **CONFIRMED** — `projection.service.spec.ts` "classifies … canonical: true/false" and the legacy-row backfill cases |
 | npm 0.1.9 published? | **resolved** | **YES** — landed via PR #60 (`0b5ceab`); installed and suite green against it |
 | proto 0.1.8→0.1.9 needs no code change | **live** | **CONFIRMED** — PR #60 touched only package.json + lockfile; 725 tests green after install |
 

@@ -1,6 +1,6 @@
 # Absorb macp-runtime v0.5.0 + macp-proto 0.1.6
 
-Status: **implemented** (T1–T10 landed with unit coverage; T11 live pass pending — see Implementation note)
+Status: **COMPLETE** (closed out 2026-10-03). T1–T10 landed with unit coverage. The T11 live pass was closed by the v0.7.0 plan's Phase 5 (`stream-resume-live.integration.spec.ts`, re-verified green against runtime v0.8.6 in #98). Deferrals resolved: T4 `maxSuspendMs` surfacing → PR #104 (`run.maxSuspendMs`); T7 step 5 `run-recovery` `afterSequence` resume → already landed (`run-recovery.service.ts`, #64); T10 orchestrator-not-in-pool fixture → PR #104 (`task-orchestrator.integration.spec.ts`, mock).
 Owner: control-plane maintainers
 Upstream inputs: `macp-runtime` v0.5.0 (CHANGELOG.md `[0.5.0] — 2026-07-05`, `docs/change-review-phases-a-e.md`), `@multiagentcoordinationprotocol/proto` 0.1.4 → 0.1.6 (published on GitHub Packages; verified `npm view` lists `0.1.6`), and the spec-repo RFC updates that ride along.
 

@@ -1,6 +1,6 @@
 # Absorb macp-runtime v0.8.0
 
-Status: **TODO**
+Status: **COMPLETE** (closed out 2026-10-03). All 8 phases DONE (merged #81–#89; v0.8.1–v0.8.6 absorbed in #96/#97). Deferrals resolved: closed-set policy `rules` validation (#79 item 1) → enforced in the control plane in PR #104 (the runtime declined, macp-runtime #167); widening `POLICY_SCHEMA_VERSIONS` beyond {1,2,3} → not needed, the runtime still ships {1,2,3}.
 Owner: this session (macp-control-plane-dd)
 Upstream inputs: macp-runtime CHANGELOG.md v0.7.1→v0.8.0, macp-runtime PRs #116/#137/#159/#161/#165/#168/#171/#175, this repo's own GitHub issues #67–#75 and #79, `DECISIONS.md` (prior absorption's recorded decisions — see §9), the "Runtime 0.8.0 Absorption" report (2026-09-22).
 
