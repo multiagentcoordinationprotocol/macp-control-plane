@@ -65,7 +65,10 @@ export class PolicyRulesValidatorService {
   /** Validation errors for `rules` under `mode`; empty when valid or when the mode has no vendored schema. */
   validateRules(mode: string, rules: unknown): string[] {
     if (mode === WILDCARD_MODE) return this.validateWildcardRules(rules);
-    const validate = this.ruleValidators.get(mode);
+    // `mode` comes from the request body: resolve it to one of OUR constant keys first, so no
+    // caller-controlled string is ever used to pick the function that gets invoked.
+    const knownMode = Object.keys(MODE_SCHEMAS).find((candidate) => candidate === mode);
+    const validate = knownMode ? this.ruleValidators.get(knownMode) : undefined;
     if (!validate) return [];
     return validate(rules) ? [] : formatErrors(validate.errors);
   }
