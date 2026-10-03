@@ -175,3 +175,18 @@ Reversible: change the constant. Shipped in #96.
 `SESSION_ALREADY_RESOLVED` / `SESSION_CANCELLED`. Treating RESOLVED as success with history replay is
 deferred. **`MESSAGE_TYPE_MAP` additions skipped:** the runtime emits no PolicyResolved /
 PolicyCommitmentEvaluated envelopes, so entries would be dead.
+
+---
+
+# DECISIONS — close-out (2026-10-03)
+
+**Already-RESOLVED session at attach is a success (supersedes the 409 decision above; #100).**
+`pollForOpenSession` now returns the snapshot for `SESSION_STATE_RESOLVED`; `execute()` binds it, calls
+`markRunning(runId, sessionId, 'SESSION_STATE_RESOLVED')` (the transition table requires
+`binding_session → running → completed`, and the `session.state.changed` event now reports the observed state
+instead of a hard-coded OPEN), **skips `subscribeSession`**, and starts the consumer `pollOnly`, which emits the
+session snapshot and finalizes `completed`. No history replay: the runtime compacts the log when a session
+resolves, so a subscribe from ordinal 0 only yields a FAILED_PRECONDITION gap. Consequence: such a run has the
+snapshot but no message history. `SESSION_CANCELLED` (409) and `SESSION_EXPIRED` (400) are unchanged — a
+cancelled/expired session is not a success. `ErrorCode.SESSION_ALREADY_RESOLVED` stays in the enum but is no
+longer thrown. Reversible: restore the throw in `pollForOpenSession`.

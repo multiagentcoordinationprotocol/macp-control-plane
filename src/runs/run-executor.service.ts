@@ -350,10 +350,15 @@ export class RunExecutorService implements OnModuleDestroy {
         initResult.capabilities as unknown as Record<string, unknown>
       );
 
-      // Subscribe read-only — never writes.
-      const handle = provider.subscribeSession({ runId, runtimeSessionId: sessionId });
+      // An already-RESOLVED session has nothing live to stream, and the runtime compacts
+      // its log on resolve (a replay from 0 would only yield a FAILED_PRECONDITION gap).
+      // Skip the subscribe and let the poll path emit the snapshot and complete the run.
+      const alreadyResolved = snapshot.state === 'SESSION_STATE_RESOLVED';
 
-      const run = await this.runManager.markRunning(runId, sessionId);
+      // Subscribe read-only — never writes.
+      const handle = alreadyResolved ? undefined : provider.subscribeSession({ runId, runtimeSessionId: sessionId });
+
+      const run = await this.runManager.markRunning(runId, sessionId, snapshot.state);
       const subscriberId = snapshot.initiator ?? '';
 
       await this.streamConsumer.start({
@@ -362,7 +367,8 @@ export class RunExecutorService implements OnModuleDestroy {
         runtimeKind: request.runtime.kind,
         runtimeSessionId: sessionId,
         subscriberId,
-        sessionHandle: handle
+        sessionHandle: handle,
+        pollOnly: alreadyResolved
       });
 
       if (run.traceId) {
@@ -441,15 +447,11 @@ export class RunExecutorService implements OnModuleDestroy {
             400
           );
         }
-        // Already terminal on first sight: there is no OPEN window to wait for, so fail
-        // fast instead of polling until RUNTIME_TIMEOUT.
-        if (snapshot.state === 'SESSION_STATE_RESOLVED') {
-          throw new AppException(
-            ErrorCode.SESSION_ALREADY_RESOLVED,
-            `session ${sessionId} was already resolved before the control plane observed it open`,
-            409
-          );
-        }
+        // Resolved before we attached: a success. Hand the snapshot back so execute()
+        // binds it and finalizes via the poll path (no OPEN window to wait for).
+        if (snapshot.state === 'SESSION_STATE_RESOLVED') return snapshot;
+        // Cancelled on first sight: no OPEN window to wait for, so fail fast instead of
+        // polling until RUNTIME_TIMEOUT.
         if (snapshot.state === 'SESSION_STATE_CANCELLED') {
           throw new AppException(
             ErrorCode.SESSION_CANCELLED,

@@ -334,6 +334,27 @@ describe('RunManagerService', () => {
     });
   });
 
+  describe('markRunning', () => {
+    it.each([
+      [undefined, 'SESSION_STATE_OPEN'],
+      ['SESSION_STATE_RESOLVED', 'SESSION_STATE_RESOLVED']
+    ])('reports the observed session state (%s) on session.state.changed', async (observed, expected) => {
+      runRepository.markRunning.mockResolvedValue(makeRunRecord({ status: 'running' }) as any);
+
+      await service.markRunning('run-1', 'sess-1', observed);
+
+      expect(runEventService.emitControlPlaneEvents).toHaveBeenCalledWith(
+        'run-1',
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'session.state.changed',
+            data: expect.objectContaining({ sessionId: 'sess-1', state: expected })
+          })
+        ])
+      );
+    });
+  });
+
   describe('markSuspended', () => {
     it('transitions a running run to suspended and emits run.suspended', async () => {
       runRepository.findById.mockResolvedValue(makeRunRecord({ status: 'running' }) as any);
