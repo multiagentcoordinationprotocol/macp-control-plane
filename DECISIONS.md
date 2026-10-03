@@ -190,3 +190,19 @@ resolves, so a subscribe from ordinal 0 only yields a FAILED_PRECONDITION gap. C
 snapshot but no message history. `SESSION_CANCELLED` (409) and `SESSION_EXPIRED` (400) are unchanged — a
 cancelled/expired session is not a success. `ErrorCode.SESSION_ALREADY_RESOLVED` stays in the enum but is no
 longer thrown. Reversible: restore the throw in `pollForOpenSession`.
+
+**Closed-set policy-rules validation lives in the control plane (#79 item 1).** The runtime deserializes
+rules without `deny_unknown_fields` and closed macp-runtime #167 as out of scope, so a misspelled key
+(`veto_threshhold`) registered silently. `POST /runtime/policies` now validates `rules` with ajv against the five
+vendored spec schemas (`src/policy/schemas`, spec commit `7159afe`), after the targeted weighted/supermajority/
+designated_role checks so their messages win. `"*"` is validated per top-level key (valid if any mode owns it).
+Extension modes with no vendored schema are skipped, not rejected. Cost: the schemas must be re-synced by hand
+when the spec changes them. Reversible: drop the `validateRules` call in `runtime.controller.ts`.
+
+**`last_envelope_ordinal` is written inside the event transaction (v0.7.0 deferral closed).**
+`persistRawAndCanonical` takes an optional `cursor.envelopeOrdinal` and writes it (with the batch's last seq) in
+the same transaction as the events, so a crash can no longer leave the stored resume ordinal one envelope behind.
+`StreamConsumerService` no longer does a separate `updateStreamCursor` write.
+
+**`maxSuspendMs` is surfaced in the run summary projection** from the decoded SessionStart `max_suspend_ms`
+(omitted when 0/absent). Additive, optional; no projection schema-version bump.

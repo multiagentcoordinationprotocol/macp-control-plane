@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://macp.dev/schemas/policy/quorum-rules.schema.json",
+  "title": "Quorum Mode Governance Rules",
+  "description": "JSON Schema for governance rules applied to macp.mode.quorum.v1 sessions. See RFC-MACP-0012 Section 4.2.",
+  "type": "object",
+  "properties": {
+    "threshold": {
+      "type": "object",
+      "description": "Override the required_approvals from ApprovalRequest (RFC-MACP-0012 Section 4.2). This is the approval bar and the ONLY gate in schema_version <= 3 — there is no separate participation quorum. Type 'n_of_m' uses a raw approval count; 'percentage' uses an integer percentage (1-100) of the participant count declared at SessionStart, with the effective threshold rounded UP: ceil(value * declared_participant_count / 100). The identifier 'weighted' is RESERVED: it was removed in RFC-MACP-0012 1.2.0-draft without ever having had defined semantics (no weights vocabulary, no electorate rule, no termination arithmetic) and MUST NOT be reused with a different meaning.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "n_of_m",
+            "percentage"
+          ],
+          "default": "n_of_m"
+        },
+        "value": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Threshold value: approval count for n_of_m; integer percentage 1-100 for percentage, resolved to an effective approval count of ceil(value * declared_participant_count / 100). MUST be greater than zero (RFC-MACP-0011 Section 5, rule 2; RFC-MACP-0012 Section 4.2).",
+          "$comment": "exclusiveMinimum 0: a zero approval bar is trivially satisfied, so a restrictive-looking quorum policy approves everything. Quorum-side twin of issue #98 item 2, fixed on the Decision side in RFC-MACP-0012 1.1.0-draft."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "percentage"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "maximum": 100
+              }
+            }
+          }
+        }
+      ],
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    },
+    "abstention": {
+      "type": "object",
+      "description": "How abstentions affect quorum calculation.",
+      "properties": {
+        "counts_toward_quorum": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, abstentions count toward the participation quorum but not toward approval."
+        },
+        "interpretation": {
+          "type": "string",
+          "enum": [
+            "neutral",
+            "implicit_reject",
+            "ignored"
+          ],
+          "default": "neutral",
+          "description": "How abstentions are interpreted for threshold calculation."
+        }
+      },
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    },
+    "commitment": {
+      "type": "object",
+      "properties": {
+        "authority": {
+          "type": "string",
+          "enum": [
+            "initiator_only",
+            "any_participant",
+            "designated_role"
+          ],
+          "default": "initiator_only"
+        },
+        "designated_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "Ported verbatim from decision-rules.schema.json, which has enforced this since it was written. `authority: \"designated_role\"` with no `designated_roles` declares that only designated roles may commit and then names none -- an unsatisfiable authority rule that either bricks the session or fails open depending on the runtime (issue #116). minItems 1 is part of the constraint: an empty array names no one either.",
+      "if": {
+        "properties": {
+          "commitment": {
+            "properties": {
+              "authority": {
+                "const": "designated_role"
+              }
+            },
+            "required": [
+              "authority"
+            ]
+          }
+        },
+        "required": [
+          "commitment"
+        ]
+      },
+      "then": {
+        "properties": {
+          "commitment": {
+            "required": [
+              "designated_roles"
+            ],
+            "properties": {
+              "designated_roles": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "patternProperties": {
+    "^[_$]": true
+  },
+  "additionalProperties": false
+}

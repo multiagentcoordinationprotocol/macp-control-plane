@@ -1,7 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DatabaseService } from '../db/database.service';
+import * as schema from '../db/schema';
 import { runtimeSessions } from '../db/schema';
+
+type Tx = NodePgDatabase<typeof schema>;
 
 @Injectable()
 export class RuntimeSessionRepository {
@@ -44,7 +48,7 @@ export class RuntimeSessionRepository {
     return this.findByRunId(runId);
   }
 
-  async updateStreamCursor(runId: string, cursor: number, envelopeOrdinal?: number) {
+  async updateStreamCursor(runId: string, cursor: number, envelopeOrdinal?: number, tx?: Tx) {
     // `cursor` is the CP-side canonical event seq; `envelopeOrdinal` (optional)
     // is the runtime's 1-based accepted-envelope ordinal used for stream resume
     // (T7). Written together so a single row update advances both markers.
@@ -55,7 +59,8 @@ export class RuntimeSessionRepository {
     // future caller mistakes, races between concurrent writers) structurally
     // impossible. This is a single UPDATE — no read-then-write, so no race
     // window between reading the current value and writing the new one.
-    await this.database.db
+    const db = tx ?? this.database.db;
+    await db
       .update(runtimeSessions)
       .set({
         lastStreamCursor: sql`GREATEST(COALESCE(${runtimeSessions.lastStreamCursor}, 0), ${cursor})`,

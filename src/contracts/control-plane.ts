@@ -236,6 +236,12 @@ export interface RunSummaryProjection {
   contextId?: string;
   extensionKeys?: string[];
   /**
+   * Resolved cap (ms) on cumulative suspended time before a SUSPENDED session
+   * expires (RFC-MACP-0001 §7.5), read from the decoded SessionStart payload
+   * (`max_suspend_ms`). Absent when the session start carried 0/none.
+   */
+  maxSuspendMs?: number;
+  /**
    * True when the control-plane could not resume the per-session StreamSession
    * from its last envelope ordinal because that history was compacted away
    * (runtime FAILED_PRECONDITION). Some envelope-level events between the

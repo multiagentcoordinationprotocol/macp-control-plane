@@ -24,6 +24,7 @@ describe('RunEventService', () => {
     getRunTraceContext: jest.Mock;
   };
   let redactionService: { redact: jest.Mock };
+  let runtimeSessionRepository: { updateStreamCursor: jest.Mock };
   let postCommitSideEffectFailuresTotal: { inc: jest.Mock };
   let errorSpy: jest.SpyInstance;
   let mockTx: Record<string, unknown>;
@@ -120,6 +121,11 @@ describe('RunEventService', () => {
       getRunTraceContext: jest.fn().mockReturnValue(undefined)
     };
     redactionService = { redact: jest.fn((v) => v) };
+    runtimeSessionRepository = {
+      updateStreamCursor: jest.fn(async () => {
+        callOrder.push('repo:updateStreamCursor');
+      })
+    };
 
     service = new RunEventService(
       database,
@@ -130,7 +136,8 @@ describe('RunEventService', () => {
       streamHub,
       traceService as any,
       { postCommitSideEffectFailuresTotal } as any,
-      redactionService as any
+      redactionService as any,
+      runtimeSessionRepository as any
     );
   });
 
@@ -389,6 +396,44 @@ describe('RunEventService', () => {
       expect(runRepository.allocateSequence).toHaveBeenCalled();
       expect(eventRepository.appendRaw).toHaveBeenCalled();
       expect(eventRepository.appendCanonical).toHaveBeenCalled();
+    });
+
+    it('writes the stream cursor inside the same transaction as the events (before commit)', async () => {
+      runRepository.allocateSequence.mockResolvedValue(10);
+
+      await service.persistRawAndCanonical('run-1', rawEvent, canonicalEvents, { envelopeOrdinal: 7 });
+
+      // raw=10, canonical=11,12 → cursor is the batch's last seq.
+      expect(runtimeSessionRepository.updateStreamCursor).toHaveBeenCalledWith('run-1', 12, 7, mockTx);
+      expect(callOrder.indexOf('repo:updateStreamCursor')).toBeLessThan(callOrder.indexOf('tx:committed'));
+    });
+
+    it('does not advance the cursor when the transaction rolls back', async () => {
+      projectionService.applyAndPersist.mockRejectedValueOnce(new Error('projection failed'));
+
+      await expect(
+        service.persistRawAndCanonical('run-1', rawEvent, canonicalEvents, { envelopeOrdinal: 7 })
+      ).rejects.toThrow('projection failed');
+
+      expect(runtimeSessionRepository.updateStreamCursor).not.toHaveBeenCalled();
+      expect(callOrder).toContain('tx:rolled-back');
+    });
+
+    it('rolls the events back when the in-transaction cursor write fails', async () => {
+      runtimeSessionRepository.updateStreamCursor.mockRejectedValueOnce(new Error('cursor write failed'));
+
+      await expect(
+        service.persistRawAndCanonical('run-1', rawEvent, canonicalEvents, { envelopeOrdinal: 7 })
+      ).rejects.toThrow('cursor write failed');
+
+      expect(callOrder).toContain('tx:rolled-back');
+      expect(callOrder).not.toContain('tx:committed');
+      expect(streamHub.publishEvent).not.toHaveBeenCalled();
+    });
+
+    it('skips the cursor write when no cursor is passed', async () => {
+      await service.persistRawAndCanonical('run-1', rawEvent, canonicalEvents);
+      expect(runtimeSessionRepository.updateStreamCursor).not.toHaveBeenCalled();
     });
 
     it('should preserve existing event ids or assign new ones', async () => {

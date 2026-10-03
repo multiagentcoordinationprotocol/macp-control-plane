@@ -7,6 +7,7 @@ import { MetricsService } from '../metrics/metrics.service';
 import { ProjectionService, PROJECTION_SCHEMA_VERSION } from '../projection/projection.service';
 import { EventRepository } from '../storage/event.repository';
 import { RunRepository } from '../storage/run.repository';
+import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { RedactionService } from '../telemetry/redaction.service';
 import { TraceService } from '../telemetry/trace.service';
@@ -50,7 +51,8 @@ export class RunEventService {
     private readonly streamHub: StreamHubService,
     private readonly traceService: TraceService,
     private readonly instrumentation: InstrumentationService,
-    private readonly redaction: RedactionService
+    private readonly redaction: RedactionService,
+    private readonly runtimeSessionRepository: RuntimeSessionRepository
   ) {}
 
   async emitControlPlaneEvents(
@@ -92,10 +94,17 @@ export class RunEventService {
     return events;
   }
 
+  /**
+   * `cursor.envelopeOrdinal`, when given, is written (with the highest event seq of this
+   * batch) to `runtime_sessions` in the SAME transaction as the events. A crash can then
+   * never leave the persisted resume ordinal one envelope behind the events it covers,
+   * which would re-ingest that envelope as a duplicate on restart.
+   */
   async persistRawAndCanonical(
     runId: string,
     rawEvent: RawRuntimeEvent,
-    canonicalEvents: CanonicalEvent[]
+    canonicalEvents: CanonicalEvent[],
+    cursor?: { envelopeOrdinal: number }
   ): Promise<CanonicalEvent[]> {
     const total = 1 + canonicalEvents.length;
 
@@ -124,6 +133,10 @@ export class RunEventService {
           }));
           await this.eventRepository.appendCanonical(prepared, tx);
           const proj = await this.projectionService.applyAndPersist(runId, prepared, tx);
+          if (cursor) {
+            const lastSeq = prepared.length > 0 ? prepared[prepared.length - 1].seq : startSeq;
+            await this.runtimeSessionRepository.updateStreamCursor(runId, lastSeq, cursor.envelopeOrdinal, tx);
+          }
           return { normalized: prepared, projection: proj };
         })
     );

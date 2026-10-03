@@ -602,7 +602,13 @@ export class StreamConsumerService implements OnModuleDestroy {
     }
 
     const canonical = this.normalizer.normalize(runId, raw, context);
-    const emitted = await this.eventService.persistRawAndCanonical(runId, raw, canonical);
+    // Only real envelopes advance the runtime resume ordinal. The cursor is persisted in the
+    // SAME transaction as the events, so the stored ordinal can never lag the events it covers.
+    const isEnvelope = raw.kind === 'stream-envelope' && !!raw.envelope;
+    const nextOrdinal = marker.envelopeOrdinal + (isEnvelope ? 1 : 0);
+    const emitted = await this.eventService.persistRawAndCanonical(runId, raw, canonical, {
+      envelopeOrdinal: nextOrdinal
+    });
 
     // Count accepted envelopes delivered on the per-session StreamSession — this
     // is the runtime's `after_sequence` ordinal used for stream resume (T7).
@@ -611,10 +617,9 @@ export class StreamConsumerService implements OnModuleDestroy {
     // Incremented only after persistRawAndCanonical resolves — a persist
     // failure throws above and this line never runs, so the in-memory marker
     // (and the in-process resubscribe it feeds) stays at the pre-failure
-    // ordinal. This fixes drift in the live in-process reconnect path only;
-    // it has no effect on the persisted `last_envelope_ordinal` column, which
-    // already only advances after a successful persist via
-    // updateStreamCursor below.
+    // ordinal. The persisted `last_envelope_ordinal` column is written inside
+    // persistRawAndCanonical's transaction (the `cursor` argument above), so it
+    // commits or rolls back atomically with the events it counts.
     //
     // Updated contract (Phase 5, runtime 0.8.0 absorption): `persistRawAndCanonical`
     // now only throws for a genuine *pre-commit* (transaction) failure — the events
@@ -626,18 +631,11 @@ export class StreamConsumerService implements OnModuleDestroy {
     // advances with them. The old duplication-over-loss trade-off this comment used to
     // describe no longer applies — there is nothing left to duplicate, since a
     // post-commit failure is now silent (logged) rather than a thrown rejection.
-    if (raw.kind === 'stream-envelope' && raw.envelope) {
-      marker.envelopeOrdinal += 1;
-    }
+    marker.envelopeOrdinal = nextOrdinal;
 
     for (const event of emitted) {
       if (event.seq <= marker.lastProcessedSeq) continue;
       marker.lastProcessedSeq = event.seq;
-    }
-
-    // Persist stream cursor + envelope ordinal for lossless reconnect / resume.
-    if (marker.lastProcessedSeq > 0) {
-      await this.runtimeSessionRepository.updateStreamCursor(runId, marker.lastProcessedSeq, marker.envelopeOrdinal);
     }
 
     const sessionStateChange = emitted.find((event) => event.type === 'session.state.changed');

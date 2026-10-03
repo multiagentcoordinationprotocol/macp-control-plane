@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://macp.dev/schemas/policy/proposal-rules.schema.json",
+  "title": "Proposal Mode Governance Rules",
+  "description": "JSON Schema for governance rules applied to macp.mode.proposal.v1 sessions. See RFC-MACP-0012 Section 4.3.",
+  "type": "object",
+  "properties": {
+    "acceptance": {
+      "type": "object",
+      "properties": {
+        "criterion": {
+          "type": "string",
+          "enum": [
+            "all_parties",
+            "counterparty",
+            "initiator"
+          ],
+          "default": "all_parties",
+          "description": "Who must accept for a proposal to be considered accepted."
+        }
+      },
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    },
+    "counter_proposal": {
+      "type": "object",
+      "properties": {
+        "max_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Maximum negotiation rounds. 0 means unlimited.",
+          "$comment": "The bound is inclusive on purpose and MUST NOT be tightened to exclusiveMinimum. 0 is the documented default and means unlimited -- a disable sentinel, not a trivially-satisfied bar -- so rejecting it would reject this field's own default. Audited under issue #116 piece 2; the analogy with the quorum threshold floor of issue #110 does not hold, because that value is a bar and this one is a sentinel."
+        }
+      },
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    },
+    "rejection": {
+      "type": "object",
+      "properties": {
+        "terminal_on_any_reject": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, any rejection terminates the session."
+        }
+      },
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    },
+    "commitment": {
+      "type": "object",
+      "properties": {
+        "authority": {
+          "type": "string",
+          "enum": [
+            "initiator_only",
+            "any_participant",
+            "designated_role"
+          ],
+          "default": "initiator_only"
+        },
+        "designated_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "Ported verbatim from decision-rules.schema.json, which has enforced this since it was written. `authority: \"designated_role\"` with no `designated_roles` declares that only designated roles may commit and then names none -- an unsatisfiable authority rule that either bricks the session or fails open depending on the runtime (issue #116). minItems 1 is part of the constraint: an empty array names no one either.",
+      "if": {
+        "properties": {
+          "commitment": {
+            "properties": {
+              "authority": {
+                "const": "designated_role"
+              }
+            },
+            "required": [
+              "authority"
+            ]
+          }
+        },
+        "required": [
+          "commitment"
+        ]
+      },
+      "then": {
+        "properties": {
+          "commitment": {
+            "required": [
+              "designated_roles"
+            ],
+            "properties": {
+              "designated_roles": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "patternProperties": {
+    "^[_$]": true
+  },
+  "additionalProperties": false
+}

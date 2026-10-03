@@ -1,0 +1,298 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://macp.dev/schemas/policy/decision-rules.schema.json",
+  "title": "Decision Mode Governance Rules",
+  "description": "JSON Schema for governance rules applied to macp.mode.decision.v1 sessions. See RFC-MACP-0012 Section 4.1.",
+  "type": "object",
+  "properties": {
+    "voting": {
+      "type": "object",
+      "description": "Voting algorithm and quorum requirements.",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": [
+            "none",
+            "majority",
+            "supermajority",
+            "unanimous",
+            "weighted",
+            "plurality"
+          ],
+          "default": "none",
+          "description": "Voting algorithm. 'none' means no voting constraint is enforced."
+        },
+        "threshold": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "default": 0.5,
+          "description": "Fraction of the decisive votes required for approval. Used by the 'majority', 'supermajority', and 'weighted' algorithms. Must be greater than 0; at least 0.5 for 'majority'; greater than 0.5 for 'supermajority'. Abstentions are excluded from the denominator, and under 'weighted' so are weight-0 votes. See RFC-MACP-0012 Section 4.1.",
+          "$comment": "exclusiveMinimum 0: threshold 0 made an all-REJECT round return Passed under both majority and weighted (issue #98, item 2)."
+        },
+        "quorum": {
+          "type": "object",
+          "description": "Minimum participation bar. Applied only when commitment.require_vote_quorum is true; on its own this object gates nothing. See RFC-MACP-0012 Section 4.1.",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "count",
+                "percentage"
+              ],
+              "default": "count"
+            },
+            "value": {
+              "type": "number",
+              "minimum": 0,
+              "default": 0,
+              "description": "Minimum number of participants that must vote ('count'), or the minimum share of declared participants that must vote as a percentage in 0-100 ('percentage').",
+              "$comment": "The bound is inclusive on purpose and MUST NOT be tightened to exclusiveMinimum. 0 is the documented default and means no participation floor, which is meaningful on its own. Audited under issue #116 piece 2. One combination this bound does NOT cover, and it is version-dependent: at schema_version 3 and above, value 0 together with commitment.require_vote_quorum true is a participation gate satisfied by zero voters. At schema_version 1 and 2 the same shape is NOT degenerate -- require_vote_quorum there also decides whether an empty tally blocks a positive commitment, so RFC-MACP-0012 Section 4.1 REQUIRES it of any legacy policy that intends its algorithm to be binding, and examples/discovery/policy_descriptor_decline.json is a legitimate on-disk instance. Resolved under issue #122 as a defined EQUIVALENCE, not a rejection: at schema_version 3 and above an effective floor of zero -- quorum absent, or value 0 under either type -- makes require_vote_quorum inert, equivalent to false, per RFC-MACP-0012 Section 4.1, Vacuous participation floor. A runtime MUST evaluate it that way and MUST NOT reject the descriptor for it. No schema keyword enforces this and none can: a rules schema cannot see schema_version, because rules objects are validated bare while schema_version is a field of the descriptor. It is also not the fail-open family of issue #98 -- every member of that family changed an outcome relative to a legal alternative spelling, and this combination changes none."
+            }
+          },
+          "patternProperties": {
+            "^[_$]": true
+          },
+          "additionalProperties": false
+        },
+        "weights": {
+          "type": "object",
+          "description": "Per-participant vote weights; keys are participant IDs. Used only with the 'weighted' algorithm. This map is the weighted electorate: a declared participant absent from it has weight 0 (observers are expressed by omission), and a weight-0 vote is NON-DECISIVE — it contributes to neither side of the ratio, does not enter the decisive tally, and does not satisfy the decline guard of RFC-MACP-0007 Section 6.2, though it still counts as a vote cast for the voting.quorum participation floor. Values must be greater than 0 and the map must be non-empty. Those two constraints are enforced UNCONDITIONALLY, at every algorithm, not only under 'weighted': a weights map is meaningless elsewhere, so an empty or zero-valued one is a policy-authoring error wherever it appears. This electorate rule is normative for EVERY schema version, not only 3. See RFC-MACP-0012 Section 4.1.",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "$comment": "exclusiveMinimum 0 + minProperties 1: an all-zero or empty weights map yielded 'no votes' on a COMPLETE ballot set (issue #98, item 3). A legitimately zero-weighted observer is expressed by omission from this map, not by an explicit 0, so nothing is lost."
+        }
+      },
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    },
+    "objection_handling": {
+      "type": "object",
+      "description": "How blocking objections affect commitment eligibility.",
+      "properties": {
+        "critical_severity_vetoes": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, objections with severity 'critical' prevent commitment."
+        },
+        "veto_threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1,
+          "description": "Number of blocking objections required to veto commitment."
+        },
+        "critical_objection_action": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "finalize_decline",
+            "hold"
+          ],
+          "default": "deny",
+          "description": "Action when a critical objection would block commitment: deny (reject the commitment), finalize_decline (resolve the session as a negative outcome), or hold (reject the commitment as deny does, annotated as an escalation). deny and hold are observationally identical — both reject with POLICY_DENIED and leave the session OPEN; hold is an operator-facing annotation, not a distinct protocol outcome. See RFC-MACP-0012 §4.1."
+        }
+      },
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    },
+    "evaluation": {
+      "type": "object",
+      "description": "Constraints on evaluations before voting or commitment.",
+      "properties": {
+        "minimum_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0,
+          "description": "Minimum confidence level for evaluations to be considered valid.",
+          "$comment": "The bound is inclusive on purpose and MUST NOT be tightened to exclusiveMinimum. 0 is the documented default and means no confidence floor -- every evaluation qualifies -- so rejecting it would reject this field's own default. Audited under issue #116 piece 2."
+        },
+        "required_before_voting": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, at least one evaluation must exist before votes are counted."
+        }
+      },
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    },
+    "commitment": {
+      "type": "object",
+      "description": "Who can commit and under what conditions.",
+      "properties": {
+        "authority": {
+          "type": "string",
+          "enum": [
+            "initiator_only",
+            "any_participant",
+            "designated_role"
+          ],
+          "default": "initiator_only",
+          "description": "Who is authorized to emit a Commitment."
+        },
+        "designated_roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Participant IDs or roles authorized to commit. Used only with 'designated_role' authority."
+        },
+        "require_vote_quorum": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, a VOTE-AUTHORIZED commitment is only allowed after the vote quorum is met. This does not gate an objection-authorized decline, which derives its authority from a recorded critical Objection rather than from the voting result (RFC-MACP-0007 Section 6.2). Under schema_version 1 and 2 this flag has a second, independent role: it also decides whether an empty tally blocks a POSITIVE commitment, which is why RFC-MACP-0012 Section 4.1 requires it of any legacy policy intending a binding algorithm. Under schema_version 3 and above that second role is gone and the participation floor is all that remains, so setting this true over an effective floor of zero gates nothing and is equivalent to false (RFC-MACP-0012 Section 4.1, Vacuous participation floor)."
+        },
+        "allow_decline_over_approval": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, a negative commitment (outcome_positive=false) is allowed even when the vote passed."
+        }
+      },
+      "patternProperties": {
+        "^[_$]": true
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "voting": {
+            "properties": {
+              "algorithm": {
+                "const": "weighted"
+              }
+            },
+            "required": [
+              "algorithm"
+            ]
+          }
+        },
+        "required": [
+          "voting"
+        ]
+      },
+      "then": {
+        "properties": {
+          "voting": {
+            "required": [
+              "weights"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "voting": {
+            "properties": {
+              "algorithm": {
+                "const": "supermajority"
+              }
+            },
+            "required": [
+              "algorithm"
+            ]
+          }
+        },
+        "required": [
+          "voting"
+        ]
+      },
+      "then": {
+        "properties": {
+          "voting": {
+            "required": [
+              "threshold"
+            ],
+            "properties": {
+              "threshold": {
+                "exclusiveMinimum": 0.5
+              }
+            }
+          }
+        }
+      },
+      "$comment": "'supermajority' REQUIRES threshold, deliberately asymmetric with the majority arm below, which constrains the value without requiring the key. Without 'required' this arm was self-contradicting: {\"algorithm\": \"supermajority\"} validated, and the threshold subschema's own default of 0.5 then supplied a value this very arm declares illegal -- a supermajority that is a bare majority wearing the name (issue #101). Safe to require: all five supermajority rule blocks on disk set threshold explicitly."
+    },
+    {
+      "$comment": "'majority' means at least half: inclusive minimum 0.5, deliberately asymmetric with the supermajority arm's exclusiveMinimum. RFC-MACP-0012 Section 4.1 pins the comparison as inclusive so an even split approves, and the reserved policy.std.majority profile sets threshold exactly 0.5 — exclusiveMinimum here would invalidate a profile Section 2.2 pins byte-identical on every runtime. Constrains the value only; adding 'required' would reject the four existing majority rule blocks that omit threshold entirely.",
+      "if": {
+        "properties": {
+          "voting": {
+            "properties": {
+              "algorithm": {
+                "const": "majority"
+              }
+            },
+            "required": [
+              "algorithm"
+            ]
+          }
+        },
+        "required": [
+          "voting"
+        ]
+      },
+      "then": {
+        "properties": {
+          "voting": {
+            "properties": {
+              "threshold": {
+                "minimum": 0.5
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "commitment": {
+            "properties": {
+              "authority": {
+                "const": "designated_role"
+              }
+            },
+            "required": [
+              "authority"
+            ]
+          }
+        },
+        "required": [
+          "commitment"
+        ]
+      },
+      "then": {
+        "properties": {
+          "commitment": {
+            "required": [
+              "designated_roles"
+            ],
+            "properties": {
+              "designated_roles": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "patternProperties": {
+    "^[_$]": true
+  },
+  "additionalProperties": false
+}

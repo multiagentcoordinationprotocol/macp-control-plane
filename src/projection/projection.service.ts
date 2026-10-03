@@ -287,6 +287,8 @@ export class ProjectionService {
           // (start → proposal → decision → outcome) on top of the agent layer.
           this.upsertNode(next, { id: '__start', kind: 'start', status: 'completed' });
           if (messageType === 'SessionStart') {
+            const maxSuspendMs = Number(decoded.maxSuspendMs ?? decoded.max_suspend_ms);
+            if (Number.isFinite(maxSuspendMs) && maxSuspendMs > 0) next.run.maxSuspendMs = maxSuspendMs;
             this.upsertEdge(next, '__start', sender, 'session.bound', event.ts);
             recipients.forEach((r) => this.upsertEdge(next, sender, r, 'fanout', event.ts));
           } else if (messageType === 'Proposal') {

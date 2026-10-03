@@ -112,6 +112,14 @@ describe('RuntimeSessionRepository', () => {
       expect(ordinalSql.text).toMatch(/GREATEST\(.*last_envelope_ordinal.*,\s*\?\)/);
     });
 
+    it('uses the supplied transaction handle instead of the pool when given one', async () => {
+      const txUpdate = makeMockDb();
+      await repo.updateStreamCursor('run-1', 5, 2, txUpdate as any);
+
+      expect(txUpdate.update).toHaveBeenCalledTimes(1);
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
     it('scopes the update to the given runId', async () => {
       await repo.updateStreamCursor('run-42', 1, 1);
       expect(mockDb._update.where).toHaveBeenCalled();

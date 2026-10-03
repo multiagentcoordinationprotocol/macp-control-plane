@@ -123,3 +123,47 @@ export function taskFailureScript(): RuntimeScript {
     ],
   };
 }
+
+/**
+ * Task mode allows an external orchestrator: the session initiator is NOT in the
+ * `participants` pool (macp-runtime v0.5.0). The control plane does no initiator
+ * membership validation, so the orchestrator must simply appear as another
+ * participant in the projection.
+ */
+export function taskOrchestratorRequest(overrides?: Partial<RunDescriptor>): RunDescriptor {
+  const base = taskModeRequest();
+  return {
+    ...base,
+    session: { ...base.session, participants: [{ id: 'worker' }] },
+    execution: { tags: ['integration-test', 'task-mode', 'external-orchestrator'] },
+    ...overrides,
+  };
+}
+
+/** TaskRequest from an orchestrator outside the participant pool → worker accepts and completes. */
+export function taskOrchestratorScript(): RuntimeScript {
+  return {
+    supportedModes: ['macp.mode.task.v1'],
+    initiator: 'orchestrator',
+    events: [
+      {
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.task.v1', 'TaskRequest', 'orchestrator', {
+          taskId: 'task-orch-1',
+          description: 'Dispatched by an external orchestrator',
+        }),
+      },
+      {
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.task.v1', 'TaskAccept', 'worker', { taskId: 'task-orch-1' }),
+      },
+      {
+        delayMs: 5,
+        event: makeStreamEnvelope('macp.mode.task.v1', 'TaskComplete', 'worker', {
+          taskId: 'task-orch-1',
+          output: { result: 'success' },
+        }),
+      },
+    ],
+  };
+}
