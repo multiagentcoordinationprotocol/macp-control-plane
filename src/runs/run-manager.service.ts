@@ -209,7 +209,12 @@ export class RunManagerService {
     return run;
   }
 
-  async markRunning(runId: string, runtimeSessionId: string) {
+  /**
+   * `sessionState` is the runtime state observed when the run attaches. It is
+   * OPEN for a live session; an already-RESOLVED session (finished before the
+   * observer attached) must not be reported as OPEN.
+   */
+  async markRunning(runId: string, runtimeSessionId: string, sessionState = 'SESSION_STATE_OPEN') {
     this.instrumentation.runStateTotal.inc({ status: 'running' });
     const run = await this.runRepository.markRunning(runId, runtimeSessionId);
     await this.runEventService.emitControlPlaneEvents(runId, [
@@ -221,7 +226,7 @@ export class RunManagerService {
         trace: run.traceId ? { traceId: run.traceId } : undefined,
         data: {
           sessionId: runtimeSessionId,
-          state: 'SESSION_STATE_OPEN'
+          state: sessionState
         }
       }
     ]);

@@ -724,18 +724,49 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       );
     });
 
-    it.each([
-      ['SESSION_STATE_RESOLVED', ErrorCode.SESSION_ALREADY_RESOLVED],
-      ['SESSION_STATE_CANCELLED', ErrorCode.SESSION_CANCELLED]
-    ])('fails fast with the specific code when the session is already %s', async (state, errorCode) => {
-      mockProvider.getSession.mockResolvedValue({ sessionId: 'sess-term', state, mode: 'decision' });
+    it('fails fast with SESSION_CANCELLED when the session is already cancelled', async () => {
+      mockProvider.getSession.mockResolvedValue({
+        sessionId: 'sess-term',
+        state: 'SESSION_STATE_CANCELLED',
+        mode: 'decision'
+      });
       mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-term' }));
 
       await service.launch(makeRunDescriptor());
       await new Promise((r) => setTimeout(r, 100));
 
-      expect(mockRunManager.markFailed).toHaveBeenCalledWith('run-term', expect.objectContaining({ errorCode }));
+      expect(mockRunManager.markFailed).toHaveBeenCalledWith(
+        'run-term',
+        expect.objectContaining({ errorCode: ErrorCode.SESSION_CANCELLED })
+      );
       expect(mockProvider.getSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('binds an already-RESOLVED session without subscribing and starts the consumer poll-only (#100)', async () => {
+      mockProvider.getSession.mockResolvedValue({
+        sessionId: 'sess-done',
+        state: 'SESSION_STATE_RESOLVED',
+        mode: 'decision',
+        initiator: 'agent-1'
+      });
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-done' }));
+
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(mockProvider.getSession).toHaveBeenCalledTimes(1);
+      expect(mockRunManager.markFailed).not.toHaveBeenCalled();
+      expect(mockRunManager.bindSession).toHaveBeenCalledWith(
+        'run-done',
+        expect.anything(),
+        expect.objectContaining({ ack: { sessionState: 'SESSION_STATE_RESOLVED' } }),
+        expect.anything()
+      );
+      expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
+      expect(mockRunManager.markRunning).toHaveBeenCalledWith('run-done', expect.any(String), 'SESSION_STATE_RESOLVED');
+      expect(mockStreamConsumer.start).toHaveBeenCalledWith(
+        expect.objectContaining({ pollOnly: true, sessionHandle: undefined })
+      );
     });
 
     it('stops polling without failing the run when shut down mid-poll (run-recovery resumes it)', async () => {
