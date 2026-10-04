@@ -206,3 +206,30 @@ the same transaction as the events, so a crash can no longer leave the stored re
 
 **`maxSuspendMs` is surfaced in the run summary projection** from the decoded SessionStart `max_suspend_ms`
 (omitted when 0/absent). Additive, optional; no projection schema-version bump.
+
+---
+
+# DECISIONS — reconcile of remaining UNCONFIRMED entries (2026-10-04)
+
+15 entries were still marked `UNCONFIRMED` in `ASSUMPTIONS.md`; 14 had already been reasoned through in the
+v0.7.0 pass above but never had their status lines updated. Four fresh Opus agents re-checked each against
+current `main` (decided by Opus; none is a code one-way door, so none went to Fable or required the user).
+
+**Result: 14 CONFIRMED · 1 DEFERRED · 1 small fix applied.** Superseded by later code: P3 post-commit
+duplication (now non-blocking side effects) and P4 cursor-outside-txn (PR #104). Fully fixed since logged:
+P5 follow-ups 1-3 (#82), P6 `canonical` backfill (#77).
+
+- **P1 docker-mode (changed):** the v0.7.0 "moot" rationale lapsed (#73/#74 closed). The pagination spec now
+  uses `describeWithPreSeededRuntime`, which skips (with a warning) under `INTEGRATION_RUNTIME=docker` and still
+  treats every other non-mock value as real. Reversible: one gated spec.
+- **P2 page size 200:** kept; the 16 MiB receive limit now exists, but a 1000-participant session can make a
+  1000-item page exceed it (estimate, not measured), so 200 remains worst-case headroom.
+- **P4 legacy ordinal-0 rows:** confirmed, with the data caveat stated plainly: runs that re-ingested at the P4
+  deploy keep duplicate rows/inflated metrics permanently. The window is closed and cannot recur.
+- **Deferred — P5 per-spec auth under a live runtime:** settles with the decision on whether the live suite
+  becomes a required CI check.
+- **Open observation (not an assumption entry):** if the persist transaction itself fails while the consumer is
+  poll-only (`STREAM_RESUME_ENABLED=false` or retries exhausted), that envelope is not redelivered.
+- **Minor follow-ups noted, not done:** the `stream-consumer.service.ts` docstring (~:318-322) saying a
+  `PolicyDenied` frame "can never reach" the inline detector is misleading; the `app-config` comment estimating
+  ~1-2 KB/session holds only for typical sessions.

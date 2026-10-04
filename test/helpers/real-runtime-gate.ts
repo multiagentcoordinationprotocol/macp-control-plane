@@ -36,6 +36,23 @@ export const isRealRuntime = (process.env.INTEGRATION_RUNTIME ?? 'mock').toLower
 export const describeWithRealRuntime: jest.Describe = isRealRuntime ? describe : describe.skip;
 
 /**
+ * `describe` for specs that need a runtime an operator has pre-seeded (e.g. >100 live sessions).
+ * The compose runtime (`INTEGRATION_RUNTIME=docker`) starts empty, so the spec would fail there by
+ * construction; skip it explicitly (with a warning) instead of going red on a manual docker dispatch.
+ * Still "not mock" for every other value, so a case mismatch like `REMOTE` never silently skips.
+ */
+const preSeededSkipReason =
+  (process.env.INTEGRATION_RUNTIME ?? '').toLowerCase() === 'docker'
+    ? 'INTEGRATION_RUNTIME=docker starts an empty runtime; this spec needs a pre-seeded one (use remote)'
+    : undefined;
+if (isRealRuntime && preSeededSkipReason) {
+  // eslint-disable-next-line no-console
+  console.warn(`[real-runtime-gate] pre-seeded-runtime specs skipped: ${preSeededSkipReason}`);
+}
+export const describeWithPreSeededRuntime: jest.Describe =
+  isRealRuntime && !preSeededSkipReason ? describe : describe.skip;
+
+/**
  * Why a spec that needs a hand-managed LOCAL runtime (configured auth-tokens
  * file + a binary the spec can SIGINT and relaunch) cannot run here, or
  * `undefined` when it can. The compose runtime (`INTEGRATION_RUNTIME=docker`)

@@ -16,7 +16,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
 - **Blast radius if wrong:** The multi-page drain silently loses live coverage as seeded sessions
   expire and are evicted; the spec becomes red-by-default for anyone who did not seed. Cheap to
   reverse (it is one gated spec).
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — no change. Gate polarity matches test-app.ts; spec fails loudly on a small store. Spec header version text refreshed.
 
 ## P1 — `workflow_dispatch` with `runtime_mode: docker` will now fail
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 1, AC5)
@@ -30,7 +30,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   verifier caught.
 - **Blast radius if wrong:** One manual workflow path goes red until either the spec is excluded
   from `docker` mode or that job seeds sessions. Automatic CI is unaffected.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — with a fix. The 'moot' premise (DECISIONS v0.7.0 #2) lapsed once #73/#74 closed: docker mode now boots an empty 0.8.6 runtime, so the spec would go red. Now skipped explicitly with a warning via `describeWithPreSeededRuntime` (test/helpers/real-runtime-gate.ts).
 
 ## P1 — host Docker/Postgres left unrepaired
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 1)
@@ -42,7 +42,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   the user may need, without being asked.
 - **Blast radius if wrong:** The rest of the integration suite (21 specs) remains unrunnable locally,
   so later phases' integration coverage may go unverified on this machine and must be checked in CI.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — overtaken. Postgres probe now has a 5s timeout (#72) and failed setup cleans up its containers; CI provides Postgres on 5433.
 
 ## P1 — live spec runs bypass the integration globalSetup
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 1)
@@ -60,7 +60,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   would silently skip setup it actually needs. Guard: the spec must stay DB-free; if that
   changes, this bypass must be removed. `npm run test:integration` on a healthy host runs
   it normally with no bypass.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — operator-only practice; no bypass config is committed. Guard stands: if the spec ever needs the DB, stop bypassing globalSetup.
 
 ## P2 — `listSessions()` returns a result object instead of a bare array
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 2)
@@ -105,7 +105,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
 - **Blast radius if wrong:** If 200 still overflows, the halving ladder (below) recovers at
   the cost of extra round-trips; if 200 is needlessly conservative, the only cost is more
   pages.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — kept as worst-case headroom. The deferred root-cause fix has shipped (explicit `grpc.max_receive_message_length`, default 16 MiB), so the 4 MB premise is obsolete; 200 still keeps a worst-case page (many-participant sessions) under 16 MiB.
 
 ## P3 — post-commit metrics/publish failure now duplicates events instead of losing them
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 3, divergence note 4)
@@ -159,7 +159,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   (`:230,239`) instead of resubscribing — the poll path re-fetches a `getSession` snapshot, not the
   missed envelope, so in that case the envelope is **not** redelivered and the pre-P3 loss outcome
   can still occur.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — SUPERSEDED. Post-commit side effects are now caught and logged individually (`runPostCommitSideEffects`), so a failure no longer duplicates; the cost is an uncounted batch, tracked by `macp_post_commit_side_effect_failures_total`.
 
 ## P2 — the RESOURCE_EXHAUSTED halving ladder is capped at 2 retries
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 2)
@@ -177,7 +177,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
 - **Blast radius if wrong:** An operator who sets `RUNTIME_CIRCUIT_BREAKER_THRESHOLD` below 3
   can still trip the breaker with this ladder. That is judged **correct** — 3 consecutive
   genuine runtime errors *should* open a threshold-2 breaker — and is documented in-code.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — no change. MAX_PAGE_SIZE_HALVINGS=2 stays below the default breaker threshold of 5.
 
 ## P4 — monotonic (GREATEST) stream-cursor persist instead of a blind set
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 4)
@@ -199,7 +199,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   *silent* failure direction (a too-high resume returns `Ok(empty)` from the runtime with no gap
   event and live envelopes still flowing). Mitigation: the values are monotonic by construction, and
   `recoverRun` already treats the cursor as a floor via `Math.max`.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — no change; now runs inside the event transaction.
 
 ## P4 — deliberate bias toward duplicate events over silent loss
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 4)
@@ -216,7 +216,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   ordinal path is what the runtime's B2 contract was designed for.
 - **Blast radius if wrong:** Duplicate canonical/raw rows inflate per-run aggregates. Not cleanly
   reversible per-run.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — principle stands (a too-high resume has no symptom); the P3 justification is historical.
 
 ## P4 — cursor write remains outside the persist transaction
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 4)
@@ -230,7 +230,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
 - **Blast radius if wrong:** One duplicate envelope per crash in a narrow window. **Consequence for
   P5:** its exactly-once assertion must target a *clean* stream break; a `kill -9` mid-persist can
   legitimately produce one duplicate and the live test must not be written to flake on that.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — SUPERSEDED by PR #104: the cursor is written in the event transaction; the one-duplicate crash window is gone.
 
 ## P4 — legacy `last_envelope_ordinal = 0` rows are seeded as-is, not reconstructed
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 4)
@@ -258,7 +258,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   `run_metrics` and `timeline.totalEvents` for the affected runs. Lands on the detectable side of
   the deliberate duplicate-over-loss bias. Steady state is unaffected — the `GREATEST` floor plus
   seeding means the clobber cannot recur after this deploys.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — no change. Exposure window closed at the P4 deploy; duplicates it caused are permanent per run (not code-reversible). A backfill stays blocked on the runtime exposing an ordinal.
 
 ## P5 — inline compacted-history detection matches on message text
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 4/5)
@@ -278,7 +278,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   `test/integration/stream-resume-live.integration.spec.ts` asserts the end-to-end behavior against
   a real runtime, so it fails loudly if the contract drifts — but only when run against a live
   runtime, which CI does not do (CI pins `INTEGRATION_RUNTIME=mock`).
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — choice stands; regex tightened to `/history before ordinal \d+ was compacted/i` (#82). Residual text-match fragility is tracked as an upstream ask for a machine-readable code.
 
 ## P5 — full integration suite under a live runtime needs per-spec auth
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 5)
@@ -293,7 +293,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   belongs with a decision about whether the live suite should run in CI at all, not with this phase.
 - **Blast radius if wrong:** Anyone running the whole suite against a live auth-configured runtime
   sees 8 confusing failures. Documented here and in the live spec's header.
-- **Status:** UNCONFIRMED
+- **Status:** DEFERRED (2026-10-04) — still UNCONFIRMED by design. CI pins mock; settles when we decide whether `INTEGRATION_RUNTIME=remote` becomes a required CI check.
 
 ## P5 — follow-ups the ship gate raised, deliberately deferred to P6/P7
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phases 4/5)
@@ -324,7 +324,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
 - **Blast radius if wrong:** (1) lost observability on an opt-out path; (2) a false `historyGap` and
   an unnecessary poll degrade for a policy-denied run; (3) `policy.denied` projection events never
   materialize from inline frames — error visibility only, no data loss.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — RESOLVED. Items 1-3 fixed in #82 (gap check before the resume flag; tightened regex; inline `PolicyDenied` matching); item 4 fixed in #64.
 
 ## P6 — `supersedes.canonical` is a required field, not optional
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phase 6)
@@ -350,7 +350,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
 - **Blast radius if wrong:** A future UI consumer mis-badges pre-P6 supersedes refs until those runs
   produce a new `decision.finalized`. No data loss, no behavioral effect; reversible by making the
   field optional or rebuilding projections.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-10-04) — read-time `deriveMissingCanonical` shipped (#77); the UI consumer now exists and gates on `=== false`, safe against undefined.
 
 ## P2 (v0.8.0) — inline `policy.denied`'s `errorCode` carries unbounded operator text, not the ack path's fixed constant
 - **Plan:** `plans/absorb-runtime-v0.8.0.md` (Phase 2)
