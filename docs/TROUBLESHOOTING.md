@@ -118,6 +118,24 @@ repair or replay a rejected send.
 
 **When to investigate:** only if you see this repeatedly for the *same* runId — that would indicate a loop somewhere retrying the bind. A single occurrence per run is normal.
 
+## Run completes instantly with no message history
+
+**Symptom:** A run attached to an already-`RESOLVED` session goes straight to `completed`, with a decision snapshot but no per-message timeline.
+
+**Explanation:** Not an error. The runtime compacts a session's log on resolve, so the control plane binds, marks the run `running`, skips `subscribeSession`, and lets the poll-only consumer emit the snapshot (see [ARCHITECTURE § Request Flow](./ARCHITECTURE.md#request-flow-observer-mode--direct-agent-auth-2026-04-15)). `CANCELLED` sessions are still rejected with 409 and `EXPIRED` with 400. Session lifecycle semantics: [macp-runtime/docs/architecture.md](../../macp-runtime/docs/architecture.md).
+
+## `session.stream.gap` event / `historyGap` on a projection
+
+**Symptom:** A run has a `session.stream.gap` canonical event and its projection is flagged `historyGap`.
+
+**Explanation:** The resume ordinal was compacted away (`FAILED_PRECONDITION`). The consumer deliberately degrades to poll-only instead of resubscribing from 0, because the control plane has no message-id dedup. Track via `macp_stream_resume_gap_total`; details in [ARCHITECTURE § Stream Resume](./ARCHITECTURE.md#stream-resume--cross-process-recovery-runtime-v050-t7).
+
+## `macp_post_commit_side_effect_failures_total` is non-zero
+
+**Symptom:** The counter increments with a `step` label (`metrics`, `publish_event`, `publish_snapshot`, `span_events`).
+
+**Explanation:** The events are already committed; only the side effect failed (e.g. Redis StreamHub down). The failure is logged and swallowed on purpose. Investigate the named step's dependency; SSE clients can resume with `afterSeq`.
+
 ## Legacy Write Endpoints Return 410 Gone
 
 **Symptom:** `POST /runs/:id/messages`, `/signal`, or `/context` returns `410 Gone` with `errorCode: ENDPOINT_REMOVED`.
