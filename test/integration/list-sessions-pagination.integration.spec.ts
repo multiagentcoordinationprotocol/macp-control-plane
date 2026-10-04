@@ -1,4 +1,4 @@
-import { describeWithRealRuntime } from '../helpers/real-runtime-gate';
+import { describeWithPreSeededRuntime } from '../helpers/real-runtime-gate';
 import { RustRuntimeProvider } from '../../src/runtime/rust-runtime.provider';
 
 /**
@@ -35,7 +35,7 @@ import { RustRuntimeProvider } from '../../src/runtime/rust-runtime.provider';
  * real, typed, production `RustRuntimeProvider` — that is the whole point of
  * this test.
  *
- * Requires a real macp-runtime 0.7.0 reachable at RUNTIME_ADDRESS with more
+ * Requires a real macp-runtime (>= 0.7.0) reachable at RUNTIME_ADDRESS with more
  * live (non-terminal) sessions than fit in one `RUNTIME_LIST_SESSIONS_PAGE_SIZE`
  * page. The runtime's persisted `.macp-data` store is NOT sufficient on its
  * own — its sessions are terminal and get evicted from memory at startup
@@ -66,7 +66,7 @@ const PARSED_PAGE_SIZE = RAW_PAGE_SIZE ? Number(RAW_PAGE_SIZE) : NaN;
 const CONFIGURED_PAGE_SIZE =
   Number.isFinite(PARSED_PAGE_SIZE) && PARSED_PAGE_SIZE > 0 ? PARSED_PAGE_SIZE : 200;
 
-describeWithRealRuntime('ListSessions pagination (live runtime)', () => {
+describeWithPreSeededRuntime('ListSessions pagination (live runtime)', () => {
   let provider: RustRuntimeProvider;
 
   beforeAll(async () => {
