@@ -32,7 +32,7 @@ For the agent-side bootstrap and how `sessionId` flows from `POST /runs` to the 
 
 ### Runtime v0.8.1–v0.8.6 absorption
 
-No proto or wire change (proto package stays `^0.1.10`). Lifecycle entries (`SessionSuspend`/`SessionResume`/`SessionCancel`/TTL expiry) are runtime-internal: they consume no ordinal and are never delivered on `StreamSession` (RFC-MACP-0006 §3.2), so suspend/resume reaches the control plane only through `WatchSessions` and `GetSession` state. `SessionResumePayload.banked_ms` now carries the remaining TTL at suspend; the control plane does not read it. `ext.multi_round.v1` `Contribute` decoding mirrors the runtime's semantics_rev 3 tie-break (proto trusted only if the payload re-encodes byte-identically, otherwise legacy JSON). `POST /runtime/policies` now defaults an omitted `schemaVersion` to 3.
+No proto or wire change (proto package stays `^0.1.10`). Lifecycle entries (`SessionSuspend`/`SessionResume`/`SessionCancel`/TTL expiry) are runtime-internal: they consume no ordinal and are never delivered on `StreamSession` (RFC-MACP-0006 §3.2), so suspend/resume reaches the control plane only through `WatchSessions` and `GetSession` state. `SessionResumePayload.banked_ms` now carries the remaining TTL at suspend; the control plane does not read it. `ext.multi_round.v1` `Contribute` decoding mirrors the runtime's semantics_rev 3 tie-break (proto trusted only if the payload re-encodes byte-identically, otherwise legacy JSON). `POST /runtime/policies` now defaults an omitted `schemaVersion` to 3. `RunExecutorService` logs a one-time warning per runtime name/version when the runtime reports a version outside the tested range (`TESTED_RUNTIME_RANGE` in `src/runtime/runtime-version.ts`, currently `>=0.8.0 <0.9.0`) or none parseable; it never blocks startup.
 
 ### Commitment `supersedes.commitment_hash` must be canonical (runtime v0.7.0 / RFC-MACP-0013 §9)
 
@@ -114,32 +114,16 @@ credential, every `GetSession`/`StreamSession` call the control-plane makes for 
 session it did not start is rejected.
 
 **How this actually surfaces — fails fast, and correctly.**
-`RunExecutorService.pollForOpenSession`
-(`src/runs/run-executor.service.ts:391-430`) only swallows-and-retries an error
-that is **not** an `AppException` (`:414`, `if (pollError instanceof
-AppException) throw pollError;`) — the design intent being that a raw `NotFound`
-while the initiator hasn't opened the session yet is expected and gets logged at
-`debug` (`:415-418`). But `RustRuntimeProvider.unary` maps *every* gRPC failure
-through `mapGrpcError` before the poll loop ever sees it
-(`src/runtime/rust-runtime.provider.ts:928`, `throw mapGrpcError(error, method)
-?? error;`), and `mapGrpcError` maps `PERMISSION_DENIED` to
-`AppException(ErrorCode.FORBIDDEN, …, 403)` (`src/runtime/grpc-helpers.ts:147`,
-`GRPC_STATUS_TO_HTTP`), preserving the runtime's `details` string verbatim as the
-exception message. So a mis-scoped credential is **not** retried until
-`SESSION_POLL_TIMEOUT_MS` — it is rethrown on the *first* `GetSession` attempt.
-`handleExecuteError` (`:432`) falls through to `markFailed(runId, error)`
-(`:465`), and the run's failure reason is the runtime's own message (e.g.
-`FORBIDDEN: session access denied`), not a generic `RUNTIME_TIMEOUT`. This is the
-good case: it fails loudly, on the first attempt, and the failure reason names
-the real cause — when triaging, check the run's failure reason for the runtime's
+`RunExecutorService.pollForOpenSession` retries `NOT_FOUND` (the initiator has
+not called `SessionStart` yet) until `SESSION_POLL_TIMEOUT_MS`. Every gRPC failure is
+mapped through `mapGrpcError` (`src/runtime/grpc-helpers.ts`) before the poll loop
+sees it, and `PERMISSION_DENIED` becomes `AppException(ErrorCode.FORBIDDEN, …, 403)`
+carrying the runtime's `details` string verbatim. Any non-`NOT_FOUND` `AppException`
+is rethrown on the *first* `GetSession` attempt, so a mis-scoped credential is not
+retried to the timeout: `handleExecuteError` → `markFailed`, and the run's failure
+reason is the runtime's own message (e.g. `FORBIDDEN: session access denied`), not a
+generic `RUNTIME_TIMEOUT`. When triaging, check the failure reason for the runtime's
 `FORBIDDEN` string before assuming the initiator agent never showed up.
-
-  > Out of scope here (a pre-existing code issue, not a docs issue): the
-  > `debug`-level comment at `run-executor.service.ts:415` ("`NotFound` ... is
-  > normal") is stale, because `NOT_FOUND` is *also* now mapped to an
-  > `AppException` by `mapGrpcError` and so takes the `throw pollError` branch
-  > above it rather than ever reaching the `debug` log below. Worth filing
-  > separately.
 
 **`is_observer: true` comes from a configured static token entry *or* the
 `macp_scopes` claim on a minted JWT — never from the runtime's dev-auth

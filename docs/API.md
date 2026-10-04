@@ -100,7 +100,7 @@ Fetch the projected run state for UI rendering. Returns:
 
 ```json
 {
-  "run": { "runId", "status", "modeName", "runtimeSessionId", "startedAt", "endedAt" },
+  "run": { "runId", "status", "modeName", "runtimeSessionId", "startedAt", "endedAt", "maxSuspendMs" },
   "participants": [{ "participantId", "role", "status", "latestSummary" }],
   "graph": { "nodes": [...], "edges": [...] },
   "decision": { "current": { "action", "confidence", "finalized", "proposalId", "outcomePositive", "prompt", "resolvedAt", "resolvedBy", "proposals": [...] } },
@@ -112,6 +112,8 @@ Fetch the projected run state for UI rendering. Returns:
   "policy": { "policyVersion", "policyDescription", "resolvedAt", "outcomePositive", "commitmentEvaluations": [...], "expectedCommitments": [...], "voteTally": [...], "quorumStatus": "pending|reached|failed" }
 }
 ```
+
+`run.maxSuspendMs` is taken from the session's `SessionStart` `max_suspend_ms` and is present only when greater than 0 (suspend semantics: [macp-runtime/docs/architecture.md](../../macp-runtime/docs/architecture.md)).
 
 **Decision projection enrichments (§2.1 – §2.3):**
 
@@ -561,7 +563,7 @@ Policy events are produced when:
 
 ### Policy Rule Schemas (RFC-MACP-0012)
 
-Rules are opaque to the control-plane — the request body is passed through as JSON to `runtime.RegisterPolicy`. Per-mode rule schemas (Decision / Proposal / Task / Handoff / Quorum), worked examples, and evaluation semantics are documented canonically in [macp-runtime/docs/policy.md](../../macp-runtime/docs/policy.md) — see *Rule examples by mode*, *How evaluation works*, and *Commitment authority*.
+The control plane forwards the body to `runtime.RegisterPolicy` after the closed-set `rules` validation described under `POST /runtime/policies` above (schemas vendored in `src/policy/schemas/`, from the spec repo). Per-mode rule schemas (Decision / Proposal / Task / Handoff / Quorum), worked examples, and evaluation semantics are documented canonically in [macp-runtime/docs/policy.md](../../macp-runtime/docs/policy.md) — see *Rule examples by mode*, *How evaluation works*, and *Commitment authority*.
 
 ---
 

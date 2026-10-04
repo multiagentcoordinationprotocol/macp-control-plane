@@ -56,6 +56,8 @@ POST /runs  (RunDescriptor — scenario-agnostic; see CP-1)
         → provider.initialize()              [gRPC — mode validation]
         → pollForOpenSession(sessionId)      [GetSession backoff 100ms→1s]
             ↑ waits for initiator agent to emit SessionStart directly
+            ↑ NOT_FOUND is retried; an already-RESOLVED session is a success (bind → running →
+              poll-only consumer emits the snapshot → completed; no subscribe, no message history)
         → bindSession()                      [status: binding_session]
         → provider.subscribeSession()        [gRPC — read-only StreamSession]
         → markRunning()                      [status: running]
@@ -107,6 +109,16 @@ Two gRPC stream sources feed the same normalization pipeline:
   `llm.call.completed` (token usage) would be invisible.
 - **`RunEventService.persistRawAndCanonical`** runs sequence allocation, raw append,
   canonical append, and projection update inside a single DB transaction.
+  When the caller passes `cursor.envelopeOrdinal`, `last_envelope_ordinal` is written in
+  **that same transaction**, so a crash cannot leave the resume ordinal behind the persisted
+  events. Post-commit steps (metrics, SSE publish, snapshot publish) are each caught and
+  logged on their own — a rethrow would make the consumer re-ingest an already-durable
+  envelope on reconnect (duplicate rows). Failures count in
+  `macp_post_commit_side_effect_failures_total{step}`.
+- **Run-metadata self-heal.** A terminal run whose enrichment ran before `decision.finalized`
+  was persisted (cross-stream race) is repaired lazily on read
+  (`RunManagerService`, from `metrics.decisionCount`).
+- **Graceful drain.** An error escaping after shutdown began is not recorded as a run failure; `RunRecoveryService` resumes the run on next start (see *Key Design Decisions* #10).
 
 ## Session Discovery (WatchSessions)
 
@@ -135,9 +147,9 @@ force-terminate in-progress runs before the drain.
 ## Stream Resume & Cross-Process Recovery (runtime v0.5.0, T7)
 
 Every `runtime_sessions` row tracks two independent markers, both written together in a
-single `updateStreamCursor` call after each processed raw item once `lastProcessedSeq > 0`
-(session snapshots and stream-status frames included — for those the monotonic floor simply
-makes the write a no-op):
+single `updateStreamCursor` call, inside the event transaction (see Event Pipeline), after each
+processed raw item. Snapshots and stream-status frames included — for those only the ordinal
+write is a no-op (the monotonic floor), while `last_stream_cursor` still advances:
 
 - **`last_stream_cursor`** — the control-plane's own canonical event `seq` for the run.
   Purely a CP-side bookkeeping value (e.g. used to compute `resumeFromSeq` for the

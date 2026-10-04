@@ -47,9 +47,13 @@ These endpoints return **410 Gone**. Agents emit envelopes via the SDKs directly
 - ~~`POST /runs/:id/signal`~~
 - ~~`POST /runs/:id/context`~~
 
+### Administration
+- `GET /audit`, `POST /admin/circuit-breaker/reset`, `GET /admin/circuit-breaker/history`
+- `GET /admin/runtime/sessions` — read-only drift detection: runtime session list vs locally tracked runs
+
 ### Runtime discovery
 - `GET /runtime/manifest`, `/runtime/modes`, `/runtime/roots`, `/runtime/health`
-- `GET /runtime/policies`, `POST /runtime/policies`, `DELETE /runtime/policies/:id`
+- `GET /runtime/policies`, `POST /runtime/policies` (rules validated against the spec's closed-set schemas; omitted `schemaVersion` defaults to 3), `DELETE /runtime/policies/:id`
 
 ### Observability
 - `GET /runs/:id/traces`, `/runs/:id/artifacts`, `/runs/:id/metrics`
@@ -134,6 +138,8 @@ See [docs/INTEGRATION.md § Running Integration Tests](docs/INTEGRATION.md#runni
 - **Deployment**: single-VM Docker Compose under [deploy/](deploy/README.md) — `./deploy.sh deploy <tag>` pulls the pinned GHCR image, runs migrations, starts the stack, and verifies `/healthz`; an optional SSH deploy workflow ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)) activates once `DEPLOY_SSH_*` secrets exist.
 
 See [docs/CICD.md](docs/CICD.md) for the full pipeline reference.
+
+Runtime compatibility (currently absorbed through macp-runtime v0.8.6) is tracked in [docs/INTEGRATION.md](docs/INTEGRATION.md#runtime-v081v086-absorption); wire/spec details live in the [runtime docs](../macp-runtime/docs/README.md) and RFCs, not here.
 
 Make sure the runtime is running at `RUNTIME_ADDRESS`. Runtime **v0.5.0 removed the `x-macp-agent-id` dev header** and refuses to start without an explicit `MACP_ALLOW_INSECURE=1` (the published image no longer bakes it in). For dev auth against the reference runtime profile, start the runtime with `MACP_ALLOW_INSECURE=1` only (see [macp-runtime/docs/getting-started.md#authentication](../macp-runtime/docs/getting-started.md#authentication) → *Development mode*) and set on the control-plane:
 
