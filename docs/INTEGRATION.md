@@ -69,7 +69,7 @@ Per-gRPC-call credential resolution uses a three-step fallback chain:
 | **Static Bearer** | JWT disabled or mint failed | `RUNTIME_BEARER_TOKEN` |
 | **Dev bearer** *(deprecated, local only)* | `RUNTIME_USE_DEV_HEADER=true` | `RUNTIME_DEV_AGENT_ID` (`control-plane`) sent as `Authorization: Bearer <id>` — runtime v0.5.0 removed the `x-macp-agent-id` header |
 
-Mint behaviour: token cached until expiry minus 30s refresh buffer minus 10s clock-skew, concurrent refreshes deduped, mint failures log `auth_mint_failure` and fall through to the static Bearer. For the runtime-side token shape (`MACP_AUTH_TOKENS_JSON`), TLS/mTLS, and the JWT claim expectations, see [macp-runtime/docs/getting-started.md#authentication](../../macp-runtime/docs/getting-started.md#authentication) and [macp-runtime/docs/deployment.md#authentication](../../macp-runtime/docs/deployment.md#authentication).
+Mint behaviour: token cached until expiry minus 30s refresh buffer minus 10s clock-skew, concurrent refreshes deduped, mint failures log `auth_mint_failure` and fall through to the static Bearer. For the runtime-side token shape (`MACP_AUTH_TOKENS_JSON`), TLS/mTLS, and the JWT claim expectations, see [macp-runtime/docs/getting-started.md#authentication-configuration](../../macp-runtime/docs/getting-started.md#authentication-configuration) and [macp-runtime/docs/deployment.md#authentication](../../macp-runtime/docs/deployment.md#authentication).
 
 ### Observer authorization contract (is_observer: configured token or JWT scope)
 

@@ -108,7 +108,7 @@ repair or replay a rejected send.
 2. Is `RUNTIME_BEARER_TOKEN` set as a fallback? Without it the call proceeds with the deprecated dev bearer (`Authorization: Bearer ${RUNTIME_DEV_AGENT_ID}`) when `RUNTIME_USE_DEV_HEADER=true`, which only a dev-mode runtime (`MACP_ALLOW_INSECURE=1`) accepts — otherwise it fails auth on the runtime side.
 3. If the auth-service is healthy but calls still fail, check `MACP_AUTH_SERVICE_TIMEOUT_MS` (default 5000 ms) — slow auth-services can time out under load.
 
-**See also:** [macp-runtime/docs/getting-started.md#authentication](../../macp-runtime/docs/getting-started.md#authentication) → *Resolver order* for how the runtime evaluates inbound credentials, and [ARCHITECTURE.md § Runtime Credential Resolution](./ARCHITECTURE.md#runtime-credential-resolution) for the control-plane side of the chain.
+**See also:** [macp-runtime/docs/getting-started.md#authentication-configuration](../../macp-runtime/docs/getting-started.md#authentication-configuration) → *Resolver order* for how the runtime evaluates inbound credentials, and [ARCHITECTURE.md § Runtime Credential Resolution](./ARCHITECTURE.md#runtime-credential-resolution) for the control-plane side of the chain.
 
 ## bindSession ConflictException in logs
 
