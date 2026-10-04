@@ -111,7 +111,7 @@ Two gRPC stream sources feed the same normalization pipeline:
   canonical append, and projection update inside a single DB transaction.
   When the caller passes `cursor.envelopeOrdinal`, `last_envelope_ordinal` is written in
   **that same transaction**, so a crash cannot leave the resume ordinal behind the persisted
-  events. Post-commit steps (metrics, SSE publish, snapshot publish) are each caught and
+  events. Post-commit steps (metrics, SSE publish, snapshot publish, span events) are each caught and
   logged on their own — a rethrow would make the consumer re-ingest an already-durable
   envelope on reconnect (duplicate rows). Failures count in
   `macp_post_commit_side_effect_failures_total{step}`.
