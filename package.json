@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "private": true,
   "description": "Scenario-agnostic control plane for the MACP runtime, built with NestJS.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=20",
     "npm": ">=10"

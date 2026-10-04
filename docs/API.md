@@ -19,7 +19,7 @@ Rate limit: 100 requests per 60 seconds per client. Payload limit: 1MB.
 
 The control-plane has **exactly one** runtime identity. It never calls `Send`; agents authenticate to the runtime directly (RFC-MACP-0004 §4). The scope is fixed: `is_observer: true, can_start_sessions: false`.
 
-Configuration, env vars, and the three-step fallback chain (JWT mint → static Bearer → dev header) are documented in [ARCHITECTURE.md § Runtime Credential Resolution](./ARCHITECTURE.md#runtime-credential-resolution). For the runtime-side token configuration (`MACP_AUTH_TOKENS_JSON` shape, JWT claim expectations, TLS/mTLS), see [macp-runtime/docs/getting-started.md#authentication](../../macp-runtime/docs/getting-started.md#authentication) and [macp-runtime/docs/deployment.md#authentication](../../macp-runtime/docs/deployment.md#authentication).
+Configuration, env vars, and the three-step fallback chain (JWT mint → static Bearer → dev header) are documented in [ARCHITECTURE.md § Runtime Credential Resolution](./ARCHITECTURE.md#runtime-credential-resolution). For the runtime-side token configuration (`MACP_AUTH_TOKENS_JSON` shape, JWT claim expectations, TLS/mTLS), see [macp-runtime/docs/getting-started.md#authentication-configuration](../../macp-runtime/docs/getting-started.md#authentication-configuration) and [macp-runtime/docs/deployment.md#authentication](../../macp-runtime/docs/deployment.md#authentication).
 
 Per-agent tokens are **not** held by the control-plane — they live in the scenario layer (macp-playground) and flow to agents via their bootstrap.
 

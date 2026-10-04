@@ -141,7 +141,7 @@ See [docs/CICD.md](docs/CICD.md) for the full pipeline reference.
 
 Runtime compatibility (currently absorbed through macp-runtime v0.8.6) is tracked in [docs/INTEGRATION.md](docs/INTEGRATION.md#runtime-v081v086-absorption); wire/spec details live in the [runtime docs](../macp-runtime/docs/README.md) and RFCs, not here.
 
-Make sure the runtime is running at `RUNTIME_ADDRESS`. Runtime **v0.5.0 removed the `x-macp-agent-id` dev header** and refuses to start without an explicit `MACP_ALLOW_INSECURE=1` (the published image no longer bakes it in). For dev auth against the reference runtime profile, start the runtime with `MACP_ALLOW_INSECURE=1` only (see [macp-runtime/docs/getting-started.md#authentication](../macp-runtime/docs/getting-started.md#authentication) → *Development mode*) and set on the control-plane:
+Make sure the runtime is running at `RUNTIME_ADDRESS`. Runtime **v0.5.0 removed the `x-macp-agent-id` dev header** and refuses to start without an explicit `MACP_ALLOW_INSECURE=1` (the published image no longer bakes it in). For dev auth against the reference runtime profile, start the runtime with `MACP_ALLOW_INSECURE=1` only (see [macp-runtime/docs/getting-started.md#authentication-configuration](../macp-runtime/docs/getting-started.md#authentication-configuration) → *Development mode*) and set on the control-plane:
 
 ```bash
 RUNTIME_ALLOW_INSECURE=true
@@ -163,7 +163,7 @@ The control-plane has **exactly one** runtime identity with fixed scope `is_obse
 
 For the runtime-side token configuration, TLS, and the full production auth story, see:
 
-- [macp-runtime/docs/getting-started.md#authentication](../macp-runtime/docs/getting-started.md#authentication) — dev / production / JWT modes and resolver order
+- [macp-runtime/docs/getting-started.md#authentication-configuration](../macp-runtime/docs/getting-started.md#authentication-configuration) — dev / production / JWT modes and resolver order
 - [macp-runtime/docs/deployment.md#authentication](../macp-runtime/docs/deployment.md#authentication) — production resolver chain (JWT → static bearer → dev fallback); TLS env vars live in [§ Production checklist](../macp-runtime/docs/deployment.md#production-checklist) and [§ Environment variables](../macp-runtime/docs/deployment.md#environment-variables)
 - [macp-sdk-python/docs/auth.md#observer-identities](../macp-sdk-python/docs/auth.md#observer-identities) — observer-identity pattern (the shape the control-plane uses) and `expected_sender` guardrail
 
