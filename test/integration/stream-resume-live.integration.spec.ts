@@ -31,7 +31,7 @@ import { RuntimeProviderRegistry } from '../../src/runtime/runtime-provider.regi
  * is in dev-auth mode (bearer string == sender, so the per-agent token identities
  * below cannot authenticate) and its port is owned by Docker's forwarder, so the
  * SIGINT/relaunch seam cannot restart it. Verified green against a locally built
- * macp-runtime v0.8.6.
+ * macp-runtime v0.8.6 and v0.9.0 (tag `macp-runtime-v0.9.0`, 3/3).
  *
  * The control-plane is a pure observer throughout: it never calls `Send`
  * (guarded separately by `src/runtime/observer-invariant.spec.ts`, untouched
@@ -66,13 +66,14 @@ import { RuntimeProviderRegistry } from '../../src/runtime/runtime-provider.regi
  *  spec's empirical test time out (it never induced compaction at all). With
  *  `CancelSession` driving the session terminal, a resubscribe below the
  *  compacted base IS rejected live, but not as a stream-ending
- *  `FAILED_PRECONDITION`: `../macp-runtime/src/server.rs` downgrades it to a
- *  non-terminal inline `StreamSessionResponse.error` frame (`code` set to
- *  `status.message().to_string()` — the human message, not a status name)
- *  and leaves the bidi stream open, because `is_stream_terminal_error`
- *  (~line 745-755) unconditionally excludes `FailedPrecondition` from the
- *  small set of codes allowed to end a `StreamSession` stream
- *  (server.rs:608-628). Part 1 below proves that half live, straight off the
+ *  `FAILED_PRECONDITION`. On 0.8.x `../macp-runtime/src/server.rs` downgraded
+ *  it to a non-terminal inline `StreamSessionResponse.error` frame whose
+ *  `code` was the human message; since v0.9.0 it builds the frame directly
+ *  (`StreamFailure::Inline`, server.rs:584-590) with `code` set to the
+ *  registry code `INVALID_ENVELOPE` and the fixed "session history before
+ *  ordinal {N} was compacted; …" sentence as `message`. Either way the bidi
+ *  stream stays open — the frame never reaches the terminal-status path
+ *  (the `Terminal` arm, server.rs:681-683). Part 1 below proves that half live, straight off the
  *  wire.
  *
  *  Part 2 proves the control-plane side, now that two production fixes are
@@ -629,26 +630,20 @@ describeWithLocalRuntime('Stream resume — live macp-runtime 0.7.0 (Phase 5)', 
    *  (a) The runtime's rejection of a stale resume against a compacted
    *      session is a non-terminal inline frame, NOT a stream-ending gRPC
    *      `FAILED_PRECONDITION`. Traced in `../macp-runtime/src/server.rs`:
-   *        - `process_subscribe_frame` (~line 456) builds the rejection as
-   *          `Status::failed_precondition(...)` when
-   *          `get_session_envelopes_after` reports the requested ordinal is
-   *          below the compacted base.
-   *        - `build_stream_session_stream`'s generator (~line 524) only lets
-   *          an error terminate the stream (`Err(status)?`) when
-   *          `is_stream_terminal_error(&status)` (~line 745) is true — and
-   *          that function's fixed list is `Unauthenticated | Internal |
-   *          ResourceExhausted | InvalidArgument | NotFound | AlreadyExists`.
-   *          `FailedPrecondition` is not in it, unconditionally, for any
-   *          caller.
-   *        - Every other `Err(status)` (~line 609-627) is instead downgraded
-   *          to a non-terminal `StreamSessionResponse.error` (`PbMacpError`)
-   *          frame — `code` set to `status.message().to_string()`, the human
-   *          message, not a status name — and the stream stays open. This is
-   *          the SAME delivery mechanism the runtime already uses for
+   *        - v0.9.0: the subscribe path maps a `get_session_envelopes_after`
+   *          failure (requested ordinal below the compacted base) to
+   *          `StreamFailure::Inline { code: INVALID_ENVELOPE, message:
+   *          "session history before ordinal {N} was compacted; …" }`
+   *          (server.rs:584-590), which the generator yields as a
+   *          `StreamSessionResponse.error` frame (server.rs:687-700) without
+   *          ending the stream. (0.8.x reached the same non-terminal frame by
+   *          downgrading a `FailedPrecondition` status, `code` set to the
+   *          human message.)
+   *        - This is the SAME delivery mechanism the runtime uses for
    *          ordinary in-session validation errors (PolicyDenied,
    *          InvalidPayload — see this repo's CLAUDE.md "Stream inline
-   *          errors" note); the compacted-resume rejection is simply
-   *          included in that same non-terminal category, by design.
+   *          errors" note); the compacted-resume rejection is simply in
+   *          that same non-terminal category, by design.
    *      Asserted directly off the wire via a raw gRPC client (matching the
    *      hand-verified recipe this phase was handed, not `provider
    *      .subscribeSession()` — see (b) for why): the compaction frame

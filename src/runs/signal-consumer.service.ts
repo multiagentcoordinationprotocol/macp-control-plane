@@ -5,6 +5,8 @@ import { EventNormalizerService } from '../events/event-normalizer.service';
 import { RunEventService } from '../events/run-event.service';
 import { ProtoRegistryService } from '../runtime/proto-registry.service';
 import { AppConfigService } from '../config/app-config.service';
+import { watchReconnectDelay } from './watch-reconnect';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import type { NormalizeContext, RawRuntimeEvent } from '../contracts/runtime';
 
 /**
@@ -25,6 +27,7 @@ export class SignalConsumerService implements OnModuleInit, OnModuleDestroy {
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private reconnectResolve?: () => void;
   private activeIterator?: AsyncIterator<unknown>;
+  private lastImmediateReconnectAt?: number;
 
   constructor(
     private readonly providerRegistry: RuntimeProviderRegistry,
@@ -32,7 +35,8 @@ export class SignalConsumerService implements OnModuleInit, OnModuleDestroy {
     private readonly normalizer: EventNormalizerService,
     private readonly eventService: RunEventService,
     private readonly protoRegistry: ProtoRegistryService,
-    private readonly config: AppConfigService
+    private readonly config: AppConfigService,
+    private readonly instrumentation: InstrumentationService
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -74,10 +78,24 @@ export class SignalConsumerService implements OnModuleInit, OnModuleDestroy {
       } catch (error) {
         if (this.aborted) return;
         const message = error instanceof Error ? error.message : String(error);
-        this.logger.warn(`WatchSignals stream ended: ${message}. Reconnecting in 5s...`);
+        const now = Date.now();
+        const { lagged, delayMs } = watchReconnectDelay(error, this.lastImmediateReconnectAt, now);
+        const when = delayMs === 0 ? 'immediately' : `in ${delayMs / 1000}s`;
+        if (lagged) {
+          this.instrumentation.watchStreamLaggedTotal.inc({ stream: 'watch_signals' });
+          this.logger.warn(
+            `WatchSignals fell behind the runtime and was ended (STREAM_LAGGED): ${message}. Signals dropped in the gap are lost (WatchSignals has no replay). Reconnecting ${when}...`
+          );
+        } else {
+          this.logger.warn(`WatchSignals stream ended: ${message}. Reconnecting ${when}...`);
+        }
+        if (delayMs === 0) {
+          this.lastImmediateReconnectAt = now;
+          continue;
+        }
         await new Promise<void>((resolve) => {
           this.reconnectResolve = resolve;
-          this.reconnectTimer = setTimeout(resolve, 5000);
+          this.reconnectTimer = setTimeout(resolve, delayMs);
         });
         this.reconnectTimer = undefined;
         this.reconnectResolve = undefined;

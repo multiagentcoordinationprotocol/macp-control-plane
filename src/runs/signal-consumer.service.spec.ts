@@ -1,4 +1,6 @@
+import * as grpc from '@grpc/grpc-js';
 import { SignalConsumerService } from './signal-consumer.service';
+import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { AppConfigService } from '../config/app-config.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { RunRepository } from '../storage/run.repository';
@@ -41,6 +43,8 @@ describe('SignalConsumerService', () => {
   let mockNormalizer: { normalize: jest.Mock };
   let mockEventService: { persistRawAndCanonical: jest.Mock };
   let mockProtoRegistry: { decodeKnown: jest.Mock };
+  let laggedInc: jest.Mock;
+  let mockInstrumentation: InstrumentationService;
 
   const canonicalSentinel = [{ type: 'signal.emitted' }];
 
@@ -54,6 +58,8 @@ describe('SignalConsumerService', () => {
     mockNormalizer = { normalize: jest.fn().mockReturnValue(canonicalSentinel) };
     mockEventService = { persistRawAndCanonical: jest.fn().mockResolvedValue(undefined) };
     mockProtoRegistry = { decodeKnown: jest.fn().mockReturnValue(null) };
+    laggedInc = jest.fn();
+    mockInstrumentation = { watchStreamLaggedTotal: { inc: laggedInc } } as unknown as InstrumentationService;
 
     service = new SignalConsumerService(
       mockRegistry as unknown as RuntimeProviderRegistry,
@@ -61,7 +67,8 @@ describe('SignalConsumerService', () => {
       mockNormalizer as unknown as EventNormalizerService,
       mockEventService as unknown as RunEventService,
       mockProtoRegistry as unknown as ProtoRegistryService,
-      mockConfig as AppConfigService
+      mockConfig as AppConfigService,
+      mockInstrumentation
     );
   });
 
@@ -76,7 +83,8 @@ describe('SignalConsumerService', () => {
       mockNormalizer as unknown as EventNormalizerService,
       mockEventService as unknown as RunEventService,
       mockProtoRegistry as unknown as ProtoRegistryService,
-      { sessionDiscoveryEnabled: false } as AppConfigService
+      { sessionDiscoveryEnabled: false } as AppConfigService,
+      mockInstrumentation
     );
     await disabled.onModuleInit();
     expect(mockRegistry.get).not.toHaveBeenCalled();
@@ -158,9 +166,7 @@ describe('SignalConsumerService', () => {
 
   it('drops when no run matches the session without calling the normalizer', async () => {
     mockRunRepo.findByRuntimeSessionId.mockResolvedValue(null);
-    mockProvider.watchSignals.mockReturnValue(
-      scriptedStream([makeEnvelopeEvent({ sessionId: 'session-unknown' })])
-    );
+    mockProvider.watchSignals.mockReturnValue(scriptedStream([makeEnvelopeEvent({ sessionId: 'session-unknown' })]));
 
     await service.onModuleInit();
     await flushAsync();
@@ -232,6 +238,51 @@ describe('SignalConsumerService', () => {
     expect(mockProvider.watchSignals.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(mockRunRepo.findByRuntimeSessionId).toHaveBeenCalledWith('session-after-reconnect');
     expect(mockEventService.persistRawAndCanonical).toHaveBeenCalled();
+  });
+
+  it('on a coded STREAM_LAGGED end, counts it once and reconnects without the 5s delay (v0.9.0)', async () => {
+    const metadata = new grpc.Metadata();
+    metadata.set('macp-error-code', 'STREAM_LAGGED');
+    const lagged = Object.assign(new Error('8 RESOURCE_EXHAUSTED: WatchSignals receiver fell behind by 3 signals'), {
+      code: 8,
+      details: 'WatchSignals receiver fell behind by 3 signals',
+      metadata
+    });
+    mockProvider.watchSignals
+      .mockReturnValueOnce(
+        (async function* () {
+          await Promise.resolve();
+          throw lagged;
+        })()
+      )
+      .mockReturnValueOnce(scriptedStream([makeEnvelopeEvent({ sessionId: 'session-after-lag' })]));
+
+    await service.onModuleInit();
+    for (let i = 0; i < 50 && !mockRunRepo.findByRuntimeSessionId.mock.calls.length; i++) await flushAsync();
+
+    // Consumed the reconnected stream without the loop ever parking in a back-off sleep first.
+    expect(mockRunRepo.findByRuntimeSessionId).toHaveBeenCalledWith('session-after-lag');
+    expect(mockProvider.watchSignals.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(laggedInc).toHaveBeenCalledTimes(1);
+    expect(laggedInc).toHaveBeenCalledWith({ stream: 'watch_signals' });
+  });
+
+  it('does not count an uncoded stream end as a lag', async () => {
+    mockProvider.watchSignals.mockReturnValueOnce(
+      (async function* () {
+        await Promise.resolve();
+        throw Object.assign(new Error('8 RESOURCE_EXHAUSTED'), { code: 8 });
+      })()
+    );
+
+    await service.onModuleInit();
+    for (let i = 0; i < 50 && !(service as unknown as { reconnectResolve?: () => void }).reconnectResolve; i++) {
+      await flushAsync();
+    }
+
+    expect((service as unknown as { reconnectResolve?: () => void }).reconnectResolve).toBeDefined();
+    expect(mockProvider.watchSignals).toHaveBeenCalledTimes(1);
+    expect(laggedInc).not.toHaveBeenCalled();
   });
 
   it('onModuleDestroy cancels a pending reconnect and awaits the loop promise', async () => {

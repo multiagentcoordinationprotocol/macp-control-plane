@@ -328,7 +328,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnMod
                 code: inlineError.code ?? 'UNKNOWN',
                 message: inlineError.message ?? '',
                 sessionId: inlineError.sessionId ?? '',
-                messageId: inlineError.messageId ?? ''
+                messageId: inlineError.messageId ?? '',
+                ...(inlineError.details?.length ? { details: inlineError.details } : {})
               }
             });
             notify();

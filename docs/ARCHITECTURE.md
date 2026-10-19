@@ -131,6 +131,16 @@ Terminal events (`resolved`, `expired`) finalize the auto-discovered run.
 `SignalConsumerService` is gated on the same `SESSION_DISCOVERY_ENABLED` flag — if session
 discovery is off, ambient signals are also ignored.
 
+Both watch consumers reconnect after a stream end with a 5s back-off, except on a coded
+`STREAM_LAGGED` end (runtime v0.9.0: the consumer fell behind the broadcast buffer), which
+reconnects immediately — at most once per 5s, so a persistently slow consumer cannot
+hot-loop — and increments `macp_watch_stream_lagged_total{stream}`. Every `WatchSessions`
+(re)connect opens with an initial sync that re-emits each session in the runtime's registry
+as `created` with its current state: new sessions get a run, and a `running`/`suspended` run
+whose snapshot disagrees (resolved, expired, cancelled, suspended, or open again) is moved to
+match, which recovers a lifecycle event dropped while the watch was down. `WatchSignals` has
+no replay, so signals dropped in the gap are lost.
+
 This enables the control-plane to observe and project any session the runtime hosts, even
 if the launching service doesn't use the control-plane's `POST /runs` endpoint.
 
@@ -211,15 +221,19 @@ invents an ordinal and never resubscribes from `0` as a fallback strategy — 0 
 the correct value for a session with no prior persisted ordinal (a genuinely fresh run),
 never a substitute for a marker that failed to seed.
 
-**The `FAILED_PRECONDITION` → `session.stream.gap` → poll-only safety net** (already in
+**The compacted-history → `session.stream.gap` → poll-only safety net** (already in
 `stream-consumer.service.ts`, exercised whether the handle came from initial `start()` or
 from `RunRecoveryService`'s cross-process resume) is what protects a resume point that
 *was* valid when persisted but has since been compacted out of the runtime's log:
-`isCompactedHistoryTerminalError` (terminal stream errors) recognizes gRPC
-`FAILED_PRECONDITION` (code 9) or a match against `COMPACTED_HISTORY_RE`
-(`/history before ordinal \d+ was compacted/i`, unanchored so it matches both a bare
-message and grpc-js's `"<code> <CODE_NAME>: <details>"`-prefixed form); the sibling
-`isCompactedHistoryInlineError` applies the same regex, text-only, to inline frames.
+`isCompactedHistoryTerminalError` (terminal stream errors) recognizes a match against
+`COMPACTED_HISTORY_RE` (`/history before ordinal \d+ was compacted/i`, unanchored so it
+matches both a bare message and grpc-js's `"<code> <CODE_NAME>: <details>"`-prefixed form),
+or an **uncoded** gRPC `FAILED_PRECONDITION` (code 9) — a code-9 status carrying a
+`macp-error-code` trailer is some other, named refusal and is not a gap. The sibling
+`isCompactedHistoryInlineError` classifies inline frames: a v0.9.0 frame with `code`
+`INVALID_ENVELOPE` is a gap only when its message matches the regex (other
+`INVALID_ENVELOPE` frames are ordinary validation errors), while a 0.8.x frame (message
+copied into `code`) is matched on either field.
 `emitStreamGap` emits a `session.stream.gap` canonical event and flags the projection
 `historyGap: true` (idempotent per run via `marker.historyGap`), and the consumer degrades
 to poll-only **without ever resubscribing from 0** — the gap is made visible instead of
@@ -228,16 +242,17 @@ against a scripted mock runtime.
 
 **How the rejection actually arrives against runtime 0.7.0+ — not as a stream error.** Live
 re-verification found that the runtime does *not* end the stream for a compacted-history
-resume: `is_stream_terminal_error` (`macp-runtime/src/server.rs:748-756`) omits
-`FailedPrecondition`, so the rejection is delivered as a **non-terminal inline `MACPError`
-frame with the stream left open** (`server.rs:611-629`). The consumer therefore also
+resume: it is delivered as a **non-terminal inline `MACPError` frame with the stream left
+open**. Through 0.8.x that came from downgrading a `FailedPrecondition` status (omitted from
+`is_stream_terminal_error`); since v0.9.0 the subscribe path builds it directly as
+`StreamFailure::Inline { code: INVALID_ENVELOPE, … }` (`macp-runtime/src/server.rs:584-590`). The consumer therefore also
 classifies the inline frame, not just the stream-error path — without that, the gap event
 never fired at all and the consumer sat on an open stream that had replayed nothing.
 
-Two caveats a maintainer should know. First, detection matches on the message text, because
-the runtime sets the inline frame's `code` to `status.message()` rather than a status name —
-so there is no machine-readable code to key on, and a future rewording of that string breaks
-detection silently. The regex was tightened from a loose `/compact/i` substring match (which
+Two caveats a maintainer should know. First, detection still matches on the message text:
+0.8.x sets the inline frame's `code` to `status.message()`, and v0.9.0's `INVALID_ENVELOPE`
+is shared with ordinary envelope-validation errors, so neither gives a gap-specific code to
+key on — a future rewording of that sentence breaks detection silently. The regex was tightened from a loose `/compact/i` substring match (which
 false-positived on operator-authored `PolicyDenied` reasons mentioning "compact") to the
 sentence-specific `COMPACTED_HISTORY_RE` above, closing that false-positive without changing
 the "future rewording breaks detection" trade-off. Second, the gap classification now runs

@@ -7,6 +7,7 @@ import { RunEventService } from '../events/run-event.service';
 import { StreamHubService } from '../events/stream-hub.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { TraceService } from '../telemetry/trace.service';
+import { macpErrorCodeOf } from '../runtime/grpc-helpers';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
 import { RunManagerService } from './run-manager.service';
@@ -278,50 +279,57 @@ export class StreamConsumerService implements OnModuleDestroy {
 
   /**
    * Matches the runtime's exact "resume point was compacted" sentence
-   * (macp-runtime/src/server.rs:516-521): "session history before ordinal {N}
+   * (macp-runtime/src/server.rs:584-590): "session history before ordinal {N}
    * was compacted; resume with after_sequence >= {N} or re-read state via
-   * GetSession". Deliberately **unanchored**, not `^`-anchored — the terminal
-   * path's error text (see `isCompactedHistoryTerminalError` below) is
-   * grpc-js's own wrapped `ServiceError.message`, formatted as
-   * "<code> <CODE_NAME>: <details>" (e.g. "9 FAILED_PRECONDITION: session
-   * history before ordinal 5 was compacted; ..."), which a `^`-anchored regex
-   * would never match. This exact unanchored form is prescribed by
-   * DECISIONS.md entry 13 — do not re-anchor it.
+   * GetSession". Deliberately **unanchored**, not `^`-anchored — on the legacy
+   * terminal fallback (see `isCompactedHistoryTerminalError` below) the text is
+   * grpc-js's own wrapped `ServiceError.message`, "<code> <CODE_NAME>:
+   * <details>", which a `^`-anchored regex would never match. This exact
+   * unanchored form is prescribed by DECISIONS.md entry 13 — do not re-anchor it.
    *
-   * Coupled to the runtime's exact wording: if it's ever reworded upstream,
-   * this regex stops matching and gap detection on the terminal path degrades
-   * to the `code === 9` branch only — the inline path (see
-   * `isCompactedHistoryInlineError`) has no such fallback, so a reworded
-   * sentence would silently regress issue #68's protection.
+   * Still the discriminator from runtime v0.9.0: the inline frame's code is now
+   * the generic registry `INVALID_ENVELOPE`, which every malformed-envelope
+   * rejection shares, so the sentence is the only thing that marks a compacted
+   * resume. Coupled to the runtime's wording: a rewording upstream silently
+   * stops gap detection on the inline path (issue #68's protection), with no
+   * signal short of the live-runtime suite.
    */
   private static readonly COMPACTED_HISTORY_RE = /history before ordinal \d+ was compacted/i;
 
   /**
-   * Detect the runtime's "resume point was compacted" rejection on the
-   * *terminal* stream-error path — a gRPC FAILED_PRECONDITION (code 9) raised
-   * on the StreamSession when we request an `after_sequence` below the
-   * compacted base. Resubscribing from 0 after this would double-ingest
-   * history (the CP has no message-id dedup), so callers degrade to poll-only
-   * instead. `code === 9` is the primary signal; the regex is a fallback for
-   * whatever error-message shape actually reaches us (grpc-js's wrapped text).
+   * Fallback: detect a compacted resume point on the *terminal* stream-error
+   * path. No released runtime ends the stream for it — v0.9.0 sends the inline
+   * `INVALID_ENVELOPE` frame below, v0.5–0.8 downgrade the FAILED_PRECONDITION
+   * to an inline frame (0.8.8 server.rs:614-629), and v0.4 had no compaction
+   * notice — so this only matters for a proxy or other non-runtime peer that
+   * surfaces the rejection as a status.
+   * Resubscribing from 0 after this would double-ingest history (the CP has no
+   * message-id dedup), so callers degrade to poll-only instead.
+   *
+   * `code === 9` (FAILED_PRECONDITION) counts only on an **uncoded** status: a
+   * runtime that stamps `macp-error-code` maps several unrelated registry codes
+   * onto FAILED_PRECONDITION, so a coded status is a gap only when its text is
+   * the compacted-history sentence.
    */
   private isCompactedHistoryTerminalError(error: unknown): boolean {
-    const code = (error as { code?: number })?.code;
     const message = error instanceof Error ? error.message : String(error);
-    return code === 9 /* grpc FAILED_PRECONDITION */ || StreamConsumerService.COMPACTED_HISTORY_RE.test(message);
+    if (StreamConsumerService.COMPACTED_HISTORY_RE.test(message)) return true;
+    const code = (error as { code?: number })?.code;
+    return code === 9 /* grpc FAILED_PRECONDITION */ && macpErrorCodeOf(error) === undefined;
   }
 
   /**
-   * Detect the same condition on the *inline* `stream-inline-error` frame
-   * macp-runtime emits instead of ending the stream (see the call site in the
-   * consume loop for why that path exists and why it is fragile). There is no
-   * numeric gRPC code on this path — it is not a terminal stream error — and a
-   * PolicyDenied frame can never reach here either: server.rs:748-756 excludes
-   * FailedPrecondition (PolicyDenied's own status code) from terminal errors.
-   * So, unlike the terminal path, this is text-only with no numeric fallback.
+   * Detect the same condition on the non-terminal inline `MACPError` frame
+   * the runtime sends instead of ending the stream (see the consume loop).
+   * v0.9.0 frame: `code: 'INVALID_ENVELOPE'`, `message:` the sentence. 0.8.x
+   * frame: `code` and `message` are both `status.message()`, i.e. the
+   * sentence. Any other coded frame — including an `INVALID_ENVELOPE` with a
+   * different message — is an ordinary rejection, never a gap.
    */
-  private isCompactedHistoryInlineError(text: string): boolean {
-    return StreamConsumerService.COMPACTED_HISTORY_RE.test(text);
+  private isCompactedHistoryInlineError(err: { code: string; message: string }): boolean {
+    const re = StreamConsumerService.COMPACTED_HISTORY_RE;
+    if (err.code === 'INVALID_ENVELOPE') return re.test(err.message);
+    return re.test(err.message) || re.test(err.code);
   }
 
   /**
@@ -388,32 +396,26 @@ export class StreamConsumerService implements OnModuleDestroy {
             if (marker.aborted) return;
 
             // Inline compacted-history detection (live-finding follow-up to T7).
-            // macp-runtime does NOT surface a compacted resume point as a
-            // terminal gRPC stream error: server.rs's stream loop only ends the
-            // stream for Unauthenticated | Internal | ResourceExhausted |
-            // InvalidArgument | NotFound | AlreadyExists (server.rs:748-756,
-            // is_stream_terminal_error) — FailedPrecondition is excluded, so a
-            // compacted resume is instead delivered as a non-terminal inline
-            // `Response::Error` frame while the bidi stream stays open
-            // (server.rs:611-629). The `catch` below — which drives gap
-            // detection for a genuine stream error — never runs for this case,
-            // so it has to be detected here, before we normalize the frame.
+            // The runtime does NOT end the stream for a compacted resume
+            // point: it sends a non-terminal inline `MACPError` frame and
+            // leaves the bidi stream open (v0.9.0: `StreamFailure::Inline`,
+            // server.rs:584-590, code `INVALID_ENVELOPE`). The `catch` below —
+            // which drives gap detection for a genuine stream error — never
+            // runs for this case, so it has to be detected here, before we
+            // normalize the frame.
             //
-            // There is no machine-readable signal to key off: the runtime sets
-            // both `code` and `message` on the inline frame to
-            // `status.message()`, i.e. the human-readable "session history
-            // before ordinal {N} was compacted; resume with after_sequence >=
-            // {N} or re-read state via GetSession" string (server.rs:516-521).
-            // We match that string via `isCompactedHistoryInlineError` rather
-            // than inventing a second detector. This is inherently fragile: if
-            // the runtime ever rewords this message, detection silently stops
-            // firing with no compiler or test signal short of the live-runtime
-            // suite — that fragility is deliberate to call out, not accidental.
+            // The only distinguishing signal is the human sentence "session
+            // history before ordinal {N} was compacted; resume with
+            // after_sequence >= {N} or re-read state via GetSession": v0.9.0's
+            // code is the generic INVALID_ENVELOPE, and 0.8.x put that
+            // sentence in both `code` and `message`. That text coupling is
+            // fragile by nature — a rewording upstream silently stops this
+            // firing short of the live-runtime suite — and called out here on
+            // purpose.
             if (
               raw.kind === 'stream-inline-error' &&
               raw.inlineError &&
-              (this.isCompactedHistoryInlineError(raw.inlineError.message) ||
-                this.isCompactedHistoryInlineError(raw.inlineError.code))
+              this.isCompactedHistoryInlineError(raw.inlineError)
             ) {
               gapDetected = true;
               marker.connected = false;

@@ -86,7 +86,13 @@ export class InstrumentationService implements OnModuleInit {
 
   readonly streamResumeGapTotal = new client.Counter({
     name: 'macp_stream_resume_gap_total',
-    help: 'Total StreamSession resume attempts that hit a compacted-history gap (FAILED_PRECONDITION) and degraded to poll-only'
+    help: 'Total StreamSession resume attempts that hit a compacted-history gap (inline compaction frame: code INVALID_ENVELOPE on runtime >= 0.9.0, the sentence as code on 0.8.x) and degraded to poll-only'
+  });
+
+  readonly watchStreamLaggedTotal = new client.Counter({
+    name: 'macp_watch_stream_lagged_total',
+    help: 'Total WatchSessions / WatchSignals streams the runtime ended with STREAM_LAGGED because this consumer fell behind its broadcast bus (events were dropped)',
+    labelNames: ['stream'] as const
   });
 
   readonly postCommitSideEffectFailuresTotal = new client.Counter({

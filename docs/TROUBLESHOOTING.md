@@ -128,7 +128,7 @@ repair or replay a rejected send.
 
 **Symptom:** A run has a `session.stream.gap` canonical event and its projection is flagged `historyGap`.
 
-**Explanation:** The resume ordinal was compacted away (`FAILED_PRECONDITION`). The consumer deliberately degrades to poll-only instead of resubscribing from 0, because the control plane has no message-id dedup. Track via `macp_stream_resume_gap_total`; details in [ARCHITECTURE § Stream Resume](./ARCHITECTURE.md#stream-resume--cross-process-recovery-runtime-v050-t7).
+**Explanation:** The resume ordinal was compacted away — a non-terminal inline frame carrying "session history before ordinal N was compacted" (code `INVALID_ENVELOPE` on runtime v0.9.0+; on 0.8.x the sentence is also the code). A terminal `FAILED_PRECONDITION` with that sentence (no released runtime sends one; a proxy could) is handled the same way. The consumer deliberately degrades to poll-only instead of resubscribing from 0, because the control plane has no message-id dedup. Track via `macp_stream_resume_gap_total`; details in [ARCHITECTURE § Stream Resume](./ARCHITECTURE.md#stream-resume--cross-process-recovery-runtime-v050-t7).
 
 ## `macp_post_commit_side_effect_failures_total` is non-zero
 
@@ -271,3 +271,9 @@ Some behavior (e.g. `ListSessions` pagination across a large session store) can 
 | `INTERNAL_ERROR` | 500 | Unexpected server error |
 
 On runtime v0.9.0+ the code comes from the status's `macp-error-code` metadata and is echoed as `metadata.macpErrorCode` in the error body; `metadata.grpcCode` is always present. A `POLICY_DENIED` body carries `metadata.reasons` and (v0.9.0+) `metadata.denials`. A coded refusal (anything but `INTERNAL_ERROR`/`STREAM_LAGGED` or a transport status) does not count toward opening the circuit breaker.
+
+### `macp_watch_stream_lagged_total` is increasing
+
+**Symptom:** `SessionDiscoveryService` / `SignalConsumerService` log `... fell behind the runtime and was ended (STREAM_LAGGED)` warnings and the counter (label `stream=watch_sessions|watch_signals`) rises.
+
+**Explanation:** Runtime v0.9.0 ends a `WatchSessions`/`WatchSignals` stream with a coded `RESOURCE_EXHAUSTED` (`macp-error-code: STREAM_LAGGED`) when the control plane falls behind its broadcast buffer. The consumer reconnects immediately (at most once per 5s; a second lag inside that window takes the normal 5s back-off). On `WatchSessions` the reconnect's initial sync re-emits every session in the runtime's registry with its current state: unknown sessions get a run, and a tracked `running`/`suspended` run is moved to the snapshot's state (so a dropped resolve/expire/cancel/suspend/resume is recovered). Runs still binding are left to `RunExecutor`. On `WatchSignals` there is no replay: signals dropped in the gap are **lost**, so token/cost totals for affected runs may undercount. Sustained lag means the control plane cannot keep up — check DB latency and event-loop saturation before tuning the runtime's broadcast capacity.

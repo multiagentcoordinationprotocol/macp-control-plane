@@ -652,6 +652,88 @@ describe('EventNormalizerService', () => {
       expect(policyDenied!.data.errorCode).toBe('POLICY_DENIED');
     });
 
+    it('takes reasons and denials from the v0.9.0 inline frame details, not from the message', () => {
+      // macp-runtime v0.9.0 `stream_inline_error` (server.rs:240): registry code,
+      // bare Display message, structured details.
+      const denials = [{ code: 'QUORUM_NOT_MET', message: 'quorum not met', participants: ['agent-b'] }];
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-inline-error',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        inlineError: {
+          code: 'POLICY_DENIED',
+          message: 'PolicyDenied',
+          sessionId: 'session-1',
+          messageId: 'msg-9',
+          details: Buffer.from(JSON.stringify({ reasons: ['quorum not met'], denials }))
+        }
+      };
+
+      const events = service.normalize('run-1', raw, makeContext());
+
+      const policyDenied = events.filter((e) => e.type === 'policy.denied');
+      expect(policyDenied).toHaveLength(1);
+      expect(policyDenied[0].data.errorCode).toBe('POLICY_DENIED');
+      expect(policyDenied[0].data.decodedPayload).toEqual({ decision: 'deny', reasons: ['quorum not met'], denials });
+    });
+
+    it('falls back to the message when v0.9.0 details are malformed or carry no reasons', () => {
+      for (const details of [Buffer.from('not json'), Buffer.from(JSON.stringify({ reasons: [] }))]) {
+        const raw: RawRuntimeEvent = {
+          kind: 'stream-inline-error',
+          receivedAt: '2026-01-01T00:00:00.000Z',
+          inlineError: {
+            code: 'POLICY_DENIED',
+            message: 'PolicyDenied',
+            sessionId: 'session-1',
+            messageId: '',
+            details
+          }
+        };
+
+        const policyDenied = service.normalize('run-1', raw, makeContext()).find((e) => e.type === 'policy.denied');
+
+        expect(policyDenied!.data.decodedPayload).toMatchObject({ decision: 'deny', reasons: ['PolicyDenied'] });
+      }
+    });
+
+    it('keeps denials but falls back to message reasons when details carry denials only', () => {
+      const denials = [{ code: 'X', message: 'x', participants: [] }];
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-inline-error',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        inlineError: {
+          code: 'POLICY_DENIED',
+          message: 'PolicyDenied',
+          sessionId: 'session-1',
+          messageId: '',
+          details: Buffer.from(JSON.stringify({ denials }))
+        }
+      };
+
+      const policyDenied = service.normalize('run-1', raw, makeContext()).find((e) => e.type === 'policy.denied');
+
+      expect(policyDenied!.data.decodedPayload).toEqual({ decision: 'deny', reasons: ['PolicyDenied'], denials });
+    });
+
+    it('does not emit policy.denied for a coded non-policy inline frame even with details', () => {
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-inline-error',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        inlineError: {
+          code: 'INVALID_ENVELOPE',
+          message: 'payload too short',
+          sessionId: 'session-1',
+          messageId: '',
+          details: Buffer.from(JSON.stringify({ reasons: ['x'] }))
+        }
+      };
+
+      const events = service.normalize('run-1', raw, makeContext());
+
+      expect(events.map((e) => e.type)).toEqual(['message.send_failed']);
+    });
+
+    // 0.8.x frame shape: code = message = status.message(), no details.
     it('should emit policy.denied from an inline stream error with a PolicyDenied prefix, parsing multiple reasons', () => {
       const raw: RawRuntimeEvent = {
         kind: 'stream-inline-error',

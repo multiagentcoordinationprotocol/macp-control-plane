@@ -404,6 +404,37 @@ describe('RustRuntimeProvider.subscribeSession — StreamSessionResponse oneof d
     });
   });
 
+  it('passes MACPError.details through on an inline frame and drops an empty details buffer (v0.9.0)', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream);
+    const details = Buffer.from(JSON.stringify({ reasons: ['quorum not met'], denials: [] }));
+
+    const handle = provider.subscribeSession(baseReq);
+    await new Promise((r) => setImmediate(r));
+
+    stream.emit('data', {
+      response: 'error',
+      error: { code: 'POLICY_DENIED', message: 'PolicyDenied', sessionId: 'sess-abc', messageId: 'm-1', details }
+    });
+    // proto-loader decodes an unset `bytes` field as an empty Buffer.
+    stream.emit('data', {
+      response: 'error',
+      error: {
+        code: 'INVALID_ENVELOPE',
+        message: 'bad',
+        sessionId: 'sess-abc',
+        messageId: 'm-2',
+        details: Buffer.alloc(0)
+      }
+    });
+    stream.emit('end');
+
+    const inlineErrors = (await drain(handle.events)).filter((e) => e.kind === 'stream-inline-error');
+    expect(inlineErrors).toHaveLength(2);
+    expect(inlineErrors[0].inlineError?.details).toEqual(details);
+    expect(inlineErrors[1].inlineError).not.toHaveProperty('details');
+  });
+
   it('still delivers an envelope frame in the oneofs:true wire shape ({ response: "envelope", envelope: {...} })', async () => {
     const stream = makeFakeStream();
     const { provider } = makeProvider(() => stream);

@@ -1630,3 +1630,4 @@ Owner decisions (asked 2026-10-18, before P2): **Q1** `REGISTRY_READ_ONLY` stays
 |---|---|---|---|---|
 | P1 — harness + tested range → 0.9.0 | DONE | 1 | Opus (simple phase, gated solo because P2 is complex) — PASS | see git log |
 | P2 — map runtime errors by `macp-error-code` | DONE | 1 | Opus (complex: public HTTP error contract) — PASS; minor items: DECISIONS entry added, compacted-history code-9 narrowing moved to P3 | see git log |
+| P3 — inline-error details, compacted inline frame, STREAM_LAGGED on watch streams | DONE | 3 | Opus (complex: stream/event boundary). R1 GAPS: no snapshot reconcile after lag resync, 0.8.x mislabelled terminal, INTEGRATION.md:13 lag text, CLAUDE.md, live run, plan divergences. R2 GAPS: "pre-0.8" label also false (proxy-only), stale metric help text. R3 PASS. Live: stream-resume-live 3/3 on a locally built v0.9.0 | see git log |

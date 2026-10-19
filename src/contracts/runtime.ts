@@ -56,6 +56,8 @@ export interface RawRuntimeEvent {
     message: string;
     sessionId?: string;
     messageId?: string;
+    /** `MACPError.details` — JSON `{reasons, denials}` for POLICY_DENIED (runtime v0.9.0+); empty before. */
+    details?: Uint8Array;
   };
 }
 

@@ -513,3 +513,36 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   reason* (`handleExecuteError`) while a directly-mapped status uses the registry's 404. `markFailed` persists only
   the message string, so run-failure records do not carry `reasons`/`denials` (unchanged from 0.8.x).
 - **Status:** CONFIRMED (2026-10-18) — Opus verifier PASS; reversible.
+
+## P3 (v0.9.0) — inline policy-deny reasons come from `MACPError.details`; the free text is the 0.8.x fallback
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 3)
+- **Assumed:** a v0.9.0 inline `POLICY_DENIED` frame carries the bare `PolicyDenied` display string as `message` and
+  JSON `{reasons, denials}` as `details` (`macp-runtime/src/server.rs:239` `stream_inline_error`). The normalizer
+  takes `reasons` from `details` when it parses to a non-empty list, keeps `denials` whenever present, and otherwise
+  falls back to parsing the message (the 0.8.x `"PolicyDenied: a; b"` shape). An empty `bytes` field (proto-loader
+  decodes unset as an empty Buffer) is dropped at the provider.
+- **Note:** inline frames go back only to the stream that sent the envelope (`server.rs:705`), and the CP's
+  subscriber never sends, so no live runtime can deliver one to the CP; this path is covered by unit tests only.
+- **Status:** CONFIRMED (2026-10-18) — read from runtime source; reversible.
+
+## P3 (v0.9.0) — compacted-history detection: inline `INVALID_ENVELOPE` + sentence; code 9 only when uncoded
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 3)
+- **Assumed / chose:** a v0.9.0 inline frame is a gap only when `code === 'INVALID_ENVELOPE'` **and** its message
+  matches `COMPACTED_HISTORY_RE` (that code is shared with ordinary envelope validation). A terminal gRPC code 9
+  counts as a gap only when it carries no `macp-error-code` (a coded code-9 is a named refusal, e.g.
+  `REGISTRY_READ_ONLY`); the sentence regex still matches on any terminal error. The 0.8.x inline shape (sentence as
+  both code and message, 0.8.8 `server.rs:614-629`) keeps working; no supported runtime sends the terminal shape, which
+  stays for a proxy or other non-runtime peer only: no released runtime
+  sends it (v0.5–0.8 build the status but deliver it inline; v0.4 has no compaction notice).
+- **Status:** CONFIRMED (2026-10-18) — read from `server.rs:584-590`; reversible.
+
+## P3 (v0.9.0) — STREAM_LAGGED on a watch stream: immediate reconnect at most once per 5s; WatchSignals loses the gap
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 3)
+- **Assumed / chose:** a coded `STREAM_LAGGED` end of `WatchSessions`/`WatchSignals` reconnects with no delay, but
+  only if the previous immediate reconnect was ≥ 5s ago (otherwise the normal 5s back-off), so a consumer that
+  is persistently too slow cannot hot-loop the runtime. Each lag increments
+  `macp_watch_stream_lagged_total{stream}`. `WatchSessions` initial sync re-emits every registry session with its state;
+  tracked `running`/`suspended` runs are reconciled to it (runs still binding are left to RunExecutor), which recovers a
+  lifecycle event dropped in the lag (the runtime's `watch_sync.rs:40-42` asks lagged clients to reconcile); `WatchSignals` has no replay, so signals in the gap are lost — accepted and documented
+  (TROUBLESHOOTING), not recovered.
+- **Status:** CONFIRMED (2026-10-18) — matches the plan; reversible (one constant, `src/runs/watch-reconnect.ts`).
