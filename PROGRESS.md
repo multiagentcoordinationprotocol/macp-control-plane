@@ -1629,3 +1629,4 @@ Owner decisions (asked 2026-10-18, before P2): **Q1** `REGISTRY_READ_ONLY` stays
 | Phase | Status | Rounds | Verifier | Commit |
 |---|---|---|---|---|
 | P1 — harness + tested range → 0.9.0 | DONE | 1 | Opus (simple phase, gated solo because P2 is complex) — PASS | see git log |
+| P2 — map runtime errors by `macp-error-code` | DONE | 1 | Opus (complex: public HTTP error contract) — PASS; minor items: DECISIONS entry added, compacted-history code-9 narrowing moved to P3 | see git log |

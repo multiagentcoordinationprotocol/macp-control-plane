@@ -490,3 +490,26 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   "still marks the marker finalized/aborted without throwing when finalizeRun itself fails
   (nested fallback)" — mutation-tested (fails when the nested attempt is removed). Decided
   by Opus (reversible, low blast radius); logged in `DECISIONS.md`.
+
+## P2 (v0.9.0) — the circuit breaker treats coded refusals as expected, but still counts transport statuses even when coded
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 2)
+- **Assumed:** A status carrying `macp-error-code` is a deliberate application-level refusal (the runtime
+  answered), so it must not trip the breaker — except `INTERNAL_ERROR` and `STREAM_LAGGED`, and any status on
+  `UNAVAILABLE`/`DEADLINE_EXCEEDED`/`INTERNAL`/`UNKNOWN`/`DATA_LOSS`, which count regardless of a code
+  (`rust-runtime.provider.ts` `BREAKER_COUNTED_MACP_CODES` / `BREAKER_COUNTED_GRPC_STATUSES`). Consequence: a
+  misconfigured bearer on 0.9.0 (coded `UNAUTHENTICATED`) fails every call but never opens the breaker; on 0.8.x
+  (uncoded) it still does.
+- **Chose:** this split rather than "coded ⇒ expected" outright, so a proxy or runtime that stamps a code on a
+  transport failure still trips the breaker. Uncoded errors keep today's behaviour exactly.
+- **Blast radius if wrong:** breaker opens too late (auth misconfig keeps hitting the runtime — bounded by the
+  per-call deadline and the request rate) or too early (a new transport-class code). Reversible: two constant sets.
+- **Status:** CONFIRMED (2026-10-18) — matches the plan's AC6/AC7; Opus verifier PASS.
+
+## P2 (v0.9.0) — runtime error detail lives on `AppException.metadata`, not `.details`
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 2) words the carried fields as `details.macpErrorCode`.
+- **Assumed / chose:** `AppException` already exposes extra fields as `.metadata` (serialised as `metadata` in the
+  HTTP error body), so `macpErrorCode`, `grpcCode`, `reasons`, `denials` go there; inventing a second `details`
+  field would split the error body shape. `UNKNOWN_POLICY_VERSION` keeps its existing 400 as a *run-failure
+  reason* (`handleExecuteError`) while a directly-mapped status uses the registry's 404. `markFailed` persists only
+  the message string, so run-failure records do not carry `reasons`/`denials` (unchanged from 0.8.x).
+- **Status:** CONFIRMED (2026-10-18) — Opus verifier PASS; reversible.

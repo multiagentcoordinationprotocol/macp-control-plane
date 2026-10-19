@@ -13,6 +13,7 @@ import {
   RuntimeRegisterPolicyResultDto,
   RuntimeUnregisterPolicyResultDto
 } from '../dto/runtime-responses.dto';
+import { macpErrorCodeOf } from '../runtime/grpc-helpers';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { DEFAULT_POLICY_SCHEMA_VERSION, POLICY_SCHEMA_VERSIONS, PolicySchemaVersion } from '../contracts/runtime';
 
@@ -130,6 +131,10 @@ export class RuntimeController {
     } catch (err) {
       throw this.translateRegistryError(err);
     }
+    // An in-band rejection (`RegisterPolicyResponse{ok:false,error}`) has no code
+    // field and no gRPC status — the `INVALID_POLICY_DEFINITION` prefix on the
+    // error string *is* the runtime's contract for it (macp-policy registry.rs,
+    // still so on v0.9.0); only a status-level failure carries `macp-error-code`.
     if (!result.ok && result.error?.includes('INVALID_POLICY_DEFINITION')) {
       throw new BadRequestException(result.error);
     }
@@ -190,7 +195,7 @@ export class RuntimeController {
    * advertised `policyRegistry.registerPolicy === false` (a read-only registry
    * backed by `MACP_POLICIES_DIR`, runtime v0.5.0). Only trips when the provider
    * exposes cached capabilities; otherwise the error path below still catches
-   * the runtime's FAILED_PRECONDITION rejection.
+   * the runtime's `REGISTRY_READ_ONLY` rejection (FAILED_PRECONDITION on 0.8.x).
    */
   private assertRegistryWritable(provider: ReturnType<RuntimeProviderRegistry['get']>): void {
     const capabilities = (provider as { capabilities?: { policyRegistry?: { registerPolicy?: boolean } } })
@@ -202,13 +207,33 @@ export class RuntimeController {
 
   /**
    * Translate a thrown runtime error into a read-only 405 when it is the
-   * runtime's FAILED_PRECONDITION rejection for a read-only registry; otherwise
-   * rethrow unchanged so the global filter maps it as before.
+   * runtime's read-only-registry rejection; otherwise rethrow unchanged so the
+   * global filter maps it as before.
+   *
+   * Runtime v0.9.0 tags it `macp-error-code = REGISTRY_READ_ONLY` (S13), which
+   * is authoritative regardless of message text. The FAILED_PRECONDITION +
+   * message-text heuristic is the fallback for a 0.8.x runtime, which sent no
+   * code. The 405 (not the registry's 409) is deliberate — see
+   * `MACP_ERROR_REGISTRY` in `runtime/grpc-helpers.ts`.
    */
   private translateRegistryError(err: unknown): unknown {
-    const grpcCode = (err as { details?: { grpcCode?: number } })?.details?.grpcCode;
     const message = err instanceof Error ? err.message : String(err);
-    // grpc FAILED_PRECONDITION === 9.
+    const code = macpErrorCodeOf(err);
+    if (code === 'REGISTRY_READ_ONLY') {
+      return new AppException(
+        ErrorCode.REGISTRY_READ_ONLY,
+        message || 'runtime policy registry is read-only and cannot be modified',
+        HttpStatus.METHOD_NOT_ALLOWED,
+        err instanceof AppException ? err.metadata : { macpErrorCode: code }
+      );
+    }
+    if (code !== undefined) return err;
+    // `mapGrpcError` records the original status as `metadata.grpcCode`; a raw
+    // ServiceError carries it as `.code`. grpc FAILED_PRECONDITION === 9.
+    const grpcCode =
+      err instanceof AppException
+        ? (err.metadata?.grpcCode as number | undefined)
+        : (err as { code?: unknown } | null)?.code;
     if ((grpcCode === 9 || err instanceof AppException) && this.isReadOnlyMessage(message)) {
       return this.readOnlyException(message);
     }
@@ -218,7 +243,9 @@ export class RuntimeController {
   private isReadOnlyMessage(message?: string): boolean {
     if (!message) return false;
     const m = message.toLowerCase();
-    return m.includes('read-only') || m.includes('read only') || m.includes('macp_policies_dir') || m.includes('immutable');
+    return (
+      m.includes('read-only') || m.includes('read only') || m.includes('macp_policies_dir') || m.includes('immutable')
+    );
   }
 
   private readOnlyException(message?: string): AppException {

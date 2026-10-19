@@ -42,6 +42,28 @@ services:
       timeout: 3s
       retries: 5
 
+  # Same release, booted with MACP_POLICIES_DIR so its policy registry is
+  # read-only over the wire (register_policy=false, RFC-MACP-0012 §9). Proves the
+  # coded REGISTRY_READ_ONLY → 405 path against a real runtime
+  # (test/integration/policy-registry-readonly.integration.spec.ts). Separate
+  # service so the main runtime's registry stays writable for every other spec.
+  runtime-readonly:
+    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.9.0
+    ports:
+      - '50052:50051'
+    environment:
+      MACP_ALLOW_INSECURE: '1'
+      MACP_POLICIES_DIR: /policies
+    volumes:
+      - ./test/fixtures/policies-readonly:/policies:ro
+    profiles:
+      - with-runtime
+    healthcheck:
+      test: ['CMD-SHELL', 'timeout 2 bash -c "</dev/tcp/127.0.0.1/50051"']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   # Local runtime-development variant: builds from the sibling ../macp-runtime
   # checkout instead of pulling the release. Started with:
   #   docker compose -f docker-compose.test.yml --profile with-runtime-src up runtime-src

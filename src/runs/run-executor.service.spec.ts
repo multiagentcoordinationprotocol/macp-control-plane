@@ -693,6 +693,95 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       );
     });
 
+    it('retries a coded SESSION_NOT_FOUND from GetSession (runtime v0.9.0)', async () => {
+      const handle = makeReadOnlyHandle();
+      mockProvider.subscribeSession.mockReturnValue(handle);
+      mockProvider.getSession
+        .mockRejectedValueOnce(
+          new AppException(ErrorCode.NOT_FOUND, 'not found', 404, { grpcCode: 5, macpErrorCode: 'SESSION_NOT_FOUND' })
+        )
+        .mockResolvedValueOnce({ sessionId: 'sess-ok', state: 'SESSION_STATE_OPEN', mode: 'decision', initiator: 'a' });
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-coded-nf' }));
+
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 300));
+
+      expect(mockRunManager.markFailed).not.toHaveBeenCalled();
+      expect(mockRunManager.bindSession).toHaveBeenCalled();
+    });
+
+    it.each([
+      ['UNKNOWN_POLICY_VERSION', ErrorCode.UNKNOWN_POLICY_VERSION],
+      ['AGENT_NOT_FOUND', ErrorCode.NOT_FOUND]
+    ])('fails fast on a coded %s NOT_FOUND from GetSession (no 60s retry)', async (macpErrorCode, errorCode) => {
+      mockProvider.getSession.mockRejectedValue(
+        new AppException(errorCode, 'nope', 404, { grpcCode: 5, macpErrorCode })
+      );
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: `run-${macpErrorCode}` }));
+
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 150));
+
+      expect(mockProvider.getSession).toHaveBeenCalledTimes(1);
+      expect(mockRunManager.markFailed).toHaveBeenCalledWith(
+        `run-${macpErrorCode}`,
+        expect.objectContaining({
+          errorCode: macpErrorCode === 'UNKNOWN_POLICY_VERSION' ? ErrorCode.UNKNOWN_POLICY_VERSION : ErrorCode.NOT_FOUND
+        })
+      );
+    });
+
+    // handleExecuteError: runtime v0.9.0 codes come from metadata, not message text.
+    it.each([
+      ['UNKNOWN_POLICY_VERSION', ErrorCode.UNKNOWN_POLICY_VERSION, 400],
+      ['POLICY_DENIED', ErrorCode.POLICY_DENIED, 403],
+      ['INVALID_POLICY_DEFINITION', ErrorCode.INVALID_POLICY_DEFINITION, 400],
+      ['SESSION_ALREADY_EXISTS', ErrorCode.SESSION_ALREADY_EXISTS, 409]
+    ])(
+      'classifies a coded %s failure by metadata even when the message omits it',
+      async (macpErrorCode, errorCode, http) => {
+        mockProvider.initialize.mockRejectedValue(
+          new AppException(ErrorCode.CONFLICT, 'opaque runtime text', 409, { grpcCode: 9, macpErrorCode })
+        );
+        mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-coded' }));
+
+        await service.launch(makeRunDescriptor());
+        await new Promise((r) => setTimeout(r, 50));
+
+        const failure = mockRunManager.markFailed.mock.calls.find((c: unknown[]) => c[0] === 'run-coded')?.[1];
+        expect(failure).toBeInstanceOf(AppException);
+        expect(failure.errorCode).toBe(errorCode);
+        expect(failure.getStatus()).toBe(http);
+      }
+    );
+
+    it('does not reclassify a coded failure whose message merely mentions another code', async () => {
+      const err = new AppException(ErrorCode.RATE_LIMITED, 'POLICY_DENIED appears in this text', 429, {
+        grpcCode: 8,
+        macpErrorCode: 'RATE_LIMITED'
+      });
+      mockProvider.initialize.mockRejectedValue(err);
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-rl' }));
+
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(mockRunManager.markFailed).toHaveBeenCalledWith('run-rl', err);
+    });
+
+    it('keeps the 0.8.x message-text fallback for an uncoded failure', async () => {
+      mockProvider.initialize.mockRejectedValue(new Error('SessionAlreadyExists: sess-1'));
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-legacy' }));
+
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(mockRunManager.markFailed).toHaveBeenCalledWith(
+        'run-legacy',
+        expect.objectContaining({ errorCode: ErrorCode.SESSION_ALREADY_EXISTS })
+      );
+    });
+
     it('still fails fast on a non-NOT_FOUND AppException from GetSession (no retry)', async () => {
       mockProvider.getSession.mockRejectedValue(new AppException(ErrorCode.MODE_NOT_SUPPORTED, 'mode mismatch', 400));
       mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-mode-mismatch' }));

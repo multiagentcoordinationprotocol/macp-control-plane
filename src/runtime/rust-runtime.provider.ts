@@ -42,7 +42,9 @@ import {
   fromEnvelope,
   fromSessionMetadata,
   getClientMethod,
-  mapGrpcError
+  macpErrorCodeOf,
+  mapGrpcError,
+  readMacpErrorCode
 } from './grpc-helpers';
 import { RuntimeCredentialResolverService } from './runtime-credential-resolver.service';
 
@@ -54,9 +56,10 @@ export interface GrpcCallOptions {
  * Bound on how many times `listSessions()` will halve `pageSize` and retry the
  * same page after a RESOURCE_EXHAUSTED response, across the *whole* drain (not
  * per page). Every retry goes through `unary()` → the shared `CircuitBreaker`,
- * and `isExpectedError` does NOT exempt RESOURCE_EXHAUSTED (see the comment on
- * `onModuleInit()` — exempting it would silence a genuine backpressure/
- * rate-limit signal for every other caller, not just this drain). With the
+ * and `isExpectedError` does NOT exempt an *uncoded* RESOURCE_EXHAUSTED — the
+ * only kind that reaches the halving ladder (a coded RATE_LIMITED/STREAM_LAGGED
+ * propagates, and a coded PAYLOAD_TOO_LARGE is a refusal the breaker already
+ * exempts; see `buildCircuitBreaker()`). With the
  * default `runtimeCircuitBreakerThreshold` of 5, a ladder of N consecutive
  * RESOURCE_EXHAUSTED responses trips the breaker on attempt 5 — poisoning
  * unrelated calls (GetSession polling, /runtime/health, cancel/suspend/resume)
@@ -70,6 +73,18 @@ export interface GrpcCallOptions {
  * self-inflicted trip.
  */
 const MAX_PAGE_SIZE_HALVINGS = 2;
+
+/** Registry codes that report runtime-side trouble, so still count toward opening the breaker. */
+const BREAKER_COUNTED_MACP_CODES: ReadonlySet<string> = new Set(['INTERNAL_ERROR', 'STREAM_LAGGED']);
+
+/** Transport-class statuses that always count toward the breaker, coded or not. */
+const BREAKER_COUNTED_GRPC_STATUSES: ReadonlySet<number> = new Set([
+  grpc.status.UNAVAILABLE,
+  grpc.status.DEADLINE_EXCEEDED,
+  grpc.status.INTERNAL,
+  grpc.status.UNKNOWN,
+  grpc.status.DATA_LOSS
+]);
 
 /**
  * Observer-only Rust runtime provider.
@@ -177,7 +192,19 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnMod
       instrumentation: this.instrumentation,
       isExpectedError: (error: unknown) => {
         const code = (error as grpc.ServiceError)?.code;
-        return code === grpc.status.NOT_FOUND || code === grpc.status.PERMISSION_DENIED;
+        if (code === grpc.status.NOT_FOUND || code === grpc.status.PERMISSION_DENIED) return true;
+        // Runtime v0.9.0 codes every status it emits (S13). A coded refusal is a
+        // healthy runtime answering a bad request (INVALID_POLICY_DEFINITION,
+        // SESSION_NOT_OPEN, RATE_LIMITED, …), so it must not open the breaker.
+        // INTERNAL_ERROR and STREAM_LAGGED are the runtime reporting its own
+        // trouble, and a transport-class status is never a refusal, so those
+        // still count. Uncoded statuses (0.8.x, client-side) keep the rule above.
+        const macpErrorCode = readMacpErrorCode(error);
+        return (
+          macpErrorCode !== undefined &&
+          !BREAKER_COUNTED_MACP_CODES.has(macpErrorCode) &&
+          !BREAKER_COUNTED_GRPC_STATUSES.has(code)
+        );
       }
     });
   }
@@ -225,7 +252,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnMod
     // Cache the runtime's advertised capabilities so callers (e.g. the policy
     // controller) can short-circuit a write against a read-only registry
     // (MACP_POLICIES_DIR, runtime v0.5.0) instead of round-tripping to a
-    // FAILED_PRECONDITION.
+    // `REGISTRY_READ_ONLY` refusal.
     if (capabilities) this.capabilities = capabilities;
 
     return {
@@ -621,11 +648,20 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnMod
     return this.finishListSessions(snapshots, false, pagesFetched, `exceeded ${maxPages} pages`);
   }
 
-  /** Narrow a thrown listSessions() error down to a RESOURCE_EXHAUSTED gRPC status. */
+  /**
+   * Narrow a thrown listSessions() error down to a RESOURCE_EXHAUSTED that
+   * means "this page was too large": an uncoded one (a 0.8.x runtime, or
+   * grpc-js refusing an oversized response client-side) or a coded
+   * `PAYLOAD_TOO_LARGE`. Runtime v0.9.0 also sends RESOURCE_EXHAUSTED for
+   * `RATE_LIMITED` and `STREAM_LAGGED` (S13), which a smaller page cannot fix —
+   * those propagate as their mapped `AppException`.
+   */
   private isResourceExhausted(error: unknown): boolean {
     const grpcCode =
       (error as { metadata?: { grpcCode?: number } })?.metadata?.grpcCode ?? (error as { code?: number })?.code;
-    return grpcCode === grpc.status.RESOURCE_EXHAUSTED;
+    if (grpcCode !== grpc.status.RESOURCE_EXHAUSTED) return false;
+    const macpErrorCode = macpErrorCodeOf(error);
+    return macpErrorCode === undefined || macpErrorCode === 'PAYLOAD_TOO_LARGE';
   }
 
   /**

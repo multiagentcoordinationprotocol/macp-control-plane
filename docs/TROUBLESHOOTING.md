@@ -262,4 +262,12 @@ Some behavior (e.g. `ListSessions` pagination across a large session store) can 
 | `POLICY_DENIED` | 403 | Commitment rejected by policy rules |
 | `INVALID_POLICY_DEFINITION` | 400 | Policy rules fail schema validation |
 | `SESSION_ALREADY_EXISTS` | 409 | Duplicate session start attempt |
+| `REGISTRY_READ_ONLY` | 405 | Policy registry is file-loaded (`MACP_POLICIES_DIR`); register/unregister disabled. Deliberately 405, not the runtime registry's 409 |
+| `PAYLOAD_TOO_LARGE` | 413 | Runtime refused an oversized payload (runtime v0.9.0+; was 429). `listSessions()` still halves its page on this code |
+| `STREAM_LAGGED` | 503 | Runtime dropped a stream consumer that fell behind (runtime v0.9.0+; retryable) |
+| `SESSION_NOT_OPEN` | 409 | Session exists but is not open for the operation (runtime v0.9.0+; was generic `CONFLICT`) |
+| `INVALID_ENVELOPE` | 400 | Runtime rejected a malformed envelope (runtime v0.9.0+) |
+| `DUPLICATE_MESSAGE` | 409 | Runtime rejected a duplicate message id (runtime v0.9.0+) |
 | `INTERNAL_ERROR` | 500 | Unexpected server error |
+
+On runtime v0.9.0+ the code comes from the status's `macp-error-code` metadata and is echoed as `metadata.macpErrorCode` in the error body; `metadata.grpcCode` is always present. A `POLICY_DENIED` body carries `metadata.reasons` and (v0.9.0+) `metadata.denials`. A coded refusal (anything but `INTERNAL_ERROR`/`STREAM_LAGGED` or a transport status) does not count toward opening the circuit breaker.

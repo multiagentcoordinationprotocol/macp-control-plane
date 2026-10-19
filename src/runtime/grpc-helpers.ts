@@ -28,30 +28,54 @@ export function fromEnvelope(envelope: any): RuntimeEnvelope {
   };
 }
 
-/** gRPC ack → internal `RuntimeAck`. Extracts structured `reasons` from details bytes or trailing metadata. */
+/**
+ * A runtime policy denial's structured detail — the JSON the runtime writes to
+ * `MACPError.details` and the `macp-error-details-bin` status trailer:
+ * `{ reasons: string[], denials: [{ code, message, participants }] }`
+ * (macp-runtime `error_details_bytes`; `denials` since v0.9.0).
+ */
+export interface PolicyDenyDetails {
+  reasons?: string[];
+  denials?: Array<Record<string, unknown>>;
+}
+
+/**
+ * Decode policy-deny detail bytes. Returns `undefined` for empty/absent bytes,
+ * malformed JSON or a non-object — never throws, because the detail is
+ * best-effort enrichment of an error that is already being reported.
+ */
+export function parsePolicyDenyDetails(bytes: Buffer | Uint8Array | string | undefined): PolicyDenyDetails | undefined {
+  if (bytes === undefined || bytes === null || bytes.length === 0) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes as Uint8Array).toString('utf-8'));
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return undefined;
+  const { reasons, denials } = parsed as { reasons?: unknown; denials?: unknown };
+  const out: PolicyDenyDetails = {};
+  if (Array.isArray(reasons) && reasons.every((r) => typeof r === 'string')) out.reasons = reasons;
+  if (Array.isArray(denials) && denials.every((d) => typeof d === 'object' && d !== null)) {
+    out.denials = denials as Array<Record<string, unknown>>;
+  }
+  return out.reasons || out.denials ? out : undefined;
+}
+
+/** First `macp-error-details-bin` trailer value, if any. */
+function detailsBinFrom(metadata: grpc.Metadata | undefined): Buffer | undefined {
+  const values = metadata?.get?.('macp-error-details-bin');
+  return values && values.length > 0 ? Buffer.from(values[0] as Buffer) : undefined;
+}
+
+/**
+ * gRPC ack → internal `RuntimeAck`. Extracts structured `reasons`/`denials`
+ * from the error's details bytes, falling back to the trailing metadata.
+ */
 export function fromAck(ack: any, trailingMetadata?: grpc.Metadata): RuntimeAck {
-  let reasons: string[] | undefined;
-
-  if (ack?.error?.details) {
-    try {
-      const parsed = JSON.parse(Buffer.from(ack.error.details).toString('utf-8'));
-      if (Array.isArray(parsed.reasons)) reasons = parsed.reasons;
-    } catch {
-      /* ignore parse errors */
-    }
-  }
-
-  if (!reasons && trailingMetadata) {
-    const detailsBin = trailingMetadata.get('macp-error-details-bin');
-    if (detailsBin && detailsBin.length > 0) {
-      try {
-        const parsed = JSON.parse(Buffer.from(detailsBin[0] as Buffer).toString('utf-8'));
-        if (Array.isArray(parsed.reasons)) reasons = parsed.reasons;
-      } catch {
-        /* ignore parse errors */
-      }
-    }
-  }
+  const deny = parsePolicyDenyDetails(ack?.error?.details) ?? parsePolicyDenyDetails(detailsBinFrom(trailingMetadata));
+  const reasons = deny?.reasons;
+  const denials = deny?.denials;
 
   return {
     ok: Boolean(ack?.ok),
@@ -68,7 +92,8 @@ export function fromAck(ack: any, trailingMetadata?: grpc.Metadata): RuntimeAck 
           messageId: ack.error.messageId,
           detailsBase64: ack.error.details ? Buffer.from(ack.error.details).toString('base64') : undefined,
           details: ack.error.details ? Buffer.from(ack.error.details) : undefined,
-          reasons
+          reasons,
+          ...(denials ? { denials } : {})
         }
       : undefined
   };
@@ -136,6 +161,11 @@ export function getClientMethod(client: any, method: string): Function {
  * gRPC failure (PERMISSION_DENIED, NOT_FOUND, …) fell through the global
  * exception filter as an opaque HTTP 500, hiding the real cause from clients.
  * Any code not listed here maps to 500 (see `mapGrpcError`).
+ *
+ * Since runtime v0.9.0 this is only the fallback: a status carrying a known
+ * `macp-error-code` maps through `MACP_ERROR_REGISTRY` instead, because several
+ * registry codes share one gRPC status (S13). A 0.8.x runtime sends no code, so
+ * this table is what keeps it working unchanged.
  */
 const GRPC_STATUS_TO_HTTP: Partial<Record<grpc.status, { http: HttpStatus; code: ErrorCode }>> = {
   [grpc.status.INVALID_ARGUMENT]: { http: HttpStatus.BAD_REQUEST, code: ErrorCode.VALIDATION_ERROR },
@@ -152,9 +182,74 @@ const GRPC_STATUS_TO_HTTP: Partial<Record<grpc.status, { http: HttpStatus; code:
   [grpc.status.DEADLINE_EXCEEDED]: { http: HttpStatus.GATEWAY_TIMEOUT, code: ErrorCode.RUNTIME_TIMEOUT }
 };
 
+/**
+ * The MACP error-codes registry (spec `registries/error-codes.md` @ `60262b8`,
+ * mirrored from macp-runtime `crates/macp-core/src/error.rs`
+ * `ERROR_CODE_REGISTRY`): registry code → the HTTP status + `ErrorCode` the
+ * control plane surfaces. The HTTP column is the registry's, with one
+ * deliberate divergence: `REGISTRY_READ_ONLY` stays **405** (registry: 409),
+ * the status the control plane has returned since runtime v0.5.0 — clients
+ * branch on `errorCode`, and 405 states "this method is disabled on this
+ * deployment" (owner decision, 2026-10-18; see `DECISIONS.md`).
+ */
+export const MACP_ERROR_REGISTRY: Readonly<Record<string, { http: HttpStatus; code: ErrorCode }>> = {
+  UNAUTHENTICATED: { http: HttpStatus.UNAUTHORIZED, code: ErrorCode.UNAUTHENTICATED },
+  FORBIDDEN: { http: HttpStatus.FORBIDDEN, code: ErrorCode.FORBIDDEN },
+  SESSION_NOT_FOUND: { http: HttpStatus.NOT_FOUND, code: ErrorCode.NOT_FOUND },
+  SESSION_NOT_OPEN: { http: HttpStatus.CONFLICT, code: ErrorCode.SESSION_NOT_OPEN },
+  DUPLICATE_MESSAGE: { http: HttpStatus.CONFLICT, code: ErrorCode.DUPLICATE_MESSAGE },
+  SESSION_ALREADY_EXISTS: { http: HttpStatus.CONFLICT, code: ErrorCode.SESSION_ALREADY_EXISTS },
+  INVALID_ENVELOPE: { http: HttpStatus.BAD_REQUEST, code: ErrorCode.INVALID_ENVELOPE },
+  UNSUPPORTED_PROTOCOL_VERSION: { http: HttpStatus.BAD_REQUEST, code: ErrorCode.VALIDATION_ERROR },
+  MODE_NOT_SUPPORTED: { http: HttpStatus.BAD_REQUEST, code: ErrorCode.MODE_NOT_SUPPORTED },
+  PAYLOAD_TOO_LARGE: { http: HttpStatus.PAYLOAD_TOO_LARGE, code: ErrorCode.PAYLOAD_TOO_LARGE },
+  RATE_LIMITED: { http: HttpStatus.TOO_MANY_REQUESTS, code: ErrorCode.RATE_LIMITED },
+  INVALID_SESSION_ID: { http: HttpStatus.BAD_REQUEST, code: ErrorCode.INVALID_SESSION_ID },
+  INTERNAL_ERROR: { http: HttpStatus.INTERNAL_SERVER_ERROR, code: ErrorCode.INTERNAL_ERROR },
+  UNKNOWN_POLICY_VERSION: { http: HttpStatus.NOT_FOUND, code: ErrorCode.UNKNOWN_POLICY_VERSION },
+  POLICY_DENIED: { http: HttpStatus.FORBIDDEN, code: ErrorCode.POLICY_DENIED },
+  INVALID_POLICY_DEFINITION: { http: HttpStatus.BAD_REQUEST, code: ErrorCode.INVALID_POLICY_DEFINITION },
+  REGISTRY_READ_ONLY: { http: HttpStatus.METHOD_NOT_ALLOWED, code: ErrorCode.REGISTRY_READ_ONLY },
+  INVALID_REQUEST: { http: HttpStatus.BAD_REQUEST, code: ErrorCode.VALIDATION_ERROR },
+  // Retryable: the runtime dropped this consumer for falling behind (S13; owner decision Q2).
+  STREAM_LAGGED: { http: HttpStatus.SERVICE_UNAVAILABLE, code: ErrorCode.STREAM_LAGGED },
+  AGENT_NOT_FOUND: { http: HttpStatus.NOT_FOUND, code: ErrorCode.NOT_FOUND },
+  // Deprecated registry alias for FORBIDDEN; the runtime never emits it.
+  UNAUTHORIZED: { http: HttpStatus.FORBIDDEN, code: ErrorCode.FORBIDDEN }
+};
+
 /** Narrow an unknown thrown value to a gRPC `ServiceError` (numeric `.code`). */
 function isGrpcServiceError(error: unknown): error is grpc.ServiceError {
   return typeof error === 'object' && error !== null && typeof (error as { code?: unknown }).code === 'number';
+}
+
+/**
+ * The registry code a runtime >= v0.9.0 attaches to every gRPC status as
+ * `macp-error-code` ASCII metadata (S13). `undefined` for a 0.8.x runtime, a
+ * non-runtime failure (e.g. a client-side deadline) or anything not a gRPC
+ * error.
+ */
+export function readMacpErrorCode(error: unknown): string | undefined {
+  const metadata = (error as { metadata?: unknown } | null | undefined)?.metadata;
+  if (!(metadata instanceof grpc.Metadata)) return undefined;
+  const value = metadata.get('macp-error-code')[0];
+  if (value === undefined) return undefined;
+  const code = (typeof value === 'string' ? value : Buffer.from(value).toString('ascii')).trim();
+  return code.length > 0 ? code : undefined;
+}
+
+/**
+ * The registry code carried by an error after `mapGrpcError` translated it
+ * (`AppException.metadata.macpErrorCode`), or read straight off a raw
+ * `ServiceError`. The one accessor downstream branches (run-failure
+ * classification, poll retry, read-only registry, page-size back-off) use.
+ */
+export function macpErrorCodeOf(error: unknown): string | undefined {
+  if (error instanceof AppException) {
+    const code = error.metadata?.macpErrorCode;
+    return typeof code === 'string' ? code : undefined;
+  }
+  return readMacpErrorCode(error);
 }
 
 /**
@@ -164,15 +259,33 @@ function isGrpcServiceError(error: unknown): error is grpc.ServiceError {
  * filter handle it as a 500). The runtime's human-readable `details` string is
  * preserved as the message — e.g. "only the session initiator or
  * policy-delegated roles can suspend".
+ *
+ * A status carrying a known `macp-error-code` maps by that code
+ * (`MACP_ERROR_REGISTRY`); an absent or unrecognised code falls back to the
+ * status-only table. `metadata` always holds `grpcCode`, plus `macpErrorCode`
+ * whenever the runtime sent one, plus the decoded `reasons`/`denials` for a
+ * `POLICY_DENIED`.
  */
 export function mapGrpcError(error: unknown, method: string): AppException | undefined {
   if (!isGrpcServiceError(error)) return undefined;
   const message = error.details || error.message || `runtime ${method} failed`;
-  const mapping = GRPC_STATUS_TO_HTTP[error.code as grpc.status];
-  if (!mapping) {
-    return new AppException(ErrorCode.INTERNAL_ERROR, message, HttpStatus.INTERNAL_SERVER_ERROR, {
-      grpcCode: error.code
-    });
+  const macpErrorCode = readMacpErrorCode(error);
+  const metadata: Record<string, unknown> = { grpcCode: error.code };
+  if (macpErrorCode) metadata.macpErrorCode = macpErrorCode;
+
+  const mapping =
+    (macpErrorCode && Object.prototype.hasOwnProperty.call(MACP_ERROR_REGISTRY, macpErrorCode)
+      ? MACP_ERROR_REGISTRY[macpErrorCode]
+      : undefined) ?? GRPC_STATUS_TO_HTTP[error.code as grpc.status];
+
+  if (macpErrorCode === 'POLICY_DENIED') {
+    const deny = parsePolicyDenyDetails(detailsBinFrom(error.metadata));
+    if (deny?.reasons) metadata.reasons = deny.reasons;
+    if (deny?.denials) metadata.denials = deny.denials;
   }
-  return new AppException(mapping.code, message, mapping.http, { grpcCode: error.code });
+
+  if (!mapping) {
+    return new AppException(ErrorCode.INTERNAL_ERROR, message, HttpStatus.INTERNAL_SERVER_ERROR, metadata);
+  }
+  return new AppException(mapping.code, message, mapping.http, metadata);
 }

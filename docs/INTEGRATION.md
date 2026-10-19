@@ -119,10 +119,15 @@ session it did not start is rejected.
 
 **How this actually surfaces — fails fast, and correctly.**
 `RunExecutorService.pollForOpenSession` retries `NOT_FOUND` (the initiator has
-not called `SessionStart` yet) until `SESSION_POLL_TIMEOUT_MS`. Every gRPC failure is
+not called `SessionStart` yet) until `SESSION_POLL_TIMEOUT_MS` — on runtime v0.9.0+
+only a `NOT_FOUND` coded `SESSION_NOT_FOUND` (or an uncoded one from 0.8.x);
+`UNKNOWN_POLICY_VERSION`/`AGENT_NOT_FOUND` share the status but fail fast. Every gRPC failure is
 mapped through `mapGrpcError` (`src/runtime/grpc-helpers.ts`) before the poll loop
 sees it, and `PERMISSION_DENIED` becomes `AppException(ErrorCode.FORBIDDEN, …, 403)`
-carrying the runtime's `details` string verbatim. Any non-`NOT_FOUND` `AppException`
+carrying the runtime's `details` string verbatim. On runtime v0.9.0+ the mapping
+keys on the status's `macp-error-code` first, so a policy refusal that shares
+`PERMISSION_DENIED` (`POLICY_DENIED`) is distinguished from an auth refusal
+(`FORBIDDEN`) by its code, not by message text. Any non-`NOT_FOUND` `AppException`
 is rethrown on the *first* `GetSession` attempt, so a mis-scoped credential is not
 retried to the timeout: `handleExecuteError` → `markFailed`, and the run's failure
 reason is the runtime's own message (e.g. `FORBIDDEN: session access denied`), not a

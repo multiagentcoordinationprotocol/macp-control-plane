@@ -31,6 +31,8 @@ export interface RuntimeAck {
     detailsBase64?: string;
     details?: Buffer | Uint8Array;
     reasons?: string[];
+    // Structured per-rule denials `{code, message, participants}` (runtime v0.9.0+).
+    denials?: Array<Record<string, unknown>>;
   };
 }
 

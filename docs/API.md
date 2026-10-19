@@ -530,10 +530,21 @@ Unregister a governance policy. Returns: `{ "ok": true }`
 
 | Error Code | HTTP | When |
 |------------|------|------|
-| `UNKNOWN_POLICY_VERSION` | 400 | `policy_version` not found in registry at session start |
-| `POLICY_DENIED` | 403 | Commitment rejected because policy rules not satisfied (includes structured `reasons` array) |
+| `UNKNOWN_POLICY_VERSION` | 400 / 404 | `policy_version` not found in registry — 400 as a run-failure reason at session start; 404 when a runtime call (e.g. `GET /runtime/policies/:id`) returns the coded status directly |
+| `POLICY_DENIED` | 403 | Commitment rejected because policy rules not satisfied. `metadata.reasons` (string array) and, on runtime v0.9.0+, `metadata.denials` (`[{code, message, participants}]`) carry the runtime's structured detail |
 | `INVALID_POLICY_DEFINITION` | 400 | Policy rules fail schema validation at registration, or policy mode doesn't match session mode at SessionStart |
 | `SESSION_ALREADY_EXISTS` | 409 | Duplicate session start attempt |
+| `REGISTRY_READ_ONLY` | 405 | `POST`/`DELETE /runtime/policies` against a runtime whose registry is file-loaded (`MACP_POLICIES_DIR`). The runtime registry lists 409; the control plane keeps 405 deliberately — branch on `errorCode` |
+
+**How runtime errors map (runtime v0.9.0+).** Every runtime gRPC status carries a
+`macp-error-code`; the control plane maps by that code, not by the gRPC status
+(several codes share one status). The error body's `metadata` always holds
+`grpcCode`, plus `macpErrorCode` whenever the runtime sent one. Codes beyond the
+table above that a client may now see: `PAYLOAD_TOO_LARGE` 413 (was 429),
+`STREAM_LAGGED` 503 (retryable; was 429), `SESSION_NOT_OPEN` 409,
+`INVALID_ENVELOPE` 400, `DUPLICATE_MESSAGE` 409. A commit-time policy denial is now
+`errorCode: POLICY_DENIED` rather than `FORBIDDEN`, at the same 403. Against a
+0.8.x runtime (no code) the status-only mapping is unchanged.
 
 ### Policy Projection
 
