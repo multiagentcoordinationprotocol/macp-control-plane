@@ -850,7 +850,10 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnMod
               const rawEnvelope = chunk.envelope ?? chunk.signal ?? chunk;
               if (!rawEnvelope || (!rawEnvelope.messageType && !rawEnvelope.message_type)) return;
               const envelope = fromEnvelope(rawEnvelope);
-              buffer.push({ kind: 'stream-envelope', receivedAt, envelope });
+              // Plain proto3 bool (no presence): absent on a pre-0.9.0 runtime decodes as `false`,
+              // which is the proto's documented safe reading. Only a literal `true` counts.
+              const senderAuthenticated = (chunk.senderAuthenticated ?? chunk.sender_authenticated) === true;
+              buffer.push({ kind: 'stream-envelope', receivedAt, envelope, senderAuthenticated });
               notify();
             });
 

@@ -59,6 +59,13 @@ export interface RawRuntimeEvent {
     /** `MACPError.details` — JSON `{reasons, denials}` for POLICY_DENIED (runtime v0.9.0+); empty before. */
     details?: Uint8Array;
   };
+  /**
+   * `WatchSignalsResponse.sender_authenticated` (proto 0.1.11, runtime v0.9.0) — set only on events
+   * from `watchSignals()`. `true` only when the runtime authenticated the sender (RFC-MACP-0004 §3);
+   * the field is a plain proto3 bool, so a runtime that predates it (0.8.x) or runs in dev mode
+   * reports `false`. Consumers MUST NOT let a `false` signal influence operational decisions.
+   */
+  senderAuthenticated?: boolean;
 }
 
 export interface RuntimeInitializeRequest {

@@ -584,3 +584,21 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
 - **Verified:** live parity spec (22/22): mixed `acceptance` accepted by both, a mistyped `implicit_accept_timeout_ms`
   refused by both, a misspelt nested key refused by both.
 - **Status:** CONFIRMED (2026-10-18) — read from runtime source and verified live; reversible.
+
+## P5 (v0.9.0) — `senderAuthenticated` is always a boolean; "absent on 0.8.x" cannot be observed
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 5, AC2 diverges)
+- **Assumed / chose:** AC2 ("a response without the field yields an event without it") is not achievable:
+  `WatchSignalsResponse.sender_authenticated` is a plain proto3 `bool` (proto 0.1.11 `core.proto:417`, no `optional`),
+  so a 0.8.x runtime's omitted field and an explicit `false` are the same bytes, and the provider loader's
+  `defaults: true` materialises it as `false`. The proto comment defines that reading as intentional ("a runtime that
+  predates this field … reports every Signal as unauthenticated: the safe direction"). The CP therefore carries
+  `senderAuthenticated: <bool>` on every WatchSignals event, only a literal `true` counting (`=== true`), and omits it
+  only on envelopes that did not come from WatchSignals. Rejected: gating on the Initialize-reported runtime version to
+  synthesise "absent" — `SignalConsumerService` can open WatchSignals before any Initialize, version strings are not
+  guaranteed parseable, and a runtime upgraded behind the same address would be mis-labelled until re-initialize; it
+  would also contradict the proto's own semantics. The console must treat only `true` as verified (it would have to
+  treat absent as unverified anyway, so the two-state contract loses no safety).
+- **Verified:** `test/integration/signal-auth-live.integration.spec.ts` against runtime v0.9.0 — with an auth-tokens
+  file the persisted `signal.emitted` carries `true`; in dev-mode auth (port 50052, no tokens) it carries `false`.
+  Runtime emission read from `src/server.rs:1407-1421` (`security.authenticates_senders()`, per server).
+- **Status:** CONFIRMED (2026-10-18) — reversible (additive field; switching to a version gate later is a local change).

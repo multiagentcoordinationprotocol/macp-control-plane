@@ -324,7 +324,10 @@ export class ProjectionService {
               sourceParticipantId: (event.data.sender as string | undefined) ?? undefined,
               ts: event.ts,
               confidence: safeOptionalNumber(decodedPayload?.confidence),
-              payload: decodedPayload
+              payload: decodedPayload,
+              ...(typeof event.data.senderAuthenticated === 'boolean' && {
+                senderAuthenticated: event.data.senderAuthenticated
+              })
             }
           ].slice(-200);
           break;

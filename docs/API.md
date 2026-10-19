@@ -106,7 +106,7 @@ Fetch the projected run state for UI rendering. Returns:
   "participants": [{ "participantId", "role", "status", "latestSummary" }],
   "graph": { "nodes": [...], "edges": [...] },
   "decision": { "current": { "action", "confidence", "finalized", "proposalId", "outcomePositive", "prompt", "resolvedAt", "resolvedBy", "proposals": [...] } },
-  "signals": { "signals": [{ "id", "name", "severity", "sourceParticipantId", "confidence", "payload", "acknowledgedAt", "acknowledgedBy" }] },
+  "signals": { "signals": [{ "id", "name", "severity", "sourceParticipantId", "confidence", "payload", "senderAuthenticated", "acknowledgedAt", "acknowledgedBy" }] },
   "progress": { "entries": [{ "participantId", "percentage", "message" }] },
   "timeline": { "latestSeq", "totalEvents", "recent": [...] },
   "trace": { "traceId", "spanCount", "linkedArtifacts" },
@@ -141,7 +141,7 @@ On run terminal transition (`completed` / `failed` / `cancelled`), non-terminal 
 - `null` — decision is finalized but no outcome could be inferred (e.g. `step_up`).
 - `undefined` — decision has not resolved yet (run still in flight).
 
-**Signal entry fields:** each entry carries `payload` (the decoded signal payload), and once a matching `signal.acknowledged` event arrives, `acknowledgedAt` + `acknowledgedBy` are populated in place.
+**Signal entry fields:** each entry carries `payload` (the decoded signal payload) and `senderAuthenticated` (copied from `signal.emitted`, see [Canonical Event Types](#canonical-event-types); absent on projections built before runtime v0.9.0 support), and once a matching `signal.acknowledged` event arrives, `acknowledgedAt` + `acknowledgedBy` are populated in place.
 
 ### `GET /runs/:id/events`
 List canonical events for a single run.
@@ -709,7 +709,7 @@ Canonical event types are exported as `CANONICAL_EVENT_TYPES` from `src/contract
 | `message.sent` | Outbound message acknowledged |
 | `message.received` | Inbound message from runtime |
 | `message.send_failed` | Message delivery failed |
-| `signal.emitted` | Ambient signal broadcast |
+| `signal.emitted` | Ambient signal broadcast. Carries `data.senderAuthenticated` (see below) |
 | `signal.acknowledged` | Signal ack — annotates matching `signal.emitted` entry with `acknowledgedAt` / `acknowledgedBy` |
 | `proposal.created` | New proposal/request submitted (Proposal, CounterProposal, ApprovalRequest, TaskRequest, HandoffOffer) |
 | `proposal.updated` | Evaluation/vote/counter received (Evaluation, Vote, Accept, Reject, Withdraw, Approve, Abstain, TaskAccept, etc.) |
@@ -723,6 +723,23 @@ Canonical event types are exported as `CANONICAL_EVENT_TYPES` from `src/contract
 | `policy.commitment.evaluated` | Commitment evaluated against policy rules |
 | `policy.denied` | Commitment rejected by policy (includes reasons) |
 | `llm.call.completed` | Synthesized by the control plane when an agent message carries LLM metadata (§3.3) |
+
+**`signal.emitted.data.senderAuthenticated`** (boolean) is copied from the runtime's
+`WatchSignalsResponse.sender_authenticated` (proto 0.1.11, runtime v0.9.0) on every signal the
+control plane ingests from `WatchSignals`:
+
+- `true`: the runtime authenticated the sender per RFC-MACP-0004 §3, through a configured
+  auth-tokens file or a JWT issuer, and derived `sender` from that credential.
+- `false`: the runtime runs in dev-mode auth, where the bearer value is taken as the sender. A
+  runtime that predates the field (0.8.x) also reports `false`: the field is a plain proto3
+  `bool`, so "not sent" and `false` cannot be told apart on the wire.
+
+The value is per runtime, not per signal. The same flag also appears on the other events built from that
+envelope: `message.received`, `llm.call.completed` (so token and cost metrics can be read
+with it), and the ambient `progress.reported`. It is also on the projected signal entry. Treat only `true` as verified. RFC-MACP-0006 §3.4
+requires that a signal with `false` must not influence operational decisions. The field is
+omitted only on a `Signal` envelope that arrives some other way than `WatchSignals`, and the
+runtime does not deliver signals that way.
 
 ### Decision Lifecycle — event payload shapes (§3.2)
 

@@ -330,6 +330,78 @@ describe('RustRuntimeProvider.subscribeSession — passive-subscribe frame (RFC-
     expect(envelopeEvents[0].envelope?.sessionId).toBe('');
     expect(envelopeEvents[0].envelope?.messageId).toBe('sig-1');
   });
+
+  describe('senderAuthenticated (WatchSignalsResponse.sender_authenticated, runtime v0.9.0)', () => {
+    const signalChunk = (extra: Record<string, unknown>) => ({
+      envelope: {
+        sessionId: '',
+        messageType: 'Signal',
+        messageId: 'sig-a',
+        sender: 'agent-1',
+        payload: Buffer.from(''),
+        timestampUnixMs: 1
+      },
+      ...extra
+    });
+
+    async function deliver(...chunks: Record<string, unknown>[]) {
+      const signalStream = makeFakeStream();
+      const { provider } = makeProvider(
+        () => makeFakeStream(),
+        {},
+        () => signalStream
+      );
+      const collected = drain(provider.watchSignals());
+      await new Promise((r) => setImmediate(r));
+      for (const chunk of chunks) signalStream.emit('data', chunk);
+      signalStream.emit('end');
+      return (await collected).filter((e) => e.kind === 'stream-envelope');
+    }
+
+    it('carries true and false through unchanged', async () => {
+      const events = await deliver(
+        signalChunk({ senderAuthenticated: true }),
+        signalChunk({ senderAuthenticated: false })
+      );
+      expect(events.map((e) => e.senderAuthenticated)).toEqual([true, false]);
+    });
+
+    it('reads a missing field as false — the proto3 default a pre-0.9.0 runtime decodes to', async () => {
+      const [event] = await deliver(signalChunk({}));
+      expect(event.senderAuthenticated).toBe(false);
+    });
+
+    it('counts only a literal true (keepCase decode and non-boolean values)', async () => {
+      const events = await deliver(
+        signalChunk({ sender_authenticated: true }),
+        signalChunk({ senderAuthenticated: 'true' }),
+        signalChunk({ senderAuthenticated: 1 })
+      );
+      expect(events.map((e) => e.senderAuthenticated)).toEqual([true, false, false]);
+    });
+  });
+
+  it('does not set senderAuthenticated on StreamSession envelopes', async () => {
+    const sessionStream = makeFakeStream();
+    const { provider } = makeProvider(() => sessionStream);
+    const handle = provider.subscribeSession({ runId: 'run-1', runtimeSessionId: 'sess-1' });
+    await new Promise((r) => setImmediate(r));
+    sessionStream.emit('data', {
+      envelope: {
+        sessionId: 'sess-1',
+        messageType: 'Signal',
+        messageId: 'm-1',
+        sender: 'agent-1',
+        payload: Buffer.from(''),
+        timestampUnixMs: 1
+      },
+      senderAuthenticated: true
+    });
+    sessionStream.emit('end');
+    const events = (await drain(handle.events)).filter((e) => e.kind === 'stream-envelope');
+    expect(events).toHaveLength(1);
+    expect(events[0]).not.toHaveProperty('senderAuthenticated');
+  });
 });
 
 describe('RustRuntimeProvider.subscribeSession — StreamSessionResponse oneof discriminant (`response`) decode', () => {

@@ -176,6 +176,62 @@ describe('EventNormalizerService', () => {
       expect(participantSeen).toBeUndefined();
     });
 
+    it.each([true, false])('carries senderAuthenticated=%s from a WatchSignals event onto signal.emitted', (value) => {
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope: makeEnvelope({ messageType: 'Signal' }),
+        senderAuthenticated: value
+      };
+      const events = service.normalize('run-1', raw, makeContext({ knownParticipants: new Set(['agent-a']) }));
+      expect(events.find((e) => e.type === 'signal.emitted')!.data.senderAuthenticated).toBe(value);
+    });
+
+    it('leaves senderAuthenticated off signal.emitted when the raw event has none', () => {
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope: makeEnvelope({ messageType: 'Signal' })
+      };
+      const events = service.normalize('run-1', raw, makeContext({ knownParticipants: new Set(['agent-a']) }));
+      expect(events.find((e) => e.type === 'signal.emitted')!.data).not.toHaveProperty('senderAuthenticated');
+    });
+
+    it('carries senderAuthenticated onto every event attributing a WatchSignals envelope to its sender', () => {
+      protoRegistry.decodeKnown.mockReturnValue({
+        signalType: 'llm.call.completed',
+        metadata: { tokenUsage: { promptTokens: 5, completionTokens: 1, model: 'claude-3-haiku' } }
+      });
+      const signal: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope: makeEnvelope({ messageType: 'Signal', sender: 'agent-new' }),
+        senderAuthenticated: false
+      };
+      const signalEvents = service.normalize('run-1', signal, makeContext());
+      for (const type of ['message.received', 'signal.emitted', 'llm.call.completed']) {
+        expect(signalEvents.find((e) => e.type === type)!.data.senderAuthenticated).toBe(false);
+      }
+      // participant.seen records an identity, not content, so it stays unmarked.
+      expect(signalEvents.find((e) => e.type === 'participant.seen')!.data).not.toHaveProperty('senderAuthenticated');
+
+      protoRegistry.decodeKnown.mockReturnValue({ progress: 0.5, message: 'half' });
+      const progress: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope: makeEnvelope({ messageType: 'Progress' }),
+        senderAuthenticated: true
+      };
+      const progressEvents = service.normalize(
+        'run-1',
+        progress,
+        makeContext({ knownParticipants: new Set(['agent-a']) })
+      );
+      const reported = progressEvents.filter((e) => e.type === 'progress.reported');
+      expect(reported.length).toBeGreaterThan(0);
+      for (const e of reported) expect(e.data.senderAuthenticated).toBe(true);
+    });
+
     it('should produce signal.emitted derived event for Signal messageType', () => {
       const envelope = makeEnvelope({ messageType: 'Signal' });
       const raw: RawRuntimeEvent = {

@@ -181,6 +181,10 @@ export class EventNormalizerService implements EventNormalizer {
     const envelope = rawEvent.envelope;
     const decoded = this.protoRegistry.decodeKnown(envelope.mode, envelope.messageType, envelope.payload);
     const canonical: CanonicalEvent[] = [];
+    // WatchSignals' `sender_authenticated`, copied onto every event that attributes this envelope's
+    // content to its sender. StreamSession-delivered envelopes leave it unset.
+    const senderAuth =
+      rawEvent.senderAuthenticated !== undefined ? { senderAuthenticated: rawEvent.senderAuthenticated } : {};
 
     if (!ctx.knownParticipants.has(envelope.sender)) {
       ctx.knownParticipants.add(envelope.sender);
@@ -212,6 +216,7 @@ export class EventNormalizerService implements EventNormalizer {
           messageId: envelope.messageId,
           sessionId: envelope.sessionId,
           sender: envelope.sender,
+          ...senderAuth,
           payload: decoded ?? { payloadBase64: envelope.payload.toString('base64') }
         },
         envelope.messageType
@@ -235,6 +240,7 @@ export class EventNormalizerService implements EventNormalizer {
             messageId: envelope.messageId,
             sessionId: envelope.sessionId,
             sender: envelope.sender,
+            ...senderAuth,
             decodedPayload: redacted
           },
           envelope.messageType
@@ -257,7 +263,8 @@ export class EventNormalizerService implements EventNormalizer {
             sessionId: envelope.sessionId,
             sender: envelope.sender,
             decodedPayload: decoded,
-            payloadTypeName: this.protoRegistry.getKnownTypeName(envelope.mode, envelope.messageType)
+            payloadTypeName: this.protoRegistry.getKnownTypeName(envelope.mode, envelope.messageType),
+            ...senderAuth
           },
           envelope.messageType
         )
@@ -398,6 +405,7 @@ export class EventNormalizerService implements EventNormalizer {
             modeName: envelope.mode,
             messageType: envelope.messageType,
             sender: envelope.sender,
+            ...senderAuth,
             decodedPayload: {
               percentage: progressPayload.progress != null ? Number(progressPayload.progress) * 100 : undefined,
               message: String(progressPayload.message ?? ''),
