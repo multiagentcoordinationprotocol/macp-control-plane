@@ -105,14 +105,23 @@ export class RuntimeController {
       }
     }
 
-    // Closed-set check (after the targeted checks above so their messages win) against the spec's rule schemas: the runtime ignores unknown keys,
-    // so a typo like `veto_threshhold` would otherwise register silently and never apply.
-    const ruleErrors = this.policyRulesValidator.validateRules(body.mode, body.rules);
+    const provider = this.runtimeRegistry.get(this.config.runtimeKind);
+
+    // Closed-set check (after the targeted checks above so their messages win) against the spec's rule schemas.
+    // Runtime v0.9.0 refuses the same unknown keys at admission (proposal S1); this fails fast with the key path,
+    // and is the only check against a 0.8.x runtime, which ignored a typo like `veto_threshhold` silently.
+    // Vendor-extension keys are gated on the runtime's advertised `ruleExtensions` when it has initialized.
+    const ruleErrors = this.policyRulesValidator.validateRules(body.mode, body.rules, {
+      ruleExtensions: this.advertisedRuleExtensions(provider)
+    });
     if (ruleErrors.length > 0) {
-      throw new BadRequestException(`invalid policy rules for mode "${body.mode}": ${ruleErrors.join('; ')}`);
+      // Same leading code as the runtime's in-band refusal below, so a caller branching on it sees one
+      // contract whichever layer refused.
+      throw new BadRequestException(
+        `INVALID_POLICY_DEFINITION: invalid policy rules for mode "${body.mode}": ${ruleErrors.join('; ')}`
+      );
     }
 
-    const provider = this.runtimeRegistry.get(this.config.runtimeKind);
     // Short-circuit when the runtime advertised a read-only policy registry
     // (MACP_POLICIES_DIR) via its Initialize capabilities — clearer than letting
     // the write fail with a generic 409.
@@ -197,6 +206,20 @@ export class RuntimeController {
    * exposes cached capabilities; otherwise the error path below still catches
    * the runtime's `REGISTRY_READ_ONLY` rejection (FAILED_PRECONDITION on 0.8.x).
    */
+  /**
+   * The vendor-extension keys the runtime advertised in Initialize
+   * (`PolicyRegistryCapability.rule_extensions`), or `undefined` when no
+   * capabilities are cached yet — the validator then leaves the name check to
+   * the runtime's admission, which is authoritative either way.
+   */
+  private advertisedRuleExtensions(
+    provider: ReturnType<RuntimeProviderRegistry['get']>
+  ): readonly string[] | undefined {
+    const extensions = (provider as { capabilities?: { policyRegistry?: { ruleExtensions?: unknown } } }).capabilities
+      ?.policyRegistry?.ruleExtensions;
+    return Array.isArray(extensions) && extensions.every((key) => typeof key === 'string') ? extensions : undefined;
+  }
+
   private assertRegistryWritable(provider: ReturnType<RuntimeProviderRegistry['get']>): void {
     const capabilities = (provider as { capabilities?: { policyRegistry?: { registerPolicy?: boolean } } })
       .capabilities;

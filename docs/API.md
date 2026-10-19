@@ -68,8 +68,10 @@ uses its own Bearer token to call `SessionStart(sessionId)` on the runtime. The
 control-plane's async observer loop polls `GetSession(sessionId)` until `OPEN`,
 then subscribes read-only.
 
-If the caller provides `session.sessionId`, the control-plane validates it (must
-be UUID v4/v7 or base64url 22+ chars) and echoes it back in the response.
+If the caller provides `session.sessionId`, the control-plane validates it with the
+runtime's own rule (at most 128 bytes; a canonical lowercase UUID v4/v7, or a base64url
+token of 22+ chars — an uppercase or other-version UUID is refused, not treated as a
+token) and echoes it back in the response.
 
 ### `POST /runs/validate`
 Preflight validation without creating a run.
@@ -508,10 +510,21 @@ range-strict: there is no `ValidationPipe` on this endpoint's body, so a JSON st
 string for an int32 field) and succeeded — it is now rejected the same as an out-of-range number.
 
 `rules` is also validated against the spec's closed-set rule schemas for the policy's `mode` (decision,
-quorum, proposal, task, handoff; `"*"` accepts a key that is legitimate under any of them). An unknown or
-misspelled key (e.g. `veto_threshhold`) or a wrong shape returns `400` naming the path and key, because the
-runtime itself ignores unknown keys. Keys starting with `_` or `$` are treated as annotations. Extension modes
-with no vendored schema are not validated.
+quorum, proposal, task, handoff; as in the runtime, a `"*"` policy's keys are closed over the union of all
+five modes' keys at every level, e.g. `acceptance: {criterion, implicit_accept_timeout_ms}`, and each value
+must satisfy every mode that defines its key), vendored from
+spec commit `60262b8` (`src/policy/schemas/README.md`). An unknown or misspelled key (e.g. `veto_threshhold`)
+or a wrong shape returns `400` naming the path and key. Runtime v0.9.0 refuses the same keys at admission
+(proposal S1, also a `400` via `INVALID_POLICY_DEFINITION`); this pre-check fails fast, and is the only check
+against a 0.8.x runtime, which ignored unknown keys.
+
+- Keys starting with `_` or `$` are annotations: accepted at every level, never validated.
+- A top-level vendor-extension key (`^x-[a-z0-9]+(\.[a-z0-9-]+)+$`, e.g. `x-com.example`) must hold a JSON
+  object, and must be one of the runtime's advertised `policyRegistry.ruleExtensions` (Initialize capability)
+  — otherwise `400` naming the key. Until the control plane has initialized against the runtime, the name check
+  is left to the runtime. A well-formed `x-` key below the top level is refused; a malformed one (e.g. `x-seam`)
+  is an ordinary unknown key.
+- Extension modes (no vendored schema) are opaque: neither the control plane nor the runtime checks their keys.
 
 Returns: `{ "ok": true }` or `{ "ok": false, "error": "..." }`
 

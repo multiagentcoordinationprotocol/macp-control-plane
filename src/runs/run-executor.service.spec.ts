@@ -1,5 +1,5 @@
 import { BadRequestException, Logger } from '@nestjs/common';
-import { RunExecutorService } from './run-executor.service';
+import { isValidSessionId, MAX_SESSION_ID_BYTES, RunExecutorService, SESSION_ID_RULE } from './run-executor.service';
 import { RunManagerService } from './run-manager.service';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
@@ -302,7 +302,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
         })
       );
       expect(result.valid).toBe(false);
-      expect(result.errors).toContain('session.sessionId must be a UUID v4/v7 or base64url 22+ chars');
+      expect(result.errors).toContain(SESSION_ID_RULE);
     });
 
     it('returns warning (not error) when runtime is unreachable', async () => {
@@ -319,6 +319,43 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
   // =========================================================================
   // launch()
   // =========================================================================
+  // =========================================================================
+  // isValidSessionId() — runtime parity (session.rs:762-796, v0.9.0)
+  // =========================================================================
+  describe('isValidSessionId', () => {
+    const v4 = '123e4567-e89b-42d3-a456-426614174000';
+    const v7 = '01890a5d-ac96-774b-bcce-b302099a8057';
+
+    it.each([
+      ['a lowercase v4 UUID', v4],
+      ['a lowercase v7 UUID', v7],
+      [
+        'a v4 UUID with a non-RFC variant nibble (the runtime does not check it)',
+        '123e4567-e89b-42d3-0456-426614174000'
+      ],
+      ['a 22-char base64url token', 'abcdefghijklmnopqrstuv'],
+      ['a 36-char base64url token containing "-" that is not a UUID', 'abcDEF012345_678-9ABCdefGHIjklMNOpqr'],
+      ['a 128-byte base64url token', 'a'.repeat(MAX_SESSION_ID_BYTES)]
+    ])('accepts %s', (_label, id) => {
+      expect(isValidSessionId(id)).toBe(true);
+    });
+
+    it.each([
+      ['an empty string', ''],
+      ['an uppercase v4 UUID (no fall-through to base64url)', v4.toUpperCase()],
+      ['a mixed-case v4 UUID', '123E4567-e89b-42d3-a456-426614174000'],
+      ['a v1 UUID', '123e4567-e89b-12d3-a456-426614174000'],
+      ['a v5 UUID', '123e4567-e89b-52d3-a456-426614174000'],
+      ['a nil UUID', '00000000-0000-0000-0000-000000000000'],
+      ['a 129-byte base64url token', 'a'.repeat(MAX_SESSION_ID_BYTES + 1)],
+      ['a 21-char token', 'abcdefghijklmnopqrstu'],
+      ['a token with a non-base64url char', 'abcdefghijklmnopqrstu.'],
+      ['a 22+ char non-ASCII string', 'é'.repeat(22)]
+    ])('refuses %s', (_label, id) => {
+      expect(isValidSessionId(id)).toBe(false);
+    });
+  });
+
   describe('launch', () => {
     it('allocates a sessionId when one is not provided and passes it to createRun', async () => {
       const expectedRun = makeRun({ status: 'queued' });
@@ -373,7 +410,7 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
           }
         })
       );
-      expect(result.errors).not.toContain('session.sessionId must be a UUID v4/v7 or base64url 22+ chars');
+      expect(result.errors).not.toContain(SESSION_ID_RULE);
     });
 
     it('rejects invalid sessionId', async () => {

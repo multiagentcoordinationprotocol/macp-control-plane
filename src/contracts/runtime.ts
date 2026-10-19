@@ -222,7 +222,13 @@ export interface RuntimeCapabilities {
   manifest?: { getManifest?: boolean };
   modeRegistry?: { listModes?: boolean; listChanged?: boolean };
   roots?: { listRoots?: boolean; listChanged?: boolean };
-  policyRegistry?: { registerPolicy?: boolean; listPolicies?: boolean; listChanged?: boolean };
+  policyRegistry?: {
+    registerPolicy?: boolean;
+    listPolicies?: boolean;
+    listChanged?: boolean;
+    /** Vendor rule extensions (`x-…` keys) the runtime implements (proto 0.1.11; `[]` from a 0.8.x runtime). */
+    ruleExtensions?: string[];
+  };
 }
 
 /**

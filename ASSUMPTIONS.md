@@ -546,3 +546,41 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   lifecycle event dropped in the lag (the runtime's `watch_sync.rs:40-42` asks lagged clients to reconcile); `WatchSignals` has no replay, so signals in the gap are lost — accepted and documented
   (TROUBLESHOOTING), not recovered.
 - **Status:** CONFIRMED (2026-10-18) — matches the plan; reversible (one constant, `src/runs/watch-reconnect.ts`).
+
+## P4 (v0.9.0) — vendor-extension name gate trusts the advertised `ruleExtensions`; unknown capabilities skip it
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 4)
+- **Assumed / chose:** `POST /runtime/policies` refuses a top-level `x-` key whose name is not in the runtime's
+  Initialize-advertised `policyRegistry.ruleExtensions` (proto 0.1.11 `PolicyRegistryCapability.rule_extensions`,
+  documented as advisory), with the runtime's own refusal text verbatim (macp-policy `registry.rs`
+  `validate_rule_keys`; macp-core `policy/keys.rs` `KeyViolation`). When the provider has not initialized, or the value
+  is not a string array, the name check is skipped and left to the runtime; the shape checks (object value, top level
+  only) always run. A 0.8.x runtime decodes the field to `[]` (the provider loader uses `defaults: true`), so against
+  0.8.x every `x-` key is refused — the same as the CP's closed-set check did before this change, so not a regression,
+  though 0.8.x itself would have ignored the key. The CP pre-check now leads with `INVALID_POLICY_DEFINITION:` like the
+  runtime's in-band refusal, so both layers present one 400 contract.
+- **Verified:** `test/integration/admission-parity-live.integration.spec.ts` — runtime v0.9.0 and the CP validator agree
+  on 13 rule sets (misspelt / undefined keys, `x-` unadvertised / non-object / nested / malformed, annotations at every
+  level, `"*"`), with `INVALID_POLICY_DEFINITION` on every refusal.
+- **Status:** CONFIRMED (2026-10-18) — read from runtime source and verified live; reversible.
+
+## P4 (v0.9.0) — `isValidSessionId` mirrors `validate_session_id_for_acceptance` exactly
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 4)
+- **Assumed / chose:** refuse empty or > 128 bytes (`Buffer.byteLength`); a 36-char id containing `-` that parses as a
+  UUID must be lowercase version 4 or 7 (no base64url fall-through; the variant nibble is not checked, as in the runtime);
+  otherwise accept `^[A-Za-z0-9_-]{22,}$` (`crates/macp-core/src/session.rs:762-796`).
+- **Verified:** the live spec above sends `SessionStart` under 8 ids (lowercase v4/v7, 22-char, 128-byte, uppercase v4,
+  v1, 129-byte, 21-char); the runtime's verdict equals `isValidSessionId` on each.
+- **Status:** CONFIRMED (2026-10-18) — verified live; reversible.
+
+## P4 (v0.9.0) — `"*"` rule keys are closed over the union of the five modes; values must pass every owning mode
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 4, verifier round 1 gap)
+- **Assumed / chose:** a `"*"` policy is key-checked like the runtime's `closed_key_violation(rules,
+  rule_shape_for_mode("*"))` (macp-core `policy/keys.rs`): a key is defined at a level if any mode's schema defines it
+  there, walked recursively, with the shapes derived from the vendored schemas (`additionalProperties: false` = closed).
+  Values are then checked per top-level key against EVERY owning mode's schema with unknown-key errors dropped, mirroring
+  `validate_rules_for_mode("*")`'s parse into each mode's struct. Safe because the five schemas define their shared keys
+  (`commitment.authority`/`designated_roles`) identically. Before this, `acceptance: {criterion,
+  implicit_accept_timeout_ms}` was refused by the CP and accepted by the runtime.
+- **Verified:** live parity spec (22/22): mixed `acceptance` accepted by both, a mistyped `implicit_accept_timeout_ms`
+  refused by both, a misspelt nested key refused by both.
+- **Status:** CONFIRMED (2026-10-18) — read from runtime source and verified live; reversible.

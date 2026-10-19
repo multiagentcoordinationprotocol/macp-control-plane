@@ -51,7 +51,7 @@ export interface RunDescriptor {
   session: {
     /**
      * Optional caller-allocated session id. Must satisfy runtime validator
-     * (UUID v4/v7 or base64url 22+ chars). When omitted, control-plane allocates a UUID v4.
+     * (at most 128 bytes; lowercase UUID v4/v7 or base64url 22+ chars). When omitted, control-plane allocates a UUID v4.
      */
     sessionId?: string;
     modeName: string;

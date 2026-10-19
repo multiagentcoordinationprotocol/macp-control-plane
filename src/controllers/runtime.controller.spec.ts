@@ -204,7 +204,12 @@ describe('RuntimeController', () => {
         { objection_handling: { veto_threshhold: 1 } },
         'veto_threshhold'
       ],
-      ['an unknown key under the wildcard mode', '*', { not_a_rule_key: 1 }, 'unrecognized key "not_a_rule_key"']
+      [
+        'an unknown key under the wildcard mode',
+        '*',
+        { not_a_rule_key: 1 },
+        'rules.not_a_rule_key is not a defined key'
+      ]
     ])('rejects %s without calling the runtime', async (_label, mode, rules, expected) => {
       await expect(
         controller.registerPolicy({ policyId: 'policy.typo', mode, description: 'typo', rules, schemaVersion: 3 })
@@ -231,6 +236,59 @@ describe('RuntimeController', () => {
       });
 
       expect(mockProvider.registerPolicy).toHaveBeenCalledTimes(2);
+    });
+
+    describe('annotation and vendor-extension keys (runtime v0.9.0 admission parity)', () => {
+      const register = (rules: Record<string, unknown>, mode = 'macp.mode.decision.v1') =>
+        controller.registerPolicy({ policyId: 'policy.s1', mode, description: 's1', rules, schemaVersion: 3 });
+
+      it('forwards a wildcard policy carrying annotation keys', async () => {
+        mockProvider.registerPolicy.mockResolvedValue({ ok: true });
+        await register({ _note: 'why', voting: { $comment: 'x', algorithm: 'majority' } }, '*');
+        expect(mockProvider.registerPolicy).toHaveBeenCalledTimes(1);
+      });
+
+      it('refuses an x- key the runtime did not advertise, naming it, without calling the runtime', async () => {
+        mockProvider.capabilities = { policyRegistry: { registerPolicy: true, ruleExtensions: [] } };
+        await expect(register({ 'x-com.example': {} })).rejects.toThrow(
+          /^INVALID_POLICY_DEFINITION: invalid policy rules for mode "macp\.mode\.decision\.v1": rules\.x-com\.example is not a defined key/
+        );
+        mockProvider.capabilities = { policyRegistry: { registerPolicy: true, ruleExtensions: ['x-org.other'] } };
+        await expect(register({ 'x-com.example': {} })).rejects.toThrow(
+          `this runtime implements no vendor extension 'x-com.example' (implemented: ["x-org.other"])`
+        );
+        expect(mockProvider.registerPolicy).not.toHaveBeenCalled();
+      });
+
+      it('forwards an advertised x- key', async () => {
+        mockProvider.capabilities = { policyRegistry: { registerPolicy: true, ruleExtensions: ['x-com.example'] } };
+        mockProvider.registerPolicy.mockResolvedValue({ ok: true });
+        await register({ 'x-com.example': { require_reason: true } });
+        expect(mockProvider.registerPolicy).toHaveBeenCalledTimes(1);
+      });
+
+      it.each([
+        ['no capabilities cached', undefined],
+        ['a malformed ruleExtensions value', { policyRegistry: { ruleExtensions: 'x-com.example' } }]
+      ])('leaves the extension name to the runtime with %s', async (_label, capabilities) => {
+        mockProvider.capabilities = capabilities;
+        mockProvider.registerPolicy.mockResolvedValue({ ok: true });
+        await register({ 'x-com.example': {} });
+        expect(mockProvider.registerPolicy).toHaveBeenCalledTimes(1);
+      });
+
+      it.each([
+        ['a non-object x- value', { 'x-com.example': 1 }, 'a vendor-extension value must be a JSON object'],
+        [
+          'a nested x- key',
+          { voting: { algorithm: 'majority', 'x-com.example': {} } },
+          'vendor-extension keys are legal only at the top level of rules'
+        ]
+      ])('refuses %s even when the runtime advertises the key', async (_label, rules, expected) => {
+        mockProvider.capabilities = { policyRegistry: { registerPolicy: true, ruleExtensions: ['x-com.example'] } };
+        await expect(register(rules)).rejects.toThrow(expected);
+        expect(mockProvider.registerPolicy).not.toHaveBeenCalled();
+      });
     });
 
     it('returns error result for non-validation errors', async () => {
