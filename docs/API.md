@@ -673,7 +673,8 @@ non-atomic reads, a run bound mid-drain can also transiently appear as a false p
 point-in-time signal, not a transactional snapshot. A runtime error propagates through
 unchanged: `503 SERVICE_UNAVAILABLE` (`RUNTIME_UNAVAILABLE` when unreachable,
 `CIRCUIT_BREAKER_OPEN` when the breaker is open), `504` (`RUNTIME_TIMEOUT`), `429`
-(`RATE_LIMITED`), `401` (`UNAUTHENTICATED`), or `500` for an unrecognized error — never a
+(`RATE_LIMITED`, an uncoded `RESOURCE_EXHAUSTED` from a pre-0.9.0 runtime; a coded one maps per
+[the runtime error-code mapping](#policy-errors)), `401` (`UNAUTHENTICATED`), or `500` for an unrecognized error — never a
 silently-empty diff.
 
 ---

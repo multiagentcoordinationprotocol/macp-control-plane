@@ -258,7 +258,7 @@ Some behavior (e.g. `ListSessions` pagination across a large session store) can 
 | `MODE_NOT_SUPPORTED` | 400 | Runtime does not support requested mode |
 | `VALIDATION_ERROR` | 400 | Request body validation failed |
 | `INVALID_SESSION_ID` | 400 | Session ID not recognized by runtime |
-| `UNKNOWN_POLICY_VERSION` | 400 | Policy version not found in registry |
+| `UNKNOWN_POLICY_VERSION` | 400 / 404 | Policy version not found in registry (400 as a session-start failure reason; 404 from a direct runtime call such as `GET /runtime/policies/:id`) |
 | `POLICY_DENIED` | 403 | Commitment rejected by policy rules |
 | `INVALID_POLICY_DEFINITION` | 400 | Policy rules fail schema validation |
 | `SESSION_ALREADY_EXISTS` | 409 | Duplicate session start attempt |
