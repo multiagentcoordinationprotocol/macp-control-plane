@@ -7,6 +7,7 @@ import { RunEventService } from '../events/run-event.service';
 import { StreamHubService } from '../events/stream-hub.service';
 import { AppException } from '../errors/app-exception';
 import { ErrorCode } from '../errors/error-codes';
+import { macpErrorCodeOf } from '../runtime/grpc-helpers';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { TraceService } from '../telemetry/trace.service';
@@ -16,18 +17,33 @@ import { RuntimeSessionRepository } from '../storage/runtime-session.repository'
 import { RunManagerService } from './run-manager.service';
 import { StreamConsumerService } from './stream-consumer.service';
 
+/** RFC-MACP-0004 §11.2 / runtime `MAX_SESSION_ID_BYTES`: longer ids are refused at SessionStart. */
+export const MAX_SESSION_ID_BYTES = 128;
+
+export const SESSION_ID_RULE =
+  'session.sessionId must be at most 128 bytes and a lowercase UUID v4/v7 or a base64url token of 22+ chars';
+
+/** 8-4-4-4-12 hex, either case — the only 36-char-with-`-` form `uuid::Uuid::parse_str` accepts. */
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BASE64URL_TOKEN = /^[A-Za-z0-9_-]{22,}$/;
+
 /**
- * Validates a sessionId against the runtime's session validator (UUID v4/v7 or base64url 22+).
- * Mirrors `crates/macp-core/src/session.rs`. Runtime v0.5.0 accepts 36-char
- * base64url session ids containing `-`; this permissive pattern already agrees.
+ * Mirrors the runtime's `validate_session_id_for_acceptance`
+ * (macp-runtime `crates/macp-core/src/session.rs:762-796`, v0.9.0) exactly, so the
+ * control plane neither refuses an id the runtime admits nor admits one it refuses:
+ * - empty or over 128 bytes: refused;
+ * - 36 chars containing `-` that parse as a UUID: must be canonical lowercase and
+ *   version 4 or 7 — no fall-through to the base64url rule, so an uppercase UUID is
+ *   never admitted as a token (the variant nibble is not checked, as in the runtime);
+ * - otherwise: a base64url token of 22+ chars (`[A-Za-z0-9_-]`), which covers the
+ *   runtime's own 36-char minted ids containing `-` that do not parse as a UUID.
  */
-function isValidSessionId(candidate: string): boolean {
-  // UUID v4 / v7 pattern (any version 1-7).
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-7][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (uuid.test(candidate)) return true;
-  // base64url, 22+ chars.
-  const base64url = /^[A-Za-z0-9_-]{22,}$/;
-  return base64url.test(candidate);
+export function isValidSessionId(candidate: string): boolean {
+  if (candidate.length === 0 || Buffer.byteLength(candidate, 'utf8') > MAX_SESSION_ID_BYTES) return false;
+  if (candidate.length === 36 && candidate.includes('-') && UUID_SHAPE.test(candidate)) {
+    return candidate === candidate.toLowerCase() && (candidate[14] === '4' || candidate[14] === '7');
+  }
+  return BASE64URL_TOKEN.test(candidate);
 }
 
 /**
@@ -81,7 +97,7 @@ export class RunExecutorService implements OnModuleDestroy {
     }
 
     if (request.session.sessionId && !isValidSessionId(request.session.sessionId)) {
-      errors.push('session.sessionId must be a UUID v4/v7 or base64url 22+ chars');
+      errors.push(SESSION_ID_RULE);
     }
 
     let runtimeInfo: { reachable: boolean; supportedModes: string[]; capabilities?: unknown } = {
@@ -126,7 +142,7 @@ export class RunExecutorService implements OnModuleDestroy {
   private resolveSessionId(request: RunDescriptor): string {
     if (request.session.sessionId) {
       if (!isValidSessionId(request.session.sessionId)) {
-        throw new BadRequestException('session.sessionId must be a UUID v4/v7 or base64url 22+ chars');
+        throw new BadRequestException(SESSION_ID_RULE);
       }
       return request.session.sessionId;
     }
@@ -466,7 +482,15 @@ export class RunExecutorService implements OnModuleDestroy {
         // to AppExceptions) pre-wrapped as an AppException(ErrorCode.NOT_FOUND, ...).
         // Any other AppException — SESSION_EXPIRED thrown above, or a genuine
         // mode/version mismatch — still bypasses the retry loop.
-        const isRetryableNotFound = pollError instanceof AppException && pollError.errorCode === ErrorCode.NOT_FOUND;
+        //
+        // Runtime v0.9.0 shares gRPC NOT_FOUND between SESSION_NOT_FOUND,
+        // UNKNOWN_POLICY_VERSION and AGENT_NOT_FOUND (S13); only the first means
+        // "not started yet". An uncoded NOT_FOUND (0.8.x) keeps retrying as before.
+        const pollCode = macpErrorCodeOf(pollError);
+        const isRetryableNotFound =
+          pollError instanceof AppException &&
+          pollError.errorCode === ErrorCode.NOT_FOUND &&
+          (pollCode === undefined || pollCode === 'SESSION_NOT_FOUND');
         if (pollError instanceof AppException && !isRetryableNotFound) throw pollError;
         this.logger.debug(
           `getSession(${sessionId}) attempt ${attempt + 1}: ${pollError instanceof Error ? pollError.message : String(pollError)}`
@@ -490,28 +514,36 @@ export class RunExecutorService implements OnModuleDestroy {
     try {
       if (error instanceof Error) {
         const msg = error.message ?? '';
-        if (msg.includes('UNKNOWN_POLICY_VERSION')) {
+        // Runtime v0.9.0 carries the registry code in `macp-error-code` metadata
+        // (surfaced as `metadata.macpErrorCode` by mapGrpcError). The message-text
+        // checks are the fallback for a 0.8.x runtime, which put the code name in
+        // the message instead.
+        const code = macpErrorCodeOf(error);
+        if (code === 'UNKNOWN_POLICY_VERSION' || (code === undefined && msg.includes('UNKNOWN_POLICY_VERSION'))) {
           await this.runManager.markFailed(
             runId,
             new AppException(ErrorCode.UNKNOWN_POLICY_VERSION, `Unknown policy version: ${msg}`, 400)
           );
           return;
         }
-        if (msg.includes('POLICY_DENIED')) {
+        if (code === 'POLICY_DENIED' || (code === undefined && msg.includes('POLICY_DENIED'))) {
           await this.runManager.markFailed(
             runId,
             new AppException(ErrorCode.POLICY_DENIED, `Policy denied: ${msg}`, 403)
           );
           return;
         }
-        if (msg.includes('INVALID_POLICY_DEFINITION')) {
+        if (code === 'INVALID_POLICY_DEFINITION' || (code === undefined && msg.includes('INVALID_POLICY_DEFINITION'))) {
           await this.runManager.markFailed(
             runId,
             new AppException(ErrorCode.INVALID_POLICY_DEFINITION, `Invalid policy definition: ${msg}`, 400)
           );
           return;
         }
-        if (msg.includes('SESSION_ALREADY_EXISTS') || msg.includes('SessionAlreadyExists')) {
+        if (
+          code === 'SESSION_ALREADY_EXISTS' ||
+          (code === undefined && (msg.includes('SESSION_ALREADY_EXISTS') || msg.includes('SessionAlreadyExists')))
+        ) {
           await this.runManager.markFailed(
             runId,
             new AppException(ErrorCode.SESSION_ALREADY_EXISTS, `Session already exists: ${msg}`, 409)

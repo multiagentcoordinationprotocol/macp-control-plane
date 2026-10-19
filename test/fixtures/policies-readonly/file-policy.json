@@ -1,0 +1,7 @@
+{
+  "policy_id": "policy.test.file-loaded",
+  "mode": "macp.mode.decision.v1",
+  "description": "file-loaded policy for the read-only registry integration spec",
+  "rules": { "commitment": { "authority": "initiator_only" } },
+  "schema_version": 1
+}

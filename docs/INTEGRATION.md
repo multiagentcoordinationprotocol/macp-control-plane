@@ -9,12 +9,12 @@
 Key methods to implement (observer-only surface, post direct-agent-auth):
 - `initialize()` — protocol version negotiation.
 - `subscribeSession({runId, runtimeSessionId, afterSequence?})` — read-only `StreamSession` observer; returns `{events, abort}`. **Never writes envelopes.** Per RFC-MACP-0006 §3.2 the provider writes exactly one passive-subscribe frame (`{subscribeSessionId, afterSequence}`) and **keeps the write side open** for the session's lifetime. Half-closing would signal "client is done" and cause the runtime to drop every envelope broadcast afterwards.
-  - **`after_sequence` contract (runtime v0.5.0):** `after_sequence` is the **1-based accepted-envelope ordinal** and is **exclusive** — the runtime replays accepted history *strictly after* it, then switches to live broadcast. `0` (the default) replays from the start. The ordinal is now **stable across compaction** (it no longer shifts). Resuming below the compacted base returns `FAILED_PRECONDITION` (`"session history before ordinal {base} was compacted; resume with after_sequence >= {base} or re-read state via GetSession"`); the control-plane handles this by degrading to a `GetSession` poll and emitting a `session.stream.gap` control event (see `STREAM_RESUME_ENABLED`). **Do not** pass the CP-side canonical event sequence (`lastStreamCursor`) here — it is a different counter; use the persisted envelope ordinal.
-  - **Lag termination:** a `StreamSession` (like `WatchSignals`/`WatchSessions`) terminates with `RESOURCE_EXHAUSTED` if the receiver falls too far behind. The consumer treats this like any other stream error and reconnects/resubscribes.
+  - **`after_sequence` contract (runtime v0.5.0):** `after_sequence` is the **1-based accepted-envelope ordinal** and is **exclusive** — the runtime replays accepted history *strictly after* it, then switches to live broadcast. `0` (the default) replays from the start. The ordinal is now **stable across compaction** (it no longer shifts). Resuming below the compacted base returns a **non-terminal inline `MACPError` frame** (stream left open) — since runtime v0.9.0 with `code` `INVALID_ENVELOPE`, on 0.8.x with the message as `code` — carrying `"session history before ordinal {base} was compacted; resume with after_sequence >= {base} or re-read state via GetSession"` (a terminal `FAILED_PRECONDITION` with the same sentence, which no released runtime sends but a proxy could, is still recognized); the control-plane handles this by degrading to a `GetSession` poll and emitting a `session.stream.gap` control event (see `STREAM_RESUME_ENABLED`). **Do not** pass the CP-side canonical event sequence (`lastStreamCursor`) here — it is a different counter; use the persisted envelope ordinal.
+  - **Lag termination:** a `StreamSession` terminates with `RESOURCE_EXHAUSTED` if the receiver falls too far behind; the per-session consumer treats this like any other stream error and resubscribes from the persisted ordinal. `WatchSessions`/`WatchSignals` lag ends carry `macp-error-code: STREAM_LAGGED` (runtime v0.9.0): those consumers reconnect immediately (at most once per 5s) and count it in `macp_watch_stream_lagged_total{stream}`. Every `WatchSessions` (re)connect's initial sync, startup included, reconciles tracked runs to each session's current state; `WatchSignals` has no replay, so signals in the gap are lost.
 
   See [macp-runtime/docs/sdk-guide.md#streaming](../../macp-runtime/docs/sdk-guide.md#streaming) and [macp-runtime/docs/API.md#message-transport](../../macp-runtime/docs/API.md#message-transport) for the canonical stream lifecycle.
 - `watchSessions()` — returns an `AsyncIterable<SessionLifecycleEvent>` for `created` / `resolved` / `expired` events. Backs `SessionDiscoveryService`. Canonical RPC: [macp-runtime/docs/API.md#session-lifecycle](../../macp-runtime/docs/API.md#session-lifecycle); SDK-side discovery patterns: [macp-sdk-python/docs/guides/session-discovery.md](../../macp-sdk-python/docs/guides/session-discovery.md).
-- `watchSignals()` — returns an `AsyncIterable<RawRuntimeEvent>` of ambient Signal/Progress envelopes off the runtime's `signal_bus`. Backs `SignalConsumerService` — token-usage signals (`llm.call.completed`) arrive here, not on per-session streams. See [macp-runtime/docs/API.md#streaming-watches](../../macp-runtime/docs/API.md#streaming-watches). **Auth (runtime v0.5.0):** `WatchSignals` now requires authentication like every other RPC — an unauthenticated (or dev-header-only) call is rejected, so ensure a bearer/JWT (or the dev-bearer fallback) is configured or `SignalConsumerService` will hot-loop reconnects.
+- `watchSignals()` — returns an `AsyncIterable<RawRuntimeEvent>` of ambient Signal/Progress envelopes off the runtime's `signal_bus`. Backs `SignalConsumerService` — token-usage signals (`llm.call.completed`) arrive here, not on per-session streams. See [macp-runtime/docs/API.md#streaming-watches](../../macp-runtime/docs/API.md#streaming-watches). **Auth (runtime v0.5.0):** `WatchSignals` now requires authentication like every other RPC — an unauthenticated (or dev-header-only) call is rejected, so ensure a bearer/JWT (or the dev-bearer fallback) is configured or `SignalConsumerService` will hot-loop reconnects. **`senderAuthenticated` (runtime v0.9.0):** each yielded event carries `WatchSignalsResponse.sender_authenticated` as `RawRuntimeEvent.senderAuthenticated`, normalized onto `signal.emitted.data.senderAuthenticated`. It is `true` only when the runtime authenticates senders; dev-mode auth and pre-0.9.0 runtimes both yield `false`, since a proto3 `bool` has no presence ([API.md](API.md#canonical-event-types)). Only a literal `true` is trusted.
 - `getSession()` — poll for session state (used by the observer's `pollForOpenSession` loop).
 - `cancelSession()` — only called when `run.metadata.cancellationDelegated === true` (Option B in direct-agent-auth §Cancellation design).
 - `getManifest()` / `listModes()` / `listRoots()` / `health()` — metadata.
@@ -30,9 +30,13 @@ For the agent-side bootstrap and how `sessionId` flows from `POST /runs` to the 
 - **TypeScript SDK** — [README.md § Agent Framework](../../macp-sdk-typescript/README.md#agent-framework) and [docs/guides/agent-framework.md](../../macp-sdk-typescript/docs/guides/agent-framework.md) (`fromBootstrap()` + strategies)
 - **Migration** — `../../macp-ui-console/plans/direct-agent-auth.md` (end-to-end story of the 2026-04-15 refactor)
 
+### Runtime v0.8.7–v0.9.0 absorption
+
+Proto package `^0.1.11`; tested runtime range `>=0.8.0 <0.10.0` (`TESTED_RUNTIME_RANGE` in `src/runtime/runtime-version.ts`); the integration harness pins `ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.9.0`. Every 0.9.0 change the control plane reacts to is keyed on a signal a 0.8.x runtime does not send (`macp-error-code` metadata, inline `MACPError.details`, `WatchSignalsResponse.sender_authenticated`, `PolicyRegistryCapability.rule_extensions`); when the signal is absent the control plane keeps its 0.8.x behaviour, so 0.8.x runtimes stay supported. `sender_authenticated` is the exception: the field has no presence, so a 0.8.x runtime's signals carry `senderAuthenticated: false`, the proto's documented safe reading.
+
 ### Runtime v0.8.1–v0.8.6 absorption
 
-No proto or wire change (proto package stays `^0.1.10`). Lifecycle entries (`SessionSuspend`/`SessionResume`/`SessionCancel`/TTL expiry) are runtime-internal: they consume no ordinal and are never delivered on `StreamSession` (RFC-MACP-0006 §3.2), so suspend/resume reaches the control plane only through `WatchSessions` and `GetSession` state. `SessionResumePayload.banked_ms` now carries the remaining TTL at suspend; the control plane does not read it. `ext.multi_round.v1` `Contribute` decoding mirrors the runtime's semantics_rev 3 tie-break (proto trusted only if the payload re-encodes byte-identically, otherwise legacy JSON). `POST /runtime/policies` now defaults an omitted `schemaVersion` to 3. `RunExecutorService` logs a one-time warning per runtime name/version when the runtime reports a version outside the tested range (`TESTED_RUNTIME_RANGE` in `src/runtime/runtime-version.ts`, currently `>=0.8.0 <0.9.0`) or none parseable; it never blocks startup.
+No proto or wire change (proto package stays `^0.1.10`). Lifecycle entries (`SessionSuspend`/`SessionResume`/`SessionCancel`/TTL expiry) are runtime-internal: they consume no ordinal and are never delivered on `StreamSession` (RFC-MACP-0006 §3.2), so suspend/resume reaches the control plane only through `WatchSessions` and `GetSession` state. `SessionResumePayload.banked_ms` now carries the remaining TTL at suspend; the control plane does not read it. `ext.multi_round.v1` `Contribute` decoding mirrors the runtime's semantics_rev 3 tie-break (proto trusted only if the payload re-encodes byte-identically, otherwise legacy JSON). `POST /runtime/policies` now defaults an omitted `schemaVersion` to 3. `RunExecutorService` logs a one-time warning per runtime name/version when the runtime reports a version outside the tested range (`TESTED_RUNTIME_RANGE` in `src/runtime/runtime-version.ts`, `>=0.8.0 <0.9.0` at the time; widened to `<0.10.0` for v0.9.0) or none parseable; it never blocks startup.
 
 ### Commitment `supersedes.commitment_hash` must be canonical (runtime v0.7.0 / RFC-MACP-0013 §9)
 
@@ -115,10 +119,15 @@ session it did not start is rejected.
 
 **How this actually surfaces — fails fast, and correctly.**
 `RunExecutorService.pollForOpenSession` retries `NOT_FOUND` (the initiator has
-not called `SessionStart` yet) until `SESSION_POLL_TIMEOUT_MS`. Every gRPC failure is
+not called `SessionStart` yet) until `SESSION_POLL_TIMEOUT_MS` — on runtime v0.9.0+
+only a `NOT_FOUND` coded `SESSION_NOT_FOUND` (or an uncoded one from 0.8.x);
+`UNKNOWN_POLICY_VERSION`/`AGENT_NOT_FOUND` share the status but fail fast. Every gRPC failure is
 mapped through `mapGrpcError` (`src/runtime/grpc-helpers.ts`) before the poll loop
 sees it, and `PERMISSION_DENIED` becomes `AppException(ErrorCode.FORBIDDEN, …, 403)`
-carrying the runtime's `details` string verbatim. Any non-`NOT_FOUND` `AppException`
+carrying the runtime's `details` string verbatim. On runtime v0.9.0+ the mapping
+keys on the status's `macp-error-code` first, so a policy refusal that shares
+`PERMISSION_DENIED` (`POLICY_DENIED`) is distinguished from an auth refusal
+(`FORBIDDEN`) by its code, not by message text. Any non-`NOT_FOUND` `AppException`
 is rethrown on the *first* `GetSession` attempt, so a mis-scoped credential is not
 retried to the timeout: `handleExecuteError` → `markFailed`, and the run's failure
 reason is the runtime's own message (e.g. `FORBIDDEN: session access denied`), not a
@@ -280,7 +289,7 @@ delivery (HMAC + retry against a local receiver), replay, retention purge,
 stream-gap recovery, batch operations, and SSE resume. Deterministic mock
 scripting lives in `test/helpers/scripted-mock-runtime.provider.ts` — a
 `RuntimeScript` is a list of `{ delayMs, event }` steps (and `{ error: { code } }`
-steps to simulate stream failures like a compacted-history `FAILED_PRECONDITION`);
+steps to simulate terminal stream failures such as a proxy-style terminal compacted-history `FAILED_PRECONDITION`; inline frames such as the v0.9.0 `INVALID_ENVELOPE` compaction notice are scripted as `stream-inline-error` events);
 `test/helpers/webhook-receiver.ts` is a throwaway HTTP server for asserting
 webhook payloads and signatures.
 

@@ -13,6 +13,7 @@ import {
   RuntimeRegisterPolicyResultDto,
   RuntimeUnregisterPolicyResultDto
 } from '../dto/runtime-responses.dto';
+import { macpErrorCodeOf } from '../runtime/grpc-helpers';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { DEFAULT_POLICY_SCHEMA_VERSION, POLICY_SCHEMA_VERSIONS, PolicySchemaVersion } from '../contracts/runtime';
 
@@ -104,14 +105,23 @@ export class RuntimeController {
       }
     }
 
-    // Closed-set check (after the targeted checks above so their messages win) against the spec's rule schemas: the runtime ignores unknown keys,
-    // so a typo like `veto_threshhold` would otherwise register silently and never apply.
-    const ruleErrors = this.policyRulesValidator.validateRules(body.mode, body.rules);
+    const provider = this.runtimeRegistry.get(this.config.runtimeKind);
+
+    // Closed-set check (after the targeted checks above so their messages win) against the spec's rule schemas.
+    // Runtime v0.9.0 refuses the same unknown keys at admission (proposal S1); this fails fast with the key path,
+    // and is the only check against a 0.8.x runtime, which ignored a typo like `veto_threshhold` silently.
+    // Vendor-extension keys are gated on the runtime's advertised `ruleExtensions` when it has initialized.
+    const ruleErrors = this.policyRulesValidator.validateRules(body.mode, body.rules, {
+      ruleExtensions: this.advertisedRuleExtensions(provider)
+    });
     if (ruleErrors.length > 0) {
-      throw new BadRequestException(`invalid policy rules for mode "${body.mode}": ${ruleErrors.join('; ')}`);
+      // Same leading code as the runtime's in-band refusal below, so a caller branching on it sees one
+      // contract whichever layer refused.
+      throw new BadRequestException(
+        `INVALID_POLICY_DEFINITION: invalid policy rules for mode "${body.mode}": ${ruleErrors.join('; ')}`
+      );
     }
 
-    const provider = this.runtimeRegistry.get(this.config.runtimeKind);
     // Short-circuit when the runtime advertised a read-only policy registry
     // (MACP_POLICIES_DIR) via its Initialize capabilities — clearer than letting
     // the write fail with a generic 409.
@@ -130,6 +140,10 @@ export class RuntimeController {
     } catch (err) {
       throw this.translateRegistryError(err);
     }
+    // An in-band rejection (`RegisterPolicyResponse{ok:false,error}`) has no code
+    // field and no gRPC status — the `INVALID_POLICY_DEFINITION` prefix on the
+    // error string *is* the runtime's contract for it (macp-policy registry.rs,
+    // still so on v0.9.0); only a status-level failure carries `macp-error-code`.
     if (!result.ok && result.error?.includes('INVALID_POLICY_DEFINITION')) {
       throw new BadRequestException(result.error);
     }
@@ -190,8 +204,22 @@ export class RuntimeController {
    * advertised `policyRegistry.registerPolicy === false` (a read-only registry
    * backed by `MACP_POLICIES_DIR`, runtime v0.5.0). Only trips when the provider
    * exposes cached capabilities; otherwise the error path below still catches
-   * the runtime's FAILED_PRECONDITION rejection.
+   * the runtime's `REGISTRY_READ_ONLY` rejection (FAILED_PRECONDITION on 0.8.x).
    */
+  /**
+   * The vendor-extension keys the runtime advertised in Initialize
+   * (`PolicyRegistryCapability.rule_extensions`), or `undefined` when no
+   * capabilities are cached yet — the validator then leaves the name check to
+   * the runtime's admission, which is authoritative either way.
+   */
+  private advertisedRuleExtensions(
+    provider: ReturnType<RuntimeProviderRegistry['get']>
+  ): readonly string[] | undefined {
+    const extensions = (provider as { capabilities?: { policyRegistry?: { ruleExtensions?: unknown } } }).capabilities
+      ?.policyRegistry?.ruleExtensions;
+    return Array.isArray(extensions) && extensions.every((key) => typeof key === 'string') ? extensions : undefined;
+  }
+
   private assertRegistryWritable(provider: ReturnType<RuntimeProviderRegistry['get']>): void {
     const capabilities = (provider as { capabilities?: { policyRegistry?: { registerPolicy?: boolean } } })
       .capabilities;
@@ -202,13 +230,33 @@ export class RuntimeController {
 
   /**
    * Translate a thrown runtime error into a read-only 405 when it is the
-   * runtime's FAILED_PRECONDITION rejection for a read-only registry; otherwise
-   * rethrow unchanged so the global filter maps it as before.
+   * runtime's read-only-registry rejection; otherwise rethrow unchanged so the
+   * global filter maps it as before.
+   *
+   * Runtime v0.9.0 tags it `macp-error-code = REGISTRY_READ_ONLY` (S13), which
+   * is authoritative regardless of message text. The FAILED_PRECONDITION +
+   * message-text heuristic is the fallback for a 0.8.x runtime, which sent no
+   * code. The 405 (not the registry's 409) is deliberate — see
+   * `MACP_ERROR_REGISTRY` in `runtime/grpc-helpers.ts`.
    */
   private translateRegistryError(err: unknown): unknown {
-    const grpcCode = (err as { details?: { grpcCode?: number } })?.details?.grpcCode;
     const message = err instanceof Error ? err.message : String(err);
-    // grpc FAILED_PRECONDITION === 9.
+    const code = macpErrorCodeOf(err);
+    if (code === 'REGISTRY_READ_ONLY') {
+      return new AppException(
+        ErrorCode.REGISTRY_READ_ONLY,
+        message || 'runtime policy registry is read-only and cannot be modified',
+        HttpStatus.METHOD_NOT_ALLOWED,
+        err instanceof AppException ? err.metadata : { macpErrorCode: code }
+      );
+    }
+    if (code !== undefined) return err;
+    // `mapGrpcError` records the original status as `metadata.grpcCode`; a raw
+    // ServiceError carries it as `.code`. grpc FAILED_PRECONDITION === 9.
+    const grpcCode =
+      err instanceof AppException
+        ? (err.metadata?.grpcCode as number | undefined)
+        : (err as { code?: unknown } | null)?.code;
     if ((grpcCode === 9 || err instanceof AppException) && this.isReadOnlyMessage(message)) {
       return this.readOnlyException(message);
     }
@@ -218,7 +266,9 @@ export class RuntimeController {
   private isReadOnlyMessage(message?: string): boolean {
     if (!message) return false;
     const m = message.toLowerCase();
-    return m.includes('read-only') || m.includes('read only') || m.includes('macp_policies_dir') || m.includes('immutable');
+    return (
+      m.includes('read-only') || m.includes('read only') || m.includes('macp_policies_dir') || m.includes('immutable')
+    );
   }
 
   private readOnlyException(message?: string): AppException {

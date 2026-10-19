@@ -292,7 +292,11 @@
     }
   ],
   "patternProperties": {
-    "^[_$]": true
+    "^[_$]": true,
+    "^x-[a-z0-9]+(\\.[a-z0-9-]+)+$": {
+      "type": "object",
+      "$comment": "Vendor-extension keys (RFC-MACP-0012 Section 4): legal at this top level only, reverse-domain name, value MUST be an object. Nested levels keep the ^[_$] annotation escape only."
+    }
   },
   "additionalProperties": false
 }

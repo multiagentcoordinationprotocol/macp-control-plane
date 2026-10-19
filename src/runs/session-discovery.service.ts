@@ -6,6 +6,7 @@ import { RunManagerService } from './run-manager.service';
 import { StreamConsumerService } from './stream-consumer.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { AppConfigService } from '../config/app-config.service';
+import { watchReconnectDelay } from './watch-reconnect';
 
 /**
  * Subscribes to the runtime's WatchSessions stream and auto-creates run
@@ -20,6 +21,7 @@ export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private reconnectResolve?: () => void;
   private activeIterator?: AsyncIterator<unknown>;
+  private lastImmediateReconnectAt?: number;
   private readonly knownSessions = new Set<string>();
 
   constructor(
@@ -70,10 +72,24 @@ export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
       } catch (error) {
         if (this.aborted) return;
         const message = error instanceof Error ? error.message : String(error);
-        this.logger.warn(`WatchSessions stream ended: ${message}. Reconnecting in 5s...`);
+        const now = Date.now();
+        const { lagged, delayMs } = watchReconnectDelay(error, this.lastImmediateReconnectAt, now);
+        const when = delayMs === 0 ? 'immediately' : `in ${delayMs / 1000}s`;
+        if (lagged) {
+          this.instrumentation.watchStreamLaggedTotal.inc({ stream: 'watch_sessions' });
+          this.logger.warn(
+            `WatchSessions fell behind the runtime and was ended (STREAM_LAGGED): ${message}. The reconnect's initial sync re-emits every session in the runtime's registry; known runs are reconciled to its state. Reconnecting ${when}...`
+          );
+        } else {
+          this.logger.warn(`WatchSessions stream ended: ${message}. Reconnecting ${when}...`);
+        }
+        if (delayMs === 0) {
+          this.lastImmediateReconnectAt = now;
+          continue;
+        }
         await new Promise<void>((resolve) => {
           this.reconnectResolve = resolve;
-          this.reconnectTimer = setTimeout(resolve, 5000);
+          this.reconnectTimer = setTimeout(resolve, delayMs);
         });
         this.reconnectTimer = undefined;
         this.reconnectResolve = undefined;
@@ -121,14 +137,25 @@ export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
     provider: ReturnType<RuntimeProviderRegistry['get']>
   ): Promise<void> {
     const session = event.session;
-    if (this.knownSessions.has(session.sessionId)) return;
-    this.knownSessions.add(session.sessionId);
-
-    const existing = await this.runManager.findBySessionId(session.sessionId);
-    if (existing) {
-      this.logger.debug(`Session ${session.sessionId} already has run ${existing.id}`);
+    let existing: Awaited<ReturnType<RunManagerService['findBySessionId']>>;
+    try {
+      existing = await this.runManager.findBySessionId(session.sessionId);
+    } catch (err) {
+      // A session already tracked here only needed the lookup to reconcile; a DB blip must not
+      // end the watch for it. An unknown session still fails as before (createRun would too).
+      if (!this.knownSessions.has(session.sessionId)) throw err;
+      this.logger.warn(
+        `skipping snapshot reconcile for session ${session.sessionId}: run lookup failed: ${err instanceof Error ? err.message : String(err)}`
+      );
       return;
     }
+    if (existing) {
+      this.knownSessions.add(session.sessionId);
+      await this.reconcileFromSnapshot(existing, session);
+      return;
+    }
+    if (this.knownSessions.has(session.sessionId)) return;
+    this.knownSessions.add(session.sessionId);
 
     const descriptor = this.buildRunDescriptor(session);
     const run = await this.runManager.createRun(descriptor, session.sessionId, session.sessionId);
@@ -171,10 +198,48 @@ export class SessionDiscoveryService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  private async handleSessionTerminal(
-    sessionId: string,
-    status: 'completed' | 'failed' | 'cancelled'
+  /**
+   * Every (re)connect opens with an initial sync that re-emits each session in the runtime's
+   * registry as `created`, carrying its current state. For a session that already has a run, that
+   * snapshot is the only record of a lifecycle event dropped while the watch was down — most
+   * importantly after STREAM_LAGGED, where the runtime ends the watch and expects the client to
+   * reconcile (macp-runtime `watch_sync.rs`). Apply the state to runs this service drives
+   * (`running`/`suspended`); earlier statuses belong to RunExecutor's bind flow. Idempotent: a
+   * snapshot that agrees with the run is a no-op. Failures are logged, never thrown, so one run's
+   * state-machine drift cannot end discovery for the others.
+   */
+  private async reconcileFromSnapshot(
+    run: { id: string; status: string },
+    session: RuntimeSessionSnapshot
   ): Promise<void> {
+    if (run.status !== 'running' && run.status !== 'suspended') return;
+    try {
+      switch (session.state) {
+        case 'SESSION_STATE_RESOLVED':
+          return await this.handleSessionTerminal(session.sessionId, 'completed');
+        case 'SESSION_STATE_EXPIRED':
+          return await this.handleSessionTerminal(session.sessionId, 'failed');
+        case 'SESSION_STATE_CANCELLED':
+          return await this.handleSessionTerminal(session.sessionId, 'cancelled');
+        case 'SESSION_STATE_SUSPENDED':
+          if (run.status === 'running') await this.handleSessionPaused(session.sessionId, 'suspended');
+          return;
+        case 'SESSION_STATE_OPEN':
+          if (run.status === 'suspended') await this.handleSessionPaused(session.sessionId, 'resumed');
+          return;
+        default:
+          return;
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Failed to reconcile run ${run.id} with session ${session.sessionId} (${session.state}): ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
+
+  private async handleSessionTerminal(sessionId: string, status: 'completed' | 'failed' | 'cancelled'): Promise<void> {
     const run = await this.runManager.findBySessionId(sessionId);
     if (!run) return;
 

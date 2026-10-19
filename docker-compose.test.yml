@@ -18,14 +18,15 @@ services:
   # Pinned to a released semver tag. Versioned images (`:<version>`, `:<major>.<minor>`)
   # publish from v0.8.2 onward (macp-runtime#184 fixed the release-plz → docker.yml
   # trigger). Earlier we pinned the v0.8.0 commit SHA (`f97fd15`) because no semver tag
-  # existed. Note docker/metadata-action strips the leading `v`: use `0.8.6`, not `v0.8.6`.
+  # existed. Note docker/metadata-action strips the leading `v`: use `0.9.0`, not `v0.9.0`.
+  # Pin the full patch tag, never the moving `:0.9` — CI must be reproducible.
   # Started with: docker compose --profile with-runtime up
   #
   # Runtime v0.5.0+ refuses to boot without an explicit MACP_ALLOW_INSECURE=1
   # (the published image no longer bakes it in). MACP_ALLOW_DEV_SENDER_HEADER was
   # removed upstream — the dev-header auth path no longer exists.
   runtime:
-    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.8.6
+    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.9.0
     ports:
       - '50051:50051'
     environment:
@@ -36,6 +37,28 @@ services:
       # The image ships no grpc_health_probe binary (debian:bookworm-slim +
       # ca-certificates + the runtime binary only) — a plain TCP check is what
       # actually reflects the server accepting connections on the gRPC port.
+      test: ['CMD-SHELL', 'timeout 2 bash -c "</dev/tcp/127.0.0.1/50051"']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Same release, booted with MACP_POLICIES_DIR so its policy registry is
+  # read-only over the wire (register_policy=false, RFC-MACP-0012 §9). Proves the
+  # coded REGISTRY_READ_ONLY → 405 path against a real runtime
+  # (test/integration/policy-registry-readonly.integration.spec.ts). Separate
+  # service so the main runtime's registry stays writable for every other spec.
+  runtime-readonly:
+    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.9.0
+    ports:
+      - '50052:50051'
+    environment:
+      MACP_ALLOW_INSECURE: '1'
+      MACP_POLICIES_DIR: /policies
+    volumes:
+      - ./test/fixtures/policies-readonly:/policies:ro
+    profiles:
+      - with-runtime
+    healthcheck:
       test: ['CMD-SHELL', 'timeout 2 bash -c "</dev/tcp/127.0.0.1/50051"']
       interval: 5s
       timeout: 3s

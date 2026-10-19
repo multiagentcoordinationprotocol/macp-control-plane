@@ -7,6 +7,7 @@ import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { RawRuntimeEvent, RuntimeSubscribeSessionRequest } from '../contracts/runtime';
 import { CircuitBreaker } from './circuit-breaker';
 import { AppException } from '../errors/app-exception';
+import { ErrorCode } from '../errors/error-codes';
 
 /**
  * Focused unit tests for the RFC-MACP-0006 §3.2 passive-subscribe behavior
@@ -329,6 +330,78 @@ describe('RustRuntimeProvider.subscribeSession — passive-subscribe frame (RFC-
     expect(envelopeEvents[0].envelope?.sessionId).toBe('');
     expect(envelopeEvents[0].envelope?.messageId).toBe('sig-1');
   });
+
+  describe('senderAuthenticated (WatchSignalsResponse.sender_authenticated, runtime v0.9.0)', () => {
+    const signalChunk = (extra: Record<string, unknown>) => ({
+      envelope: {
+        sessionId: '',
+        messageType: 'Signal',
+        messageId: 'sig-a',
+        sender: 'agent-1',
+        payload: Buffer.from(''),
+        timestampUnixMs: 1
+      },
+      ...extra
+    });
+
+    async function deliver(...chunks: Record<string, unknown>[]) {
+      const signalStream = makeFakeStream();
+      const { provider } = makeProvider(
+        () => makeFakeStream(),
+        {},
+        () => signalStream
+      );
+      const collected = drain(provider.watchSignals());
+      await new Promise((r) => setImmediate(r));
+      for (const chunk of chunks) signalStream.emit('data', chunk);
+      signalStream.emit('end');
+      return (await collected).filter((e) => e.kind === 'stream-envelope');
+    }
+
+    it('carries true and false through unchanged', async () => {
+      const events = await deliver(
+        signalChunk({ senderAuthenticated: true }),
+        signalChunk({ senderAuthenticated: false })
+      );
+      expect(events.map((e) => e.senderAuthenticated)).toEqual([true, false]);
+    });
+
+    it('reads a missing field as false — the proto3 default a pre-0.9.0 runtime decodes to', async () => {
+      const [event] = await deliver(signalChunk({}));
+      expect(event.senderAuthenticated).toBe(false);
+    });
+
+    it('counts only a literal true (keepCase decode and non-boolean values)', async () => {
+      const events = await deliver(
+        signalChunk({ sender_authenticated: true }),
+        signalChunk({ senderAuthenticated: 'true' }),
+        signalChunk({ senderAuthenticated: 1 })
+      );
+      expect(events.map((e) => e.senderAuthenticated)).toEqual([true, false, false]);
+    });
+  });
+
+  it('does not set senderAuthenticated on StreamSession envelopes', async () => {
+    const sessionStream = makeFakeStream();
+    const { provider } = makeProvider(() => sessionStream);
+    const handle = provider.subscribeSession({ runId: 'run-1', runtimeSessionId: 'sess-1' });
+    await new Promise((r) => setImmediate(r));
+    sessionStream.emit('data', {
+      envelope: {
+        sessionId: 'sess-1',
+        messageType: 'Signal',
+        messageId: 'm-1',
+        sender: 'agent-1',
+        payload: Buffer.from(''),
+        timestampUnixMs: 1
+      },
+      senderAuthenticated: true
+    });
+    sessionStream.emit('end');
+    const events = (await drain(handle.events)).filter((e) => e.kind === 'stream-envelope');
+    expect(events).toHaveLength(1);
+    expect(events[0]).not.toHaveProperty('senderAuthenticated');
+  });
 });
 
 describe('RustRuntimeProvider.subscribeSession — StreamSessionResponse oneof discriminant (`response`) decode', () => {
@@ -401,6 +474,37 @@ describe('RustRuntimeProvider.subscribeSession — StreamSessionResponse oneof d
       sessionId: 'sess-abc',
       messageId: 'm-err-2'
     });
+  });
+
+  it('passes MACPError.details through on an inline frame and drops an empty details buffer (v0.9.0)', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream);
+    const details = Buffer.from(JSON.stringify({ reasons: ['quorum not met'], denials: [] }));
+
+    const handle = provider.subscribeSession(baseReq);
+    await new Promise((r) => setImmediate(r));
+
+    stream.emit('data', {
+      response: 'error',
+      error: { code: 'POLICY_DENIED', message: 'PolicyDenied', sessionId: 'sess-abc', messageId: 'm-1', details }
+    });
+    // proto-loader decodes an unset `bytes` field as an empty Buffer.
+    stream.emit('data', {
+      response: 'error',
+      error: {
+        code: 'INVALID_ENVELOPE',
+        message: 'bad',
+        sessionId: 'sess-abc',
+        messageId: 'm-2',
+        details: Buffer.alloc(0)
+      }
+    });
+    stream.emit('end');
+
+    const inlineErrors = (await drain(handle.events)).filter((e) => e.kind === 'stream-inline-error');
+    expect(inlineErrors).toHaveLength(2);
+    expect(inlineErrors[0].inlineError?.details).toEqual(details);
+    expect(inlineErrors[1].inlineError).not.toHaveProperty('details');
   });
 
   it('still delivers an envelope frame in the oneofs:true wire shape ({ response: "envelope", envelope: {...} })', async () => {
@@ -892,5 +996,123 @@ describe('RustRuntimeProvider — shutdown (issue #99)', () => {
     (provider as unknown as { client: unknown }).client = { close };
     provider.onModuleDestroy();
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('RustRuntimeProvider — runtime v0.9.0 coded statuses vs. the real CircuitBreaker and page ladder (S13)', () => {
+  function makeRealBreakerProvider(threshold = 5) {
+    const config = {
+      runtimeDevAgentId: 'control-plane',
+      runtimeBearerToken: 'obs-token',
+      runtimeUseDevHeader: false,
+      runtimeCircuitBreakerThreshold: threshold,
+      runtimeCircuitBreakerResetMs: 30_000,
+      runtimeRequestTimeoutMs: 30_000,
+      runtimeListSessionsPageSize: 200,
+      runtimeListSessionsMaxPages: 200,
+      runtimeListSessionsTimeoutMs: 60_000
+    } as unknown as AppConfigService;
+    const jwtMinter = {
+      isEnabled: () => false,
+      getToken: () => Promise.reject(new Error('jwt disabled in unit test'))
+    } as unknown as RuntimeJwtMinterService;
+    const instrumentation = {
+      macpRuntimeListSessionsPages: { observe: jest.fn() },
+      macpRuntimeListSessionsTruncatedTotal: { inc: jest.fn() },
+      grpcCallDuration: { observe: jest.fn() },
+      circuitBreakerSuccessTotal: { inc: jest.fn() },
+      circuitBreakerFailuresTotal: { inc: jest.fn() },
+      circuitBreakerState: { set: jest.fn() }
+    } as unknown as InstrumentationService;
+    const provider = new RustRuntimeProvider(
+      config,
+      new RuntimeCredentialResolverService(config, jwtMinter),
+      instrumentation
+    );
+    (provider as unknown as { circuitBreaker: CircuitBreaker }).circuitBreaker = (
+      provider as unknown as { buildCircuitBreaker: () => CircuitBreaker }
+    ).buildCircuitBreaker();
+    return provider;
+  }
+
+  /** A raw grpc.ServiceError as @grpc/grpc-js hands it to unary()'s callback. */
+  function serviceError(code: grpc.status, macpErrorCode?: string, details = 'runtime said no') {
+    const metadata = new grpc.Metadata();
+    if (macpErrorCode) metadata.set('macp-error-code', macpErrorCode);
+    return Object.assign(new Error(details), { code, details, metadata });
+  }
+
+  function failingClient(method: string, error: unknown) {
+    const fn = jest.fn((_req: unknown, _md: unknown, _opts: unknown, cb: (e: unknown, r: unknown) => void) =>
+      cb(error, null)
+    );
+    return { client: { [method]: fn }, fn };
+  }
+
+  async function callNTimes(n: number, call: () => Promise<unknown>) {
+    for (let i = 0; i < n; i++) await call().catch(() => undefined);
+  }
+
+  it.each([
+    ['INVALID_SESSION_ID', grpc.status.INVALID_ARGUMENT],
+    ['SESSION_NOT_OPEN', grpc.status.FAILED_PRECONDITION],
+    ['RATE_LIMITED', grpc.status.RESOURCE_EXHAUSTED],
+    ['PAYLOAD_TOO_LARGE', grpc.status.RESOURCE_EXHAUSTED],
+    ['UNKNOWN_POLICY_VERSION', grpc.status.NOT_FOUND]
+  ])('10 coded %s refusals leave the breaker CLOSED', async (macpErrorCode, status) => {
+    const provider = makeRealBreakerProvider();
+    const { client } = failingClient('GetSession', serviceError(status, macpErrorCode));
+    (provider as unknown as { client: unknown }).client = client;
+
+    await callNTimes(10, () => provider.getSession({ runId: 'r', sessionId: 's' } as never));
+
+    expect(provider.getCircuitBreakerState()).toBe('CLOSED');
+  });
+
+  it.each([
+    ['uncoded UNAVAILABLE', grpc.status.UNAVAILABLE, undefined],
+    ['coded INTERNAL_ERROR', grpc.status.INTERNAL, 'INTERNAL_ERROR'],
+    ['coded STREAM_LAGGED', grpc.status.RESOURCE_EXHAUSTED, 'STREAM_LAGGED'],
+    ['coded-but-transport UNAVAILABLE', grpc.status.UNAVAILABLE, 'SOME_FUTURE_CODE'],
+    ['uncoded INVALID_ARGUMENT (0.8.x rule unchanged)', grpc.status.INVALID_ARGUMENT, undefined]
+  ])('10 %s failures open the breaker', async (_label, status, macpErrorCode) => {
+    const provider = makeRealBreakerProvider();
+    const { client } = failingClient('GetSession', serviceError(status, macpErrorCode));
+    (provider as unknown as { client: unknown }).client = client;
+
+    await callNTimes(10, () => provider.getSession({ runId: 'r', sessionId: 's' } as never));
+
+    expect(provider.getCircuitBreakerState()).toBe('OPEN');
+  });
+
+  it.each(['RATE_LIMITED', 'STREAM_LAGGED'])(
+    'does not halve the ListSessions page on a coded %s RESOURCE_EXHAUSTED — propagates after one attempt',
+    async (macpErrorCode) => {
+      const provider = makeRealBreakerProvider();
+      const { client, fn } = failingClient('ListSessions', serviceError(grpc.status.RESOURCE_EXHAUSTED, macpErrorCode));
+      (provider as unknown as { client: unknown }).client = client;
+
+      const thrown = await provider.listSessions().catch((e) => e);
+
+      expect(fn).toHaveBeenCalledTimes(1);
+      expect(thrown).toBeInstanceOf(AppException);
+      expect((thrown as AppException).metadata).toMatchObject({ macpErrorCode });
+    }
+  );
+
+  it('halves the ListSessions page on a coded PAYLOAD_TOO_LARGE, same as an uncoded RESOURCE_EXHAUSTED', async () => {
+    const provider = makeRealBreakerProvider();
+    const { client, fn } = failingClient(
+      'ListSessions',
+      serviceError(grpc.status.RESOURCE_EXHAUSTED, 'PAYLOAD_TOO_LARGE')
+    );
+    (provider as unknown as { client: unknown }).client = client;
+
+    const thrown = await provider.listSessions().catch((e) => e);
+
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect((fn.mock.calls as unknown[][]).map((c) => (c[0] as { pageSize: number }).pageSize)).toEqual([200, 100, 50]);
+    expect((thrown as AppException).errorCode).toBe(ErrorCode.PAYLOAD_TOO_LARGE);
+    expect(provider.getCircuitBreakerState()).toBe('CLOSED');
   });
 });

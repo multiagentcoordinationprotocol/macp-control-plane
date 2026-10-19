@@ -139,7 +139,7 @@ See [docs/INTEGRATION.md § Running Integration Tests](docs/INTEGRATION.md#runni
 
 See [docs/CICD.md](docs/CICD.md) for the full pipeline reference.
 
-Runtime compatibility (currently absorbed through macp-runtime v0.8.6) is tracked in [docs/INTEGRATION.md](docs/INTEGRATION.md#runtime-v081v086-absorption); wire/spec details live in the [runtime docs](../macp-runtime/docs/README.md) and RFCs, not here.
+Runtime compatibility (currently absorbed through macp-runtime v0.9.0, tested range `>=0.8.0 <0.10.0`) is tracked in [docs/INTEGRATION.md](docs/INTEGRATION.md#runtime-v087v090-absorption); wire/spec details live in the [runtime docs](../macp-runtime/docs/README.md) and RFCs, not here.
 
 Make sure the runtime is running at `RUNTIME_ADDRESS`. Runtime **v0.5.0 removed the `x-macp-agent-id` dev header** and refuses to start without an explicit `MACP_ALLOW_INSECURE=1` (the published image no longer bakes it in). For dev auth against the reference runtime profile, start the runtime with `MACP_ALLOW_INSECURE=1` only (see [macp-runtime/docs/getting-started.md#authentication-configuration](../macp-runtime/docs/getting-started.md#authentication-configuration) → *Development mode*) and set on the control-plane:
 

@@ -233,3 +233,20 @@ P5 follow-ups 1-3 (#82), P6 `canonical` backfill (#77).
 - **Minor follow-ups noted, not done:** the `stream-consumer.service.ts` docstring (~:318-322) saying a
   `PolicyDenied` frame "can never reach" the inline detector is misleading; the `app-config` comment estimating
   ~1-2 KB/session holds only for typical sessions.
+
+---
+
+# DECISIONS — macp-runtime 0.9.0 alignment (2026-10-18)
+
+Owner decisions, asked before Phase 2 (plan §7 Q1/Q2; Q3/Q4 follow the plan's recommendations):
+
+- **Q1 — `REGISTRY_READ_ONLY` stays HTTP 405**, a deliberate divergence from the runtime registry's 409. The
+  control plane has returned 405 `METHOD_NOT_ALLOWED` since v0.5.0 T9; clients branch on `errorCode`, and 405
+  describes "this method is disabled on this deployment". Encoded in `MACP_ERROR_REGISTRY`
+  (`src/runtime/grpc-helpers.ts`); proved against a real read-only runtime by
+  `test/integration/policy-registry-readonly.integration.spec.ts`. Reversible: one table row.
+- **Q2 — `STREAM_LAGGED` → 503 `STREAM_LAGGED`, retryable** (was 429 via `RESOURCE_EXHAUSTED`). It only arises on
+  server streams the control plane consumes internally; 503 is the honest status if it ever surfaces through a
+  unary path. It also counts toward the circuit breaker.
+- **Q3 — keep the control plane's closed-set rule validation** (re-synced in Phase 4) as a fail-fast pre-check.
+- **Q4 — uppercase the `vote` fixtures** to match the wire, keeping one explicit lowercase tolerance case.

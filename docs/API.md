@@ -68,8 +68,10 @@ uses its own Bearer token to call `SessionStart(sessionId)` on the runtime. The
 control-plane's async observer loop polls `GetSession(sessionId)` until `OPEN`,
 then subscribes read-only.
 
-If the caller provides `session.sessionId`, the control-plane validates it (must
-be UUID v4/v7 or base64url 22+ chars) and echoes it back in the response.
+If the caller provides `session.sessionId`, the control-plane validates it with the
+runtime's own rule (at most 128 bytes; a canonical lowercase UUID v4/v7, or a base64url
+token of 22+ chars — an uppercase or other-version UUID is refused, not treated as a
+token) and echoes it back in the response.
 
 ### `POST /runs/validate`
 Preflight validation without creating a run.
@@ -104,7 +106,7 @@ Fetch the projected run state for UI rendering. Returns:
   "participants": [{ "participantId", "role", "status", "latestSummary" }],
   "graph": { "nodes": [...], "edges": [...] },
   "decision": { "current": { "action", "confidence", "finalized", "proposalId", "outcomePositive", "prompt", "resolvedAt", "resolvedBy", "proposals": [...] } },
-  "signals": { "signals": [{ "id", "name", "severity", "sourceParticipantId", "confidence", "payload", "acknowledgedAt", "acknowledgedBy" }] },
+  "signals": { "signals": [{ "id", "name", "severity", "sourceParticipantId", "confidence", "payload", "senderAuthenticated", "acknowledgedAt", "acknowledgedBy" }] },
   "progress": { "entries": [{ "participantId", "percentage", "message" }] },
   "timeline": { "latestSeq", "totalEvents", "recent": [...] },
   "trace": { "traceId", "spanCount", "linkedArtifacts" },
@@ -139,7 +141,7 @@ On run terminal transition (`completed` / `failed` / `cancelled`), non-terminal 
 - `null` — decision is finalized but no outcome could be inferred (e.g. `step_up`).
 - `undefined` — decision has not resolved yet (run still in flight).
 
-**Signal entry fields:** each entry carries `payload` (the decoded signal payload), and once a matching `signal.acknowledged` event arrives, `acknowledgedAt` + `acknowledgedBy` are populated in place.
+**Signal entry fields:** each entry carries `payload` (the decoded signal payload) and `senderAuthenticated` (copied from `signal.emitted`, see [Canonical Event Types](#canonical-event-types); absent on projections built before runtime v0.9.0 support), and once a matching `signal.acknowledged` event arrives, `acknowledgedAt` + `acknowledgedBy` are populated in place.
 
 ### `GET /runs/:id/events`
 List canonical events for a single run.
@@ -508,10 +510,21 @@ range-strict: there is no `ValidationPipe` on this endpoint's body, so a JSON st
 string for an int32 field) and succeeded — it is now rejected the same as an out-of-range number.
 
 `rules` is also validated against the spec's closed-set rule schemas for the policy's `mode` (decision,
-quorum, proposal, task, handoff; `"*"` accepts a key that is legitimate under any of them). An unknown or
-misspelled key (e.g. `veto_threshhold`) or a wrong shape returns `400` naming the path and key, because the
-runtime itself ignores unknown keys. Keys starting with `_` or `$` are treated as annotations. Extension modes
-with no vendored schema are not validated.
+quorum, proposal, task, handoff; as in the runtime, a `"*"` policy's keys are closed over the union of all
+five modes' keys at every level, e.g. `acceptance: {criterion, implicit_accept_timeout_ms}`, and each value
+must satisfy every mode that defines its key), vendored from
+spec commit `60262b8` (`src/policy/schemas/README.md`). An unknown or misspelled key (e.g. `veto_threshhold`)
+or a wrong shape returns `400` naming the path and key. Runtime v0.9.0 refuses the same keys at admission
+(proposal S1, also a `400` via `INVALID_POLICY_DEFINITION`); this pre-check fails fast, and is the only check
+against a 0.8.x runtime, which ignored unknown keys.
+
+- Keys starting with `_` or `$` are annotations: accepted at every level, never validated.
+- A top-level vendor-extension key (`^x-[a-z0-9]+(\.[a-z0-9-]+)+$`, e.g. `x-com.example`) must hold a JSON
+  object, and must be one of the runtime's advertised `policyRegistry.ruleExtensions` (Initialize capability)
+  — otherwise `400` naming the key. Until the control plane has initialized against the runtime, the name check
+  is left to the runtime. A well-formed `x-` key below the top level is refused; a malformed one (e.g. `x-seam`)
+  is an ordinary unknown key.
+- Extension modes (no vendored schema) are opaque: neither the control plane nor the runtime checks their keys.
 
 Returns: `{ "ok": true }` or `{ "ok": false, "error": "..." }`
 
@@ -530,10 +543,21 @@ Unregister a governance policy. Returns: `{ "ok": true }`
 
 | Error Code | HTTP | When |
 |------------|------|------|
-| `UNKNOWN_POLICY_VERSION` | 400 | `policy_version` not found in registry at session start |
-| `POLICY_DENIED` | 403 | Commitment rejected because policy rules not satisfied (includes structured `reasons` array) |
+| `UNKNOWN_POLICY_VERSION` | 400 / 404 | `policy_version` not found in registry — 400 as a run-failure reason at session start; 404 when a runtime call (e.g. `GET /runtime/policies/:id`) returns the coded status directly |
+| `POLICY_DENIED` | 403 | Commitment rejected because policy rules not satisfied. `metadata.reasons` (string array) and, on runtime v0.9.0+, `metadata.denials` (`[{code, message, participants}]`) carry the runtime's structured detail |
 | `INVALID_POLICY_DEFINITION` | 400 | Policy rules fail schema validation at registration, or policy mode doesn't match session mode at SessionStart |
 | `SESSION_ALREADY_EXISTS` | 409 | Duplicate session start attempt |
+| `REGISTRY_READ_ONLY` | 405 | `POST`/`DELETE /runtime/policies` against a runtime whose registry is file-loaded (`MACP_POLICIES_DIR`). The runtime registry lists 409; the control plane keeps 405 deliberately — branch on `errorCode` |
+
+**How runtime errors map (runtime v0.9.0+).** Every runtime gRPC status carries a
+`macp-error-code`; the control plane maps by that code, not by the gRPC status
+(several codes share one status). The error body's `metadata` always holds
+`grpcCode`, plus `macpErrorCode` whenever the runtime sent one. Codes beyond the
+table above that a client may now see: `PAYLOAD_TOO_LARGE` 413 (was 429),
+`STREAM_LAGGED` 503 (retryable; was 429), `SESSION_NOT_OPEN` 409,
+`INVALID_ENVELOPE` 400, `DUPLICATE_MESSAGE` 409. A commit-time policy denial is now
+`errorCode: POLICY_DENIED` rather than `FORBIDDEN`, at the same 403. Against a
+0.8.x runtime (no code) the status-only mapping is unchanged.
 
 ### Policy Projection
 
@@ -649,7 +673,8 @@ non-atomic reads, a run bound mid-drain can also transiently appear as a false p
 point-in-time signal, not a transactional snapshot. A runtime error propagates through
 unchanged: `503 SERVICE_UNAVAILABLE` (`RUNTIME_UNAVAILABLE` when unreachable,
 `CIRCUIT_BREAKER_OPEN` when the breaker is open), `504` (`RUNTIME_TIMEOUT`), `429`
-(`RATE_LIMITED`), `401` (`UNAUTHENTICATED`), or `500` for an unrecognized error — never a
+(`RATE_LIMITED`, an uncoded `RESOURCE_EXHAUSTED` from a pre-0.9.0 runtime; a coded one maps per
+[the runtime error-code mapping](#policy-errors)), `401` (`UNAUTHENTICATED`), or `500` for an unrecognized error — never a
 silently-empty diff.
 
 ---
@@ -685,7 +710,7 @@ Canonical event types are exported as `CANONICAL_EVENT_TYPES` from `src/contract
 | `message.sent` | Outbound message acknowledged |
 | `message.received` | Inbound message from runtime |
 | `message.send_failed` | Message delivery failed |
-| `signal.emitted` | Ambient signal broadcast |
+| `signal.emitted` | Ambient signal broadcast. Carries `data.senderAuthenticated` (see below) |
 | `signal.acknowledged` | Signal ack — annotates matching `signal.emitted` entry with `acknowledgedAt` / `acknowledgedBy` |
 | `proposal.created` | New proposal/request submitted (Proposal, CounterProposal, ApprovalRequest, TaskRequest, HandoffOffer) |
 | `proposal.updated` | Evaluation/vote/counter received (Evaluation, Vote, Accept, Reject, Withdraw, Approve, Abstain, TaskAccept, etc.) |
@@ -699,6 +724,23 @@ Canonical event types are exported as `CANONICAL_EVENT_TYPES` from `src/contract
 | `policy.commitment.evaluated` | Commitment evaluated against policy rules |
 | `policy.denied` | Commitment rejected by policy (includes reasons) |
 | `llm.call.completed` | Synthesized by the control plane when an agent message carries LLM metadata (§3.3) |
+
+**`signal.emitted.data.senderAuthenticated`** (boolean) is copied from the runtime's
+`WatchSignalsResponse.sender_authenticated` (proto 0.1.11, runtime v0.9.0) on every signal the
+control plane ingests from `WatchSignals`:
+
+- `true`: the runtime authenticated the sender per RFC-MACP-0004 §3, through a configured
+  auth-tokens file or a JWT issuer, and derived `sender` from that credential.
+- `false`: the runtime runs in dev-mode auth, where the bearer value is taken as the sender. A
+  runtime that predates the field (0.8.x) also reports `false`: the field is a plain proto3
+  `bool`, so "not sent" and `false` cannot be told apart on the wire.
+
+The value is per runtime, not per signal. The same flag also appears on the other events built from that
+envelope: `message.received`, `llm.call.completed` (so token and cost metrics can be read
+with it), and the ambient `progress.reported`. It is also on the projected signal entry. Treat only `true` as verified. RFC-MACP-0006 §3.4
+requires that a signal with `false` must not influence operational decisions. The field is
+omitted only on a `Signal` envelope that arrives some other way than `WatchSignals`, and the
+runtime does not deliver signals that way.
 
 ### Decision Lifecycle — event payload shapes (§3.2)
 

@@ -31,6 +31,8 @@ export interface RuntimeAck {
     detailsBase64?: string;
     details?: Buffer | Uint8Array;
     reasons?: string[];
+    // Structured per-rule denials `{code, message, participants}` (runtime v0.9.0+).
+    denials?: Array<Record<string, unknown>>;
   };
 }
 
@@ -54,7 +56,16 @@ export interface RawRuntimeEvent {
     message: string;
     sessionId?: string;
     messageId?: string;
+    /** `MACPError.details` — JSON `{reasons, denials}` for POLICY_DENIED (runtime v0.9.0+); empty before. */
+    details?: Uint8Array;
   };
+  /**
+   * `WatchSignalsResponse.sender_authenticated` (proto 0.1.11, runtime v0.9.0) — set only on events
+   * from `watchSignals()`. `true` only when the runtime authenticated the sender (RFC-MACP-0004 §3);
+   * the field is a plain proto3 bool, so a runtime that predates it (0.8.x) or runs in dev mode
+   * reports `false`. Consumers MUST NOT let a `false` signal influence operational decisions.
+   */
+  senderAuthenticated?: boolean;
 }
 
 export interface RuntimeInitializeRequest {
@@ -218,7 +229,13 @@ export interface RuntimeCapabilities {
   manifest?: { getManifest?: boolean };
   modeRegistry?: { listModes?: boolean; listChanged?: boolean };
   roots?: { listRoots?: boolean; listChanged?: boolean };
-  policyRegistry?: { registerPolicy?: boolean; listPolicies?: boolean; listChanged?: boolean };
+  policyRegistry?: {
+    registerPolicy?: boolean;
+    listPolicies?: boolean;
+    listChanged?: boolean;
+    /** Vendor rule extensions (`x-…` keys) the runtime implements (proto 0.1.11; `[]` from a 0.8.x runtime). */
+    ruleExtensions?: string[];
+  };
 }
 
 /**

@@ -1,3 +1,5 @@
+import { AppException } from '../errors/app-exception';
+import { ErrorCode } from '../errors/error-codes';
 import { PolicyRulesValidatorService } from '../policy/policy-rules-validator.service';
 import { RuntimeController } from './runtime.controller';
 import { AppConfigService } from '../config/app-config.service';
@@ -202,7 +204,12 @@ describe('RuntimeController', () => {
         { objection_handling: { veto_threshhold: 1 } },
         'veto_threshhold'
       ],
-      ['an unknown key under the wildcard mode', '*', { not_a_rule_key: 1 }, 'unrecognized key "not_a_rule_key"']
+      [
+        'an unknown key under the wildcard mode',
+        '*',
+        { not_a_rule_key: 1 },
+        'rules.not_a_rule_key is not a defined key'
+      ]
     ])('rejects %s without calling the runtime', async (_label, mode, rules, expected) => {
       await expect(
         controller.registerPolicy({ policyId: 'policy.typo', mode, description: 'typo', rules, schemaVersion: 3 })
@@ -229,6 +236,59 @@ describe('RuntimeController', () => {
       });
 
       expect(mockProvider.registerPolicy).toHaveBeenCalledTimes(2);
+    });
+
+    describe('annotation and vendor-extension keys (runtime v0.9.0 admission parity)', () => {
+      const register = (rules: Record<string, unknown>, mode = 'macp.mode.decision.v1') =>
+        controller.registerPolicy({ policyId: 'policy.s1', mode, description: 's1', rules, schemaVersion: 3 });
+
+      it('forwards a wildcard policy carrying annotation keys', async () => {
+        mockProvider.registerPolicy.mockResolvedValue({ ok: true });
+        await register({ _note: 'why', voting: { $comment: 'x', algorithm: 'majority' } }, '*');
+        expect(mockProvider.registerPolicy).toHaveBeenCalledTimes(1);
+      });
+
+      it('refuses an x- key the runtime did not advertise, naming it, without calling the runtime', async () => {
+        mockProvider.capabilities = { policyRegistry: { registerPolicy: true, ruleExtensions: [] } };
+        await expect(register({ 'x-com.example': {} })).rejects.toThrow(
+          /^INVALID_POLICY_DEFINITION: invalid policy rules for mode "macp\.mode\.decision\.v1": rules\.x-com\.example is not a defined key/
+        );
+        mockProvider.capabilities = { policyRegistry: { registerPolicy: true, ruleExtensions: ['x-org.other'] } };
+        await expect(register({ 'x-com.example': {} })).rejects.toThrow(
+          `this runtime implements no vendor extension 'x-com.example' (implemented: ["x-org.other"])`
+        );
+        expect(mockProvider.registerPolicy).not.toHaveBeenCalled();
+      });
+
+      it('forwards an advertised x- key', async () => {
+        mockProvider.capabilities = { policyRegistry: { registerPolicy: true, ruleExtensions: ['x-com.example'] } };
+        mockProvider.registerPolicy.mockResolvedValue({ ok: true });
+        await register({ 'x-com.example': { require_reason: true } });
+        expect(mockProvider.registerPolicy).toHaveBeenCalledTimes(1);
+      });
+
+      it.each([
+        ['no capabilities cached', undefined],
+        ['a malformed ruleExtensions value', { policyRegistry: { ruleExtensions: 'x-com.example' } }]
+      ])('leaves the extension name to the runtime with %s', async (_label, capabilities) => {
+        mockProvider.capabilities = capabilities;
+        mockProvider.registerPolicy.mockResolvedValue({ ok: true });
+        await register({ 'x-com.example': {} });
+        expect(mockProvider.registerPolicy).toHaveBeenCalledTimes(1);
+      });
+
+      it.each([
+        ['a non-object x- value', { 'x-com.example': 1 }, 'a vendor-extension value must be a JSON object'],
+        [
+          'a nested x- key',
+          { voting: { algorithm: 'majority', 'x-com.example': {} } },
+          'vendor-extension keys are legal only at the top level of rules'
+        ]
+      ])('refuses %s even when the runtime advertises the key', async (_label, rules, expected) => {
+        mockProvider.capabilities = { policyRegistry: { registerPolicy: true, ruleExtensions: ['x-com.example'] } };
+        await expect(register(rules)).rejects.toThrow(expected);
+        expect(mockProvider.registerPolicy).not.toHaveBeenCalled();
+      });
     });
 
     it('returns error result for non-validation errors', async () => {
@@ -267,16 +327,10 @@ describe('RuntimeController', () => {
       expect(mockProvider.registerPolicy).not.toHaveBeenCalled();
     });
 
-    it('returns REGISTRY_READ_ONLY 405 when the runtime rejects with a read-only FAILED_PRECONDITION (T9)', async () => {
-      mockProvider.registerPolicy.mockRejectedValue(
-        Object.assign(new Error('policy registry is read-only (MACP_POLICIES_DIR)'), {
-          details: { grpcCode: 9 }
-        })
-      );
-
-      const err = await controller
+    const registerRo = (policyId: string) =>
+      controller
         .registerPolicy({
-          policyId: 'policy.ro2',
+          policyId,
           mode: 'macp.mode.decision.v1',
           description: 'read-only',
           rules: { voting: { algorithm: 'majority' } },
@@ -284,8 +338,65 @@ describe('RuntimeController', () => {
         })
         .catch((e) => e);
 
+    // `provider.unary()` rethrows `mapGrpcError(...)`, so a 0.8.x read-only
+    // FAILED_PRECONDITION arrives as AppException(CONFLICT, …, {grpcCode: 9}).
+    it('returns REGISTRY_READ_ONLY 405 when a 0.8.x runtime rejects with a read-only FAILED_PRECONDITION (T9)', async () => {
+      mockProvider.registerPolicy.mockRejectedValue(
+        new AppException(ErrorCode.CONFLICT, 'policy registry is read-only (MACP_POLICIES_DIR)', 409, { grpcCode: 9 })
+      );
+
+      const err = await registerRo('policy.ro2');
+
       expect(err.errorCode).toBe('REGISTRY_READ_ONLY');
       expect(err.getStatus()).toBe(405);
+    });
+
+    it('returns REGISTRY_READ_ONLY 405 for a raw read-only FAILED_PRECONDITION ServiceError (T9)', async () => {
+      mockProvider.registerPolicy.mockRejectedValue(
+        Object.assign(new Error('9 FAILED_PRECONDITION: policy registry is read-only'), {
+          code: 9,
+          details: 'policy registry is read-only'
+        })
+      );
+
+      const err = await registerRo('policy.ro3');
+
+      expect(err.errorCode).toBe('REGISTRY_READ_ONLY');
+      expect(err.getStatus()).toBe(405);
+    });
+
+    it('keys on a coded REGISTRY_READ_ONLY even when the message never says "read-only" (runtime v0.9.0)', async () => {
+      mockProvider.registerPolicy.mockRejectedValue(
+        new AppException(ErrorCode.REGISTRY_READ_ONLY, 'registry writes disabled', 405, {
+          grpcCode: 9,
+          macpErrorCode: 'REGISTRY_READ_ONLY'
+        })
+      );
+
+      const err = await registerRo('policy.ro4');
+
+      expect(err.errorCode).toBe('REGISTRY_READ_ONLY');
+      expect(err.getStatus()).toBe(405);
+      expect(err.metadata).toMatchObject({ macpErrorCode: 'REGISTRY_READ_ONLY' });
+    });
+
+    it('does not reclassify a differently-coded FAILED_PRECONDITION whose text mentions read-only (runtime v0.9.0)', async () => {
+      const coded = new AppException(ErrorCode.SESSION_NOT_OPEN, 'session is read-only now', 409, {
+        grpcCode: 9,
+        macpErrorCode: 'SESSION_NOT_OPEN'
+      });
+      mockProvider.registerPolicy.mockRejectedValue(coded);
+
+      const err = await registerRo('policy.ro5');
+
+      expect(err).toBe(coded);
+    });
+
+    it('rethrows an unrelated uncoded FAILED_PRECONDITION unchanged', async () => {
+      const conflict = new AppException(ErrorCode.CONFLICT, 'policy busy', 409, { grpcCode: 9 });
+      mockProvider.registerPolicy.mockRejectedValue(conflict);
+
+      expect(await registerRo('policy.ro6')).toBe(conflict);
     });
 
     it('unregisterPolicy surfaces REGISTRY_READ_ONLY on a read-only registry (T9)', async () => {

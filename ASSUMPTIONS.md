@@ -490,3 +490,115 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   "still marks the marker finalized/aborted without throwing when finalizeRun itself fails
   (nested fallback)" — mutation-tested (fails when the nested attempt is removed). Decided
   by Opus (reversible, low blast radius); logged in `DECISIONS.md`.
+
+## P2 (v0.9.0) — the circuit breaker treats coded refusals as expected, but still counts transport statuses even when coded
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 2)
+- **Assumed:** A status carrying `macp-error-code` is a deliberate application-level refusal (the runtime
+  answered), so it must not trip the breaker — except `INTERNAL_ERROR` and `STREAM_LAGGED`, and any status on
+  `UNAVAILABLE`/`DEADLINE_EXCEEDED`/`INTERNAL`/`UNKNOWN`/`DATA_LOSS`, which count regardless of a code
+  (`rust-runtime.provider.ts` `BREAKER_COUNTED_MACP_CODES` / `BREAKER_COUNTED_GRPC_STATUSES`). Consequence: a
+  misconfigured bearer on 0.9.0 (coded `UNAUTHENTICATED`) fails every call but never opens the breaker; on 0.8.x
+  (uncoded) it still does.
+- **Chose:** this split rather than "coded ⇒ expected" outright, so a proxy or runtime that stamps a code on a
+  transport failure still trips the breaker. Uncoded errors keep today's behaviour exactly.
+- **Blast radius if wrong:** breaker opens too late (auth misconfig keeps hitting the runtime — bounded by the
+  per-call deadline and the request rate) or too early (a new transport-class code). Reversible: two constant sets.
+- **Status:** CONFIRMED (2026-10-18) — matches the plan's AC6/AC7; Opus verifier PASS.
+
+## P2 (v0.9.0) — runtime error detail lives on `AppException.metadata`, not `.details`
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 2) words the carried fields as `details.macpErrorCode`.
+- **Assumed / chose:** `AppException` already exposes extra fields as `.metadata` (serialised as `metadata` in the
+  HTTP error body), so `macpErrorCode`, `grpcCode`, `reasons`, `denials` go there; inventing a second `details`
+  field would split the error body shape. `UNKNOWN_POLICY_VERSION` keeps its existing 400 as a *run-failure
+  reason* (`handleExecuteError`) while a directly-mapped status uses the registry's 404. `markFailed` persists only
+  the message string, so run-failure records do not carry `reasons`/`denials` (unchanged from 0.8.x).
+- **Status:** CONFIRMED (2026-10-18) — Opus verifier PASS; reversible.
+
+## P3 (v0.9.0) — inline policy-deny reasons come from `MACPError.details`; the free text is the 0.8.x fallback
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 3)
+- **Assumed:** a v0.9.0 inline `POLICY_DENIED` frame carries the bare `PolicyDenied` display string as `message` and
+  JSON `{reasons, denials}` as `details` (`macp-runtime/src/server.rs:239` `stream_inline_error`). The normalizer
+  takes `reasons` from `details` when it parses to a non-empty list, keeps `denials` whenever present, and otherwise
+  falls back to parsing the message (the 0.8.x `"PolicyDenied: a; b"` shape). An empty `bytes` field (proto-loader
+  decodes unset as an empty Buffer) is dropped at the provider.
+- **Note:** inline frames go back only to the stream that sent the envelope (`server.rs:705`), and the CP's
+  subscriber never sends, so no live runtime can deliver one to the CP; this path is covered by unit tests only.
+- **Status:** CONFIRMED (2026-10-18) — read from runtime source; reversible.
+
+## P3 (v0.9.0) — compacted-history detection: inline `INVALID_ENVELOPE` + sentence; code 9 only when uncoded
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 3)
+- **Assumed / chose:** a v0.9.0 inline frame is a gap only when `code === 'INVALID_ENVELOPE'` **and** its message
+  matches `COMPACTED_HISTORY_RE` (that code is shared with ordinary envelope validation). A terminal gRPC code 9
+  counts as a gap only when it carries no `macp-error-code` (a coded code-9 is a named refusal, e.g.
+  `REGISTRY_READ_ONLY`); the sentence regex still matches on any terminal error. The 0.8.x inline shape (sentence as
+  both code and message, 0.8.8 `server.rs:614-629`) keeps working; no supported runtime sends the terminal shape, which
+  stays for a proxy or other non-runtime peer only: no released runtime
+  sends it (v0.5–0.8 build the status but deliver it inline; v0.4 has no compaction notice).
+- **Status:** CONFIRMED (2026-10-18) — read from `server.rs:584-590`; reversible.
+
+## P3 (v0.9.0) — STREAM_LAGGED on a watch stream: immediate reconnect at most once per 5s; WatchSignals loses the gap
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 3)
+- **Assumed / chose:** a coded `STREAM_LAGGED` end of `WatchSessions`/`WatchSignals` reconnects with no delay, but
+  only if the previous immediate reconnect was ≥ 5s ago (otherwise the normal 5s back-off), so a consumer that
+  is persistently too slow cannot hot-loop the runtime. Each lag increments
+  `macp_watch_stream_lagged_total{stream}`. `WatchSessions` initial sync re-emits every registry session with its state;
+  tracked `running`/`suspended` runs are reconciled to it (runs still binding are left to RunExecutor), which recovers a
+  lifecycle event dropped in the lag (the runtime's `watch_sync.rs:40-42` asks lagged clients to reconcile); `WatchSignals` has no replay, so signals in the gap are lost — accepted and documented
+  (TROUBLESHOOTING), not recovered.
+- **Status:** CONFIRMED (2026-10-18) — matches the plan; reversible (one constant, `src/runs/watch-reconnect.ts`).
+
+## P4 (v0.9.0) — vendor-extension name gate trusts the advertised `ruleExtensions`; unknown capabilities skip it
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 4)
+- **Assumed / chose:** `POST /runtime/policies` refuses a top-level `x-` key whose name is not in the runtime's
+  Initialize-advertised `policyRegistry.ruleExtensions` (proto 0.1.11 `PolicyRegistryCapability.rule_extensions`,
+  documented as advisory), with the runtime's own refusal text verbatim (macp-policy `registry.rs`
+  `validate_rule_keys`; macp-core `policy/keys.rs` `KeyViolation`). When the provider has not initialized, or the value
+  is not a string array, the name check is skipped and left to the runtime; the shape checks (object value, top level
+  only) always run. A 0.8.x runtime decodes the field to `[]` (the provider loader uses `defaults: true`), so against
+  0.8.x every `x-` key is refused — the same as the CP's closed-set check did before this change, so not a regression,
+  though 0.8.x itself would have ignored the key. The CP pre-check now leads with `INVALID_POLICY_DEFINITION:` like the
+  runtime's in-band refusal, so both layers present one 400 contract.
+- **Verified:** `test/integration/admission-parity-live.integration.spec.ts` — runtime v0.9.0 and the CP validator agree
+  on 13 rule sets (misspelt / undefined keys, `x-` unadvertised / non-object / nested / malformed, annotations at every
+  level, `"*"`), with `INVALID_POLICY_DEFINITION` on every refusal.
+- **Status:** CONFIRMED (2026-10-18) — read from runtime source and verified live; reversible.
+
+## P4 (v0.9.0) — `isValidSessionId` mirrors `validate_session_id_for_acceptance` exactly
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 4)
+- **Assumed / chose:** refuse empty or > 128 bytes (`Buffer.byteLength`); a 36-char id containing `-` that parses as a
+  UUID must be lowercase version 4 or 7 (no base64url fall-through; the variant nibble is not checked, as in the runtime);
+  otherwise accept `^[A-Za-z0-9_-]{22,}$` (`crates/macp-core/src/session.rs:762-796`).
+- **Verified:** the live spec above sends `SessionStart` under 8 ids (lowercase v4/v7, 22-char, 128-byte, uppercase v4,
+  v1, 129-byte, 21-char); the runtime's verdict equals `isValidSessionId` on each.
+- **Status:** CONFIRMED (2026-10-18) — verified live; reversible.
+
+## P4 (v0.9.0) — `"*"` rule keys are closed over the union of the five modes; values must pass every owning mode
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 4, verifier round 1 gap)
+- **Assumed / chose:** a `"*"` policy is key-checked like the runtime's `closed_key_violation(rules,
+  rule_shape_for_mode("*"))` (macp-core `policy/keys.rs`): a key is defined at a level if any mode's schema defines it
+  there, walked recursively, with the shapes derived from the vendored schemas (`additionalProperties: false` = closed).
+  Values are then checked per top-level key against EVERY owning mode's schema with unknown-key errors dropped, mirroring
+  `validate_rules_for_mode("*")`'s parse into each mode's struct. Safe because the five schemas define their shared keys
+  (`commitment.authority`/`designated_roles`) identically. Before this, `acceptance: {criterion,
+  implicit_accept_timeout_ms}` was refused by the CP and accepted by the runtime.
+- **Verified:** live parity spec (22/22): mixed `acceptance` accepted by both, a mistyped `implicit_accept_timeout_ms`
+  refused by both, a misspelt nested key refused by both.
+- **Status:** CONFIRMED (2026-10-18) — read from runtime source and verified live; reversible.
+
+## P5 (v0.9.0) — `senderAuthenticated` is always a boolean; "absent on 0.8.x" cannot be observed
+- **Plan:** `plans/macp-runtime-0.9.0-alignment.md` (Phase 5, AC2 diverges)
+- **Assumed / chose:** AC2 ("a response without the field yields an event without it") is not achievable:
+  `WatchSignalsResponse.sender_authenticated` is a plain proto3 `bool` (proto 0.1.11 `core.proto:417`, no `optional`),
+  so a 0.8.x runtime's omitted field and an explicit `false` are the same bytes, and the provider loader's
+  `defaults: true` materialises it as `false`. The proto comment defines that reading as intentional ("a runtime that
+  predates this field … reports every Signal as unauthenticated: the safe direction"). The CP therefore carries
+  `senderAuthenticated: <bool>` on every WatchSignals event, only a literal `true` counting (`=== true`), and omits it
+  only on envelopes that did not come from WatchSignals. Rejected: gating on the Initialize-reported runtime version to
+  synthesise "absent" — `SignalConsumerService` can open WatchSignals before any Initialize, version strings are not
+  guaranteed parseable, and a runtime upgraded behind the same address would be mis-labelled until re-initialize; it
+  would also contradict the proto's own semantics. The console must treat only `true` as verified (it would have to
+  treat absent as unverified anyway, so the two-state contract loses no safety).
+- **Verified:** `test/integration/signal-auth-live.integration.spec.ts` against runtime v0.9.0 — with an auth-tokens
+  file the persisted `signal.emitted` carries `true`; in dev-mode auth (port 50052, no tokens) it carries `false`.
+  Runtime emission read from `src/server.rs:1407-1421` (`security.authenticates_senders()`, per server).
+- **Status:** CONFIRMED (2026-10-18) — reversible (additive field; switching to a version gate later is a local change).

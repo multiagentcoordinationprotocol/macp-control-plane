@@ -261,6 +261,30 @@ describe('ProjectionService', () => {
       });
     });
 
+    it.each([true, false])('signal.emitted carries senderAuthenticated: %s onto the signal entry', (flag) => {
+      const event = makeEvent({
+        type: 'signal.emitted',
+        subject: { kind: 'signal', id: 'sig-auth' },
+        data: { sender: 'agent-A', senderAuthenticated: flag, decodedPayload: { signalType: 'anomaly' } }
+      });
+
+      const result = service.applyEvents(service.empty('run-1'), [event]);
+
+      expect(result.signals.signals[0].senderAuthenticated).toBe(flag);
+    });
+
+    it('signal.emitted ignores a non-boolean senderAuthenticated', () => {
+      const event = makeEvent({
+        type: 'signal.emitted',
+        subject: { kind: 'signal', id: 'sig-auth' },
+        data: { sender: 'agent-A', senderAuthenticated: 'true', decodedPayload: { signalType: 'anomaly' } }
+      });
+
+      const result = service.applyEvents(service.empty('run-1'), [event]);
+
+      expect(result.signals.signals[0]).not.toHaveProperty('senderAuthenticated');
+    });
+
     it('signal.emitted preserves decoded payload on signal entry (§1.2)', () => {
       const base = service.empty('run-1');
       const event = makeEvent({

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { CanonicalEvent, CanonicalEventType } from '../contracts/control-plane';
 import { EventNormalizer, NormalizeContext, RawRuntimeEvent } from '../contracts/runtime';
 import { PROJECTION_SCHEMA_VERSION } from '../projection/projection.service';
+import { parsePolicyDenyDetails } from '../runtime/grpc-helpers';
 import { ProtoRegistryService } from '../runtime/proto-registry.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { RedactionService } from '../telemetry/redaction.service';
@@ -136,19 +137,21 @@ export class EventNormalizerService implements EventNormalizer {
           'stream-inline-error'
         )
       ];
-      // If it's a policy denial, also emit policy.denied. The inline path's
-      // `code` and `message` fields are both built server-side from
-      // `status.message().to_string()` (macp-runtime/src/server.rs:621-622) —
-      // for MacpError::PolicyDenied that string is literally "PolicyDenied" or
-      // "PolicyDenied: <reason1>; <reason2>" (server.rs:769-775), never the
-      // stable POLICY_DENIED constant the ack path's error code genuinely is
-      // (crates/macp-core/src/error.rs:75). Keep the literal check for
-      // forward-compat in case that ever changes, and match the real prefix
-      // (anchored so unrelated text can't false-match) on both fields, since
-      // either could in principle carry it.
+      // If it's a policy denial, also emit policy.denied. From runtime v0.9.0
+      // the inline frame is `stream_inline_error` (macp-runtime/src/server.rs:240):
+      // `code` is the registry constant POLICY_DENIED, `message` is the bare
+      // Display text "PolicyDenied", and `details` carries the structured
+      // `{reasons, denials}` JSON a unary ack carries. Before v0.9.0 both `code`
+      // and `message` were `status.message()` — "PolicyDenied" or
+      // "PolicyDenied: <r1>; <r2>" — with no details, so the anchored prefix
+      // match and the free-text reason split remain as the 0.8.x fallback.
       const isPolicyDeny =
         err.code === 'POLICY_DENIED' || /^PolicyDenied(:|$)/.test(err.code) || /^PolicyDenied(:|$)/.test(err.message);
       if (isPolicyDeny) {
+        const structured = parsePolicyDenyDetails(err.details);
+        const reasons = structured?.reasons?.length
+          ? structured.reasons
+          : this.parsePolicyDenyReasons(err.message, err.code);
         events.push(
           this.makeEvent(
             runId,
@@ -158,7 +161,11 @@ export class EventNormalizerService implements EventNormalizer {
             {
               errorCode: err.code,
               errorMessage: err.message,
-              decodedPayload: { decision: 'deny', reasons: this.parsePolicyDenyReasons(err.message, err.code) }
+              decodedPayload: {
+                decision: 'deny',
+                reasons,
+                ...(structured?.denials ? { denials: structured.denials } : {})
+              }
             },
             'stream-inline-error'
           )
@@ -174,6 +181,10 @@ export class EventNormalizerService implements EventNormalizer {
     const envelope = rawEvent.envelope;
     const decoded = this.protoRegistry.decodeKnown(envelope.mode, envelope.messageType, envelope.payload);
     const canonical: CanonicalEvent[] = [];
+    // WatchSignals' `sender_authenticated`, copied onto every event that attributes this envelope's
+    // content to its sender. StreamSession-delivered envelopes leave it unset.
+    const senderAuth =
+      rawEvent.senderAuthenticated !== undefined ? { senderAuthenticated: rawEvent.senderAuthenticated } : {};
 
     if (!ctx.knownParticipants.has(envelope.sender)) {
       ctx.knownParticipants.add(envelope.sender);
@@ -205,6 +216,7 @@ export class EventNormalizerService implements EventNormalizer {
           messageId: envelope.messageId,
           sessionId: envelope.sessionId,
           sender: envelope.sender,
+          ...senderAuth,
           payload: decoded ?? { payloadBase64: envelope.payload.toString('base64') }
         },
         envelope.messageType
@@ -228,6 +240,7 @@ export class EventNormalizerService implements EventNormalizer {
             messageId: envelope.messageId,
             sessionId: envelope.sessionId,
             sender: envelope.sender,
+            ...senderAuth,
             decodedPayload: redacted
           },
           envelope.messageType
@@ -250,7 +263,8 @@ export class EventNormalizerService implements EventNormalizer {
             sessionId: envelope.sessionId,
             sender: envelope.sender,
             decodedPayload: decoded,
-            payloadTypeName: this.protoRegistry.getKnownTypeName(envelope.mode, envelope.messageType)
+            payloadTypeName: this.protoRegistry.getKnownTypeName(envelope.mode, envelope.messageType),
+            ...senderAuth
           },
           envelope.messageType
         )
@@ -391,6 +405,7 @@ export class EventNormalizerService implements EventNormalizer {
             modeName: envelope.mode,
             messageType: envelope.messageType,
             sender: envelope.sender,
+            ...senderAuth,
             decodedPayload: {
               percentage: progressPayload.progress != null ? Number(progressPayload.progress) * 100 : undefined,
               message: String(progressPayload.message ?? ''),

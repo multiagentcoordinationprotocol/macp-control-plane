@@ -55,7 +55,7 @@ export function decisionHappyScript(): RuntimeScript {
       {
         delayMs: 10,
         event: makeStreamEnvelope('macp.mode.decision.v1', 'Vote', 'voter', {
-          vote: 'approve',
+          vote: 'APPROVE',
           rationale: 'Approved',
         }),
       },
@@ -125,7 +125,7 @@ export function decisionEnrichedCommitmentScript(): RuntimeScript {
       {
         delayMs: 10,
         event: makeStreamEnvelope('macp.mode.decision.v1', 'Vote', 'voter', {
-          vote: 'approve',
+          vote: 'APPROVE',
           rationale: 'Approved',
         }),
       },
@@ -175,7 +175,7 @@ export function decisionObjectionScript(): RuntimeScript {
       },
       {
         delayMs: 10,
-        event: makeStreamEnvelope('macp.mode.decision.v1', 'Vote', 'voter', { vote: 'approve' }),
+        event: makeStreamEnvelope('macp.mode.decision.v1', 'Vote', 'voter', { vote: 'APPROVE' }),
       },
       {
         delayMs: 10,
@@ -207,6 +207,8 @@ export function decisionRejectionScript(): RuntimeScript {
       {
         delayMs: 10,
         event: makeStreamEnvelope('macp.mode.decision.v1', 'Vote', 'voter', {
+          // Deliberately lowercase: pins the projection's case tolerance. A 0.9.0 runtime only
+          // accepts and emits the uppercase enum (APPROVE/REJECT/ABSTAIN), as the fixtures above use.
           vote: 'reject',
           rationale: 'Insufficient evidence',
         }),

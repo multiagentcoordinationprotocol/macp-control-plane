@@ -1,3 +1,4 @@
+import * as grpc from '@grpc/grpc-js';
 import { Logger } from '@nestjs/common';
 import { StreamConsumerService } from './stream-consumer.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
@@ -576,6 +577,61 @@ describe('StreamConsumerService', () => {
       expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
     });
 
+    function codedStatus(code: number, macpCode: string, details: string): Error {
+      const metadata = new grpc.Metadata();
+      metadata.set('macp-error-code', macpCode);
+      return Object.assign(new Error(`${code} ${details}`), { code, details, metadata });
+    }
+
+    it('does not treat a coded FAILED_PRECONDITION without the compacted sentence as a gap — it resumes (v0.9.0)', async () => {
+      const coded = codedStatus(9, 'SESSION_NOT_OPEN', 'session is not open');
+      eventService.persistRawAndCanonical.mockImplementation(async (_runId: string, raw: any) =>
+        raw.kind === 'session-snapshot'
+          ? ([{ seq: 2, type: 'session.state.changed', data: { state: 'SESSION_STATE_RESOLVED' } }] as any)
+          : ([{ seq: 1, type: 'message.received', data: {} }] as any)
+      );
+      const handle1 = makeHandle([envelope('m1')], coded);
+      const handle2 = makeHandle([
+        {
+          kind: 'session-snapshot',
+          receivedAt: 't',
+          sessionSnapshot: { sessionId: 'session-1', mode: '', state: 'SESSION_STATE_RESOLVED' }
+        }
+      ]);
+      const mockProvider = { subscribeSession: jest.fn().mockReturnValueOnce(handle2), getSession: jest.fn() };
+      runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+      const marker = newMarker();
+      await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+      expect(marker.historyGap).toBeFalsy();
+      expect(mockProvider.subscribeSession).toHaveBeenCalledWith(expect.objectContaining({ afterSequence: 1 }));
+      const gapEmitted = eventService.emitControlPlaneEvents.mock.calls.some((call) =>
+        (call[1] as any[]).some((e) => e.type === 'session.stream.gap')
+      );
+      expect(gapEmitted).toBe(false);
+    });
+
+    it('still treats a coded status carrying the compacted sentence as a gap', async () => {
+      const coded = codedStatus(
+        9,
+        'INVALID_ENVELOPE',
+        'session history before ordinal 5 was compacted; resume with after_sequence >= 5 or re-read state via GetSession'
+      );
+      const handle1 = makeHandle([envelope('m1')], coded);
+      const mockProvider = {
+        subscribeSession: jest.fn(),
+        getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
+      };
+      runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+      const marker = newMarker();
+      await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+      expect(marker.historyGap).toBe(true);
+      expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
+    });
+
     it('still emits session.stream.gap when STREAM_RESUME_ENABLED is false (gap check now runs before the resume-flag check, issue #69)', async () => {
       (config as any).streamResumeEnabled = false;
       const gapError = Object.assign(new Error('session history before ordinal 5 was compacted'), { code: 9 });
@@ -623,8 +679,8 @@ describe('StreamConsumerService', () => {
           kind: 'stream-inline-error',
           receivedAt: '2026-01-01T00:00:00.000Z',
           inlineError: {
-            // The real runtime sets BOTH fields to status.message() — no
-            // machine-readable code is available on the inline frame.
+            // 0.8.x frame: the runtime set BOTH fields to status.message().
+            // v0.9.0's INVALID_ENVELOPE frame is covered separately below.
             code: 'session history before ordinal 5 was compacted; resume with after_sequence >= 5 or re-read state via GetSession',
             message:
               'session history before ordinal 5 was compacted; resume with after_sequence >= 5 or re-read state via GetSession',
@@ -752,6 +808,71 @@ describe('StreamConsumerService', () => {
         );
         expect(gapEmitted).toBe(false);
         expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
+      });
+
+      it('emits exactly one session.stream.gap for the v0.9.0 inline INVALID_ENVELOPE compacted-history frame', async () => {
+        const v09Frame = {
+          kind: 'stream-inline-error',
+          receivedAt: '2026-01-01T00:00:00.000Z',
+          inlineError: {
+            code: 'INVALID_ENVELOPE',
+            message:
+              'session history before ordinal 5 was compacted; resume with after_sequence >= 5 or re-read state via GetSession',
+            sessionId: 'session-1',
+            messageId: ''
+          }
+        };
+        const handle1 = makeHandle([v09Frame, envelope('should-not-process')]);
+        const mockProvider = {
+          subscribeSession: jest.fn(),
+          getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
+        };
+        runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+        const marker = newMarker();
+        await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+        const gapEvents = eventService.emitControlPlaneEvents.mock.calls.flatMap((call) =>
+          (call[1] as any[]).filter((e) => e.type === 'session.stream.gap')
+        );
+        expect(gapEvents).toHaveLength(1);
+        expect(marker.historyGap).toBe(true);
+        expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
+        expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
+      });
+
+      it('treats an INVALID_ENVELOPE inline frame with any other message as an ordinary rejection, not a gap', async () => {
+        (config as any).streamMaxRetries = 0;
+        const other = {
+          kind: 'stream-inline-error',
+          receivedAt: '2026-01-01T00:00:00.000Z',
+          inlineError: {
+            code: 'INVALID_ENVELOPE',
+            message: 'payload is not valid protobuf',
+            sessionId: 'session-1',
+            messageId: 'm-x'
+          }
+        };
+        const handle1 = makeHandle([other]);
+        const mockProvider = {
+          subscribeSession: jest.fn(),
+          getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
+        };
+        runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+        const marker = newMarker();
+        await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+        expect(normalizer.normalize).toHaveBeenCalledWith(
+          'run-1',
+          expect.objectContaining({ inlineError: expect.objectContaining({ code: 'INVALID_ENVELOPE' }) }),
+          expect.anything()
+        );
+        expect(marker.historyGap).toBeFalsy();
+        const gapEmitted = eventService.emitControlPlaneEvents.mock.calls.some((call) =>
+          (call[1] as any[]).some((e) => e.type === 'session.stream.gap')
+        );
+        expect(gapEmitted).toBe(false);
       });
 
       it('is idempotent — an inline compaction error does not emit a duplicate gap once historyGap is already flagged', async () => {

@@ -1612,3 +1612,27 @@ Closed every open issue and deferred plan item, then archived the plans (`plans/
 - #101 → audit found no caller omitting `schemaVersion` (ui-console form always sends it; playground registers
   over gRPC with explicit v3). Stale docs fixed: control-plane `docs/API.md`, macp-ui-console#48, website#55.
 - Final state: 902 unit tests (57+ suites), 117 mock integration tests; 0 open issues, 0 open PRs.
+
+---
+
+# PROGRESS — macp-runtime-0.9.0-alignment
+
+Plan: `plans/macp-runtime-0.9.0-alignment.md` (local, gitignored; written by the macp-runtime session)
+Started: 2026-10-18 (via `/drive`, at the macp-runtime session's request on the owner's behalf)
+Branch: `feat/runtime-0.9.0-alignment`
+PR strategy: **one PR, one commit per phase** — the plan's §4 wants P1 to land with P2 (the 0.9.0 harness is P2's acceptance gate), and P3–P5 are small consumers of P2's `macpErrorCode`.
+Risk tiers: P1 simple · P2 complex (public HTTP error contract) · P3 complex (stream/event boundary) · P4 complex (admission boundary) · P5 simple.
+Owner decisions (asked 2026-10-18, before P2): **Q1** `REGISTRY_READ_ONLY` stays HTTP **405** (deliberate divergence from the registry's 409) · **Q2** `STREAM_LAGGED` → **503** retryable. Q3/Q4 follow the plan's recommendations.
+
+## Phase log
+
+| Phase | Status | Rounds | Verifier | Commit |
+|---|---|---|---|---|
+| P1 — harness + tested range → 0.9.0 | DONE | 1 | Opus (simple phase, gated solo because P2 is complex) — PASS | see git log |
+| P2 — map runtime errors by `macp-error-code` | DONE | 1 | Opus (complex: public HTTP error contract) — PASS; minor items: DECISIONS entry added, compacted-history code-9 narrowing moved to P3 | see git log |
+| P3 — inline-error details, compacted inline frame, STREAM_LAGGED on watch streams | DONE | 3 | Opus (complex: stream/event boundary). R1 GAPS: no snapshot reconcile after lag resync, 0.8.x mislabelled terminal, INTEGRATION.md:13 lag text, CLAUDE.md, live run, plan divergences. R2 GAPS: "pre-0.8" label also false (proxy-only), stale metric help text. R3 PASS. Live: stream-resume-live 3/3 on a locally built v0.9.0 | see git log |
+| P4 — policy validator parity (S1 `_`/`$`, `x-` gate, schemas @60262b8) + session_id (128 B, UUID v4/v7) | DONE | 2 | Opus (complex: HTTP admission contract). R1 GAPS: `"*"` refused mixed `acceptance` children that the runtime accepts (per-key check, not a union walk); no test; `"*"` parity wording overstated. R2 PASS. Live: admission-parity-live 22/22 on a locally built v0.9.0 | see git log |
+| P5 — `senderAuthenticated` on signals | DONE | 2 | Opus (complex: a public event and projection contract the console trusts). R1 GAPS: projected signal entry and sibling events (`message.received`/`llm.call.completed`/ambient `progress.reported`) lacked the flag; the tokens file for the live `true` path was undocumented; plan status and §5 compatibility text were stale. R2 PASS. AC2 diverges (a proto3 bool has no presence, see ASSUMPTIONS). Live: signal-auth-live 1/1 `true` (token-file v0.9.0) and 1/1 `false` (dev-mode v0.9.0), both incl. the projection | see git log |
+| Finalization (§4) | DONE | 1 | Opus whole-feature verify over main...HEAD: PASS, no defects. Doc fixes: drift-endpoint 429 qualifier, TROUBLESHOOTING UNKNOWN_POLICY_VERSION 400/404, WatchSessions reconcile runs on every (re)connect. Suites: unit 59/1070, mock integration 25 passed/6 skipped, docker integration has the same 8 pre-existing failing suites (28 tests) as the 0.8.6 baseline; new policy-registry-readonly + signal-auth-live pass. Reconcile: no UNCONFIRMED entries for this plan | see git log |
+| Ship | pushed | feat/runtime-0.9.0-alignment 1eab723 |
+| Ship | PR #114 opened | https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/114 |

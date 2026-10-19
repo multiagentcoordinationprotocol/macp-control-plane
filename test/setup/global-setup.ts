@@ -10,10 +10,10 @@ function startCommand(needPostgres: boolean, needRuntime: boolean): string {
     return 'docker compose -f docker-compose.test.yml --profile with-runtime up -d --wait';
   }
   if (needRuntime) {
-    // CI mode with a real runtime: start ONLY the named runtime service — the
+    // CI mode with a real runtime: start ONLY the named runtime services — the
     // bare `--profile with-runtime up` would also bring up postgres-test, which
     // collides with CI's own postgres service container on port 5433.
-    return 'docker compose -f docker-compose.test.yml --profile with-runtime up -d --wait runtime';
+    return 'docker compose -f docker-compose.test.yml --profile with-runtime up -d --wait runtime runtime-readonly';
   }
   // needPostgres only (local, mock/remote mode): start just postgres-test.
   return 'docker compose -f docker-compose.test.yml up -d postgres-test --wait';
@@ -33,7 +33,7 @@ export function stopCommand(needPostgres: boolean, needRuntime: boolean): string
     // postgres-test (never started) or any CI-managed container. `rm -sf` is
     // one call (stop + force-remove), so a mid-sequence failure can't leave
     // the container stopped-but-not-removed.
-    return 'docker compose -f docker-compose.test.yml rm -sf runtime';
+    return 'docker compose -f docker-compose.test.yml rm -sf runtime runtime-readonly';
   }
   return 'docker compose -f docker-compose.test.yml down';
 }

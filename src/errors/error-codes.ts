@@ -30,5 +30,13 @@ export enum ErrorCode {
   CONFLICT = 'CONFLICT',
   UNAUTHENTICATED = 'UNAUTHENTICATED',
   NOT_IMPLEMENTED = 'NOT_IMPLEMENTED',
-  RATE_LIMITED = 'RATE_LIMITED'
+  RATE_LIMITED = 'RATE_LIMITED',
+  // Runtime v0.9.0 registry codes that previously collapsed into a shared gRPC
+  // status (S13 — see `MACP_ERROR_REGISTRY` in `runtime/grpc-helpers.ts`).
+  PAYLOAD_TOO_LARGE = 'PAYLOAD_TOO_LARGE',
+  SESSION_NOT_OPEN = 'SESSION_NOT_OPEN',
+  // Retryable (HTTP 503): the runtime dropped a stream consumer that fell behind.
+  STREAM_LAGGED = 'STREAM_LAGGED',
+  INVALID_ENVELOPE = 'INVALID_ENVELOPE',
+  DUPLICATE_MESSAGE = 'DUPLICATE_MESSAGE'
 }

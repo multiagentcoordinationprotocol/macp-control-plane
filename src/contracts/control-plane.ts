@@ -51,7 +51,7 @@ export interface RunDescriptor {
   session: {
     /**
      * Optional caller-allocated session id. Must satisfy runtime validator
-     * (UUID v4/v7 or base64url 22+ chars). When omitted, control-plane allocates a UUID v4.
+     * (at most 128 bytes; lowercase UUID v4/v7 or base64url 22+ chars). When omitted, control-plane allocates a UUID v4.
      */
     sessionId?: string;
     modeName: string;
@@ -328,6 +328,12 @@ export interface SignalProjection {
     ts: string;
     confidence?: number;
     payload?: Record<string, unknown>;
+    /**
+     * `signal.emitted.data.senderAuthenticated` (runtime v0.9.0): `true` only when the runtime
+     * authenticated the sender. `false` in dev-mode auth and on pre-0.9.0 runtimes; absent on
+     * projections built before the field existed. Treat only `true` as verified.
+     */
+    senderAuthenticated?: boolean;
     acknowledgedAt?: string;
     acknowledgedBy?: string;
   }>;

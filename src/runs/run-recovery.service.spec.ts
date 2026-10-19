@@ -57,7 +57,9 @@ describe('RunRecoveryService', () => {
     };
     mockStreamConsumer = { start: jest.fn().mockResolvedValue(undefined) };
     mockEventService = { emitControlPlaneEvents: jest.fn().mockResolvedValue([]) };
-    mockProvider = { subscribeSession: jest.fn().mockReturnValue({ events: (async function* () {})(), abort: jest.fn() }) };
+    mockProvider = {
+      subscribeSession: jest.fn().mockReturnValue({ events: (async function* () {})(), abort: jest.fn() })
+    };
     mockRuntimeRegistry = { get: jest.fn().mockReturnValue(mockProvider) };
 
     service = new RunRecoveryService(
@@ -250,110 +252,131 @@ describe('RunRecoveryService', () => {
   });
 
   describe('end-to-end wiring through a real StreamConsumerService (compacted-resume path)', () => {
-    it('AC3: a FAILED_PRECONDITION on the resumed subscribe emits session.stream.gap and degrades to poll-only without resubscribing from 0', async () => {
-      // Use the real StreamConsumerService (not the mock) so this test proves
-      // RunRecoveryService's sessionHandle actually reaches consumeLoop's
-      // existing gap-detection logic end-to-end, rather than only asserting
-      // on mock call arguments.
-      const normalizer = { normalize: jest.fn().mockReturnValue([]) };
-      const eventService = {
-        emitControlPlaneEvents: jest.fn().mockResolvedValue([]),
-        persistRawAndCanonical: jest.fn().mockResolvedValue([])
-      };
-      const runtimeSessionRepository = {
-        updateState: jest.fn().mockResolvedValue(null),
-        updateStreamCursor: jest.fn().mockResolvedValue(null)
-      };
-      const runManager = {
-        markCompleted: jest.fn().mockResolvedValue({}),
-        markFailed: jest.fn().mockResolvedValue({}),
-        markCancelled: jest.fn().mockResolvedValue({}),
-        markRunning: jest.fn().mockResolvedValue({})
-      };
-      const streamHub = { complete: jest.fn(), publishEvent: jest.fn(), publishSnapshot: jest.fn() };
-      const streamConfig = {
-        streamBackoffBaseMs: 1,
-        streamBackoffMaxMs: 5,
-        streamIdleTimeoutMs: 120000,
-        streamMaxRetries: 5,
-        streamResumeEnabled: true,
-        runRecoveryEnabled: true
-      };
-      const instrumentation = {
-        activeStreams: { inc: jest.fn(), dec: jest.fn() },
-        streamReconnectsTotal: { inc: jest.fn() },
-        streamResumeGapTotal: { inc: jest.fn() },
-        recoveryTotal: { inc: jest.fn() }
-      };
-      const traceService = {
-        withRunSpan: jest.fn((_r: string, _n: string, _a: unknown, fn: () => Promise<unknown>) => fn()),
-        withSpan: jest.fn((_n: string, _a: unknown, fn: () => Promise<unknown>) => fn()),
-        addRunSpanEvent: jest.fn(),
-        getRunTraceContext: jest.fn().mockReturnValue(undefined)
-      };
+    const compactedSentence =
+      'session history before ordinal 5 was compacted; resume with after_sequence >= 5 or re-read state via GetSession';
+    it.each([
+      [
+        'terminal FAILED_PRECONDITION (proxy / non-runtime only)',
+        () =>
+          (async function* () {
+            throw Object.assign(new Error('session history before ordinal 5 was compacted'), { code: 9 });
+          })()
+      ],
+      [
+        'v0.9.0 inline INVALID_ENVELOPE frame',
+        () =>
+          (async function* () {
+            yield {
+              kind: 'stream-inline-error',
+              receivedAt: '2026-01-01T00:00:00.000Z',
+              inlineError: { code: 'INVALID_ENVELOPE', message: compactedSentence, sessionId: 'sess-1', messageId: '' }
+            };
+          })()
+      ]
+    ])(
+      'AC3: a compacted resume point (%s) on the resumed subscribe emits session.stream.gap and degrades to poll-only without resubscribing from 0',
+      async (_label, makeEvents) => {
+        // Use the real StreamConsumerService (not the mock) so this test proves
+        // RunRecoveryService's sessionHandle actually reaches consumeLoop's
+        // existing gap-detection logic end-to-end, rather than only asserting
+        // on mock call arguments.
+        const normalizer = { normalize: jest.fn().mockReturnValue([]) };
+        const eventService = {
+          emitControlPlaneEvents: jest.fn().mockResolvedValue([]),
+          persistRawAndCanonical: jest.fn().mockResolvedValue([])
+        };
+        const runtimeSessionRepository = {
+          updateState: jest.fn().mockResolvedValue(null),
+          updateStreamCursor: jest.fn().mockResolvedValue(null)
+        };
+        const runManager = {
+          markCompleted: jest.fn().mockResolvedValue({}),
+          markFailed: jest.fn().mockResolvedValue({}),
+          markCancelled: jest.fn().mockResolvedValue({}),
+          markRunning: jest.fn().mockResolvedValue({})
+        };
+        const streamHub = { complete: jest.fn(), publishEvent: jest.fn(), publishSnapshot: jest.fn() };
+        const streamConfig = {
+          streamBackoffBaseMs: 1,
+          streamBackoffMaxMs: 5,
+          streamIdleTimeoutMs: 120000,
+          streamMaxRetries: 5,
+          streamResumeEnabled: true,
+          runRecoveryEnabled: true
+        };
+        const instrumentation = {
+          activeStreams: { inc: jest.fn(), dec: jest.fn() },
+          streamReconnectsTotal: { inc: jest.fn() },
+          streamResumeGapTotal: { inc: jest.fn() },
+          recoveryTotal: { inc: jest.fn() }
+        };
+        const traceService = {
+          withRunSpan: jest.fn((_r: string, _n: string, _a: unknown, fn: () => Promise<unknown>) => fn()),
+          withSpan: jest.fn((_n: string, _a: unknown, fn: () => Promise<unknown>) => fn()),
+          addRunSpanEvent: jest.fn(),
+          getRunTraceContext: jest.fn().mockReturnValue(undefined)
+        };
 
-      const gapError = Object.assign(new Error('session history before ordinal 5 was compacted'), { code: 9 });
-      const failingHandle = {
-        events: (async function* () {
-          throw gapError;
-        })(),
-        abort: jest.fn()
-      };
-      const provider = {
-        subscribeSession: jest.fn().mockReturnValue(failingHandle),
-        getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
-      };
-      const realRuntimeRegistry = { get: jest.fn().mockReturnValue(provider) };
+        const failingHandle = {
+          events: makeEvents(),
+          abort: jest.fn()
+        };
+        const provider = {
+          subscribeSession: jest.fn().mockReturnValue(failingHandle),
+          getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
+        };
+        const realRuntimeRegistry = { get: jest.fn().mockReturnValue(provider) };
 
-      const realStreamConsumer = new StreamConsumerService(
-        realRuntimeRegistry as unknown as RuntimeProviderRegistry,
-        normalizer as any,
-        eventService as any,
-        runtimeSessionRepository as any,
-        runManager as any,
-        streamHub as any,
-        streamConfig as unknown as AppConfigService,
-        instrumentation as unknown as InstrumentationService,
-        traceService as any
-      );
+        const realStreamConsumer = new StreamConsumerService(
+          realRuntimeRegistry as unknown as RuntimeProviderRegistry,
+          normalizer as any,
+          eventService as any,
+          runtimeSessionRepository as any,
+          runManager as any,
+          streamHub as any,
+          streamConfig as unknown as AppConfigService,
+          instrumentation as unknown as InstrumentationService,
+          traceService as any
+        );
 
-      const wiredService = new RunRecoveryService(
-        streamConfig as unknown as AppConfigService,
-        mockDatabase as unknown as DatabaseService,
-        mockRunRepo as unknown as RunRepository,
-        mockSessionRepo as unknown as RuntimeSessionRepository,
-        runManager as unknown as RunManagerService,
-        realStreamConsumer,
-        eventService as unknown as RunEventService,
-        instrumentation as unknown as InstrumentationService,
-        realRuntimeRegistry as unknown as RuntimeProviderRegistry
-      );
+        const wiredService = new RunRecoveryService(
+          streamConfig as unknown as AppConfigService,
+          mockDatabase as unknown as DatabaseService,
+          mockRunRepo as unknown as RunRepository,
+          mockSessionRepo as unknown as RuntimeSessionRepository,
+          runManager as unknown as RunManagerService,
+          realStreamConsumer,
+          eventService as unknown as RunEventService,
+          instrumentation as unknown as InstrumentationService,
+          realRuntimeRegistry as unknown as RuntimeProviderRegistry
+        );
 
-      const run = buildRun();
-      mockRunRepo.listActiveRuns.mockResolvedValue([run]);
-      mockSessionRepo.findByRunId.mockResolvedValue({
-        initiatorParticipantId: 'agent-1',
-        runtimeSessionId: 'sess-1',
-        lastEnvelopeOrdinal: 5
-      });
+        const run = buildRun();
+        mockRunRepo.listActiveRuns.mockResolvedValue([run]);
+        mockSessionRepo.findByRunId.mockResolvedValue({
+          initiatorParticipantId: 'agent-1',
+          runtimeSessionId: 'sess-1',
+          lastEnvelopeOrdinal: 5
+        });
 
-      await wiredService.onApplicationBootstrap();
-      // Let the fire-and-forget consumeLoop (started by streamConsumer.start)
-      // run to completion.
-      await new Promise((resolve) => setImmediate(resolve));
-      await new Promise((resolve) => setImmediate(resolve));
+        await wiredService.onApplicationBootstrap();
+        // Let the fire-and-forget consumeLoop (started by streamConsumer.start)
+        // run to completion.
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
 
-      expect(provider.subscribeSession).toHaveBeenCalledWith(
-        expect.objectContaining({ runId: 'run-1', runtimeSessionId: 'sess-1', afterSequence: 5 })
-      );
-      // Never resubscribed on the gap, and never from 0.
-      expect(provider.subscribeSession).toHaveBeenCalledTimes(1);
-      const gapEmitted = eventService.emitControlPlaneEvents.mock.calls.some((call) =>
-        (call[1] as any[]).some((e) => e.type === 'session.stream.gap')
-      );
-      expect(gapEmitted).toBe(true);
-      expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
-    });
+        expect(provider.subscribeSession).toHaveBeenCalledWith(
+          expect.objectContaining({ runId: 'run-1', runtimeSessionId: 'sess-1', afterSequence: 5 })
+        );
+        // Never resubscribed on the gap, and never from 0.
+        expect(provider.subscribeSession).toHaveBeenCalledTimes(1);
+        const gapEmitted = eventService.emitControlPlaneEvents.mock.calls.some((call) =>
+          (call[1] as any[]).some((e) => e.type === 'session.stream.gap')
+        );
+        expect(gapEmitted).toBe(true);
+        expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
+      }
+    );
   });
 
   // Regression test for the clobber bug: a recovery cycle must never pass a

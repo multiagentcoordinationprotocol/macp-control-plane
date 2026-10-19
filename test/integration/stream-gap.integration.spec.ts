@@ -12,13 +12,26 @@ const isRealRuntime =
   process.env.INTEGRATION_RUNTIME === 'remote';
 
 /**
- * Stream resume gap (runtime v0.5.0, T7): a FAILED_PRECONDITION (gRPC code 9)
- * on the StreamSession means the resume point was compacted away. The consumer
- * must emit `session.stream.gap`, flag the projection `historyGap`, degrade to
- * the GetSession poll fallback (never resubscribe from 0), and still finalize
- * the run from the polled terminal state.
+ * Stream resume gap (runtime v0.5.0, T7): the resume point was compacted away.
+ * The consumer must emit `session.stream.gap`, flag the projection
+ * `historyGap`, degrade to the GetSession poll fallback (never resubscribe from
+ * 0), and still finalize the run from the polled terminal state.
+ *
+ * Runtime v0.9.0 signals it with a non-terminal inline `MACPError` frame
+ * (`StreamFailure::Inline`, macp-runtime/src/server.rs:584-590): code
+ * `INVALID_ENVELOPE` plus the fixed sentence, stream left open. 0.8.x sends
+ * the same inline frame with the sentence as both `code` and `message`
+ * (0.8.8 server.rs:614-629 downgrades the FAILED_PRECONDITION to inline). A
+ * terminal FAILED_PRECONDITION (gRPC code 9) — only a proxy or other non-runtime
+ * peer surfacing the rejection as a status; no released runtime sends it (v0.5–0.8
+ * are inline too, v0.4 had no compaction notice) — keeps one legacy case.
  */
-function gapScript(): RuntimeScript {
+const COMPACTED_SENTENCE =
+  'session history before ordinal 5 was compacted; resume with after_sequence >= 5 or re-read state via GetSession';
+
+type GapShape = 'v0.9.0-inline' | '0.8.x-inline' | 'legacy-terminal';
+
+function gapScript(shape: GapShape = 'v0.9.0-inline'): RuntimeScript {
   return {
     supportedModes: ['macp.mode.decision.v1'],
     initiator: 'proposer',
@@ -38,14 +51,22 @@ function gapScript(): RuntimeScript {
           rationale: 'Looks good',
         }),
       },
-      // FAILED_PRECONDITION: resume point compacted away. Uses the runtime's
-      // real sentence (macp-runtime/src/server.rs:516-521) rather than a bare
-      // placeholder string, so this fixture reads like the real wire error —
-      // note the `code === 9` branch still short-circuits ahead of
-      // `COMPACTED_HISTORY_RE` here (both are true for this fixture); the
-      // regex-only path (no numeric code, grpc-js-prefixed message) is
-      // isolated by the unit test in stream-consumer.service.spec.ts instead.
-      { delayMs: 10, error: { code: 9, message: 'session history before ordinal 5 was compacted' } },
+      shape === 'legacy-terminal'
+        ? // Proxy / non-runtime only: terminal FAILED_PRECONDITION carrying the same sentence.
+          { delayMs: 10, error: { code: 9, message: COMPACTED_SENTENCE } }
+        : {
+            delayMs: 10,
+            event: {
+              kind: 'stream-inline-error',
+              receivedAt: new Date().toISOString(),
+              inlineError: {
+                code: shape === 'v0.9.0-inline' ? 'INVALID_ENVELOPE' : COMPACTED_SENTENCE,
+                message: COMPACTED_SENTENCE,
+                sessionId: '',
+                messageId: '',
+              },
+            },
+          },
     ],
   };
 }
@@ -66,7 +87,8 @@ function gapScript(): RuntimeScript {
     ctx.mockRuntime.setScript(gapScript());
   });
 
-  it('emits session.stream.gap, flags historyGap, finalizes completed via poll fallback, and bumps the gap metric', async () => {
+  it.each<GapShape>(['v0.9.0-inline', '0.8.x-inline', 'legacy-terminal'])('emits session.stream.gap, flags historyGap, finalizes completed via poll fallback, and bumps the gap metric (%s)', async (shape) => {
+    ctx.mockRuntime.setScript(gapScript(shape));
     const { runId } = await ctx.client.createRun(decisionModeRequest());
 
     // Wait for both envelopes to be observed, then let the poll fallback see a
@@ -90,6 +112,8 @@ function gapScript(): RuntimeScript {
     );
     expect(gapEvent.data.requestedAfter).toBe(2);
     expect(String(gapEvent.data.detail)).toContain('compacted');
+    const gapEvents = ((await ctx.client.listEvents(runId)) as any[]).filter((e) => e.type === 'session.stream.gap');
+    expect(gapEvents).toHaveLength(1);
 
     // Run finalizes completed via the poll fallback — never failed.
     const terminal = await waitFor(

@@ -46,7 +46,7 @@ export class ExecutionRequesterDto {
 export class SessionDescriptorDto {
   @ApiPropertyOptional({
     description:
-      'Caller-allocated session id. Must satisfy runtime validator (UUID v4/v7 or base64url 22+ chars). If omitted, control-plane allocates a UUID v4.'
+      'Caller-allocated session id. Must satisfy the runtime validator: at most 128 bytes, and a lowercase UUID v4/v7 or a base64url token of 22+ chars. If omitted, control-plane allocates a UUID v4.'
   })
   @IsOptional()
   @IsString()
