@@ -1612,3 +1612,20 @@ Closed every open issue and deferred plan item, then archived the plans (`plans/
 - #101 → audit found no caller omitting `schemaVersion` (ui-console form always sends it; playground registers
   over gRPC with explicit v3). Stale docs fixed: control-plane `docs/API.md`, macp-ui-console#48, website#55.
 - Final state: 902 unit tests (57+ suites), 117 mock integration tests; 0 open issues, 0 open PRs.
+
+---
+
+# PROGRESS — macp-runtime-0.9.0-alignment
+
+Plan: `plans/macp-runtime-0.9.0-alignment.md` (local, gitignored; written by the macp-runtime session)
+Started: 2026-10-18 (via `/drive`, at the macp-runtime session's request on the owner's behalf)
+Branch: `feat/runtime-0.9.0-alignment`
+PR strategy: **one PR, one commit per phase** — the plan's §4 wants P1 to land with P2 (the 0.9.0 harness is P2's acceptance gate), and P3–P5 are small consumers of P2's `macpErrorCode`.
+Risk tiers: P1 simple · P2 complex (public HTTP error contract) · P3 complex (stream/event boundary) · P4 complex (admission boundary) · P5 simple.
+Owner decisions (asked 2026-10-18, before P2): **Q1** `REGISTRY_READ_ONLY` stays HTTP **405** (deliberate divergence from the registry's 409) · **Q2** `STREAM_LAGGED` → **503** retryable. Q3/Q4 follow the plan's recommendations.
+
+## Phase log
+
+| Phase | Status | Rounds | Verifier | Commit |
+|---|---|---|---|---|
+| P1 — harness + tested range → 0.9.0 | DONE | 1 | Opus (simple phase, gated solo because P2 is complex) — PASS | see git log |
