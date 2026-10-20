@@ -12,8 +12,9 @@ type Tx = NodePgDatabase<typeof schemaModule>;
 export class ProjectionRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  async get(runId: string) {
-    const rows = await this.database.db.select().from(runProjections).where(eq(runProjections.runId, runId)).limit(1);
+  async get(runId: string, tx?: Tx) {
+    const db = tx ?? this.database.db;
+    const rows = await db.select().from(runProjections).where(eq(runProjections.runId, runId)).limit(1);
     return rows[0] ?? null;
   }
 

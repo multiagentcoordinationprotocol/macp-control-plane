@@ -76,7 +76,7 @@ export class RunEventService {
       { 'macp.event_count': stamped.length },
       () =>
         this.database.db.transaction(async (tx) => {
-          const startSeq = await this.runRepository.allocateSequence(runId, stamped.length);
+          const startSeq = await this.runRepository.allocateSequence(runId, stamped.length, tx);
           const prepared = stamped.map((event, index) => ({
             ...event,
             id: randomUUID(),
@@ -124,7 +124,7 @@ export class RunEventService {
       { 'macp.event_count': stamped.length, 'macp.raw_kind': rawEvent.kind },
       () =>
         this.database.db.transaction(async (tx) => {
-          const startSeq = await this.runRepository.allocateSequence(runId, total);
+          const startSeq = await this.runRepository.allocateSequence(runId, total, tx);
           await this.eventRepository.appendRaw(runId, startSeq, rawEvent, tx);
           const prepared = stamped.map((event, index) => ({
             ...event,

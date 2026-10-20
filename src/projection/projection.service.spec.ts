@@ -1213,9 +1213,20 @@ describe('ProjectionService', () => {
 
       const result = await service.applyAndPersist('run-1', [event]);
 
-      expect(mockProjectionRepository.get).toHaveBeenCalledWith('run-1');
+      expect(mockProjectionRepository.get).toHaveBeenCalledWith('run-1', undefined);
       expect(mockProjectionRepository.upsert).toHaveBeenCalledWith('run-1', expect.any(Object), 1, 3, undefined);
       expect(result.run.status).toBe('starting');
+    });
+
+    it('reads the current projection through the caller transaction', async () => {
+      mockProjectionRepository.get.mockResolvedValue(null as any);
+      mockProjectionRepository.upsert.mockResolvedValue(undefined);
+      const tx = { marker: 'tx' };
+
+      await service.applyAndPersist('run-1', [makeEvent({ type: 'run.created', seq: 1, data: { status: 'starting' } })], tx);
+
+      expect(mockProjectionRepository.get).toHaveBeenCalledWith('run-1', tx);
+      expect(mockProjectionRepository.upsert).toHaveBeenCalledWith('run-1', expect.any(Object), 1, 3, tx);
     });
   });
 

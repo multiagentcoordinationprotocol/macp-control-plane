@@ -296,6 +296,16 @@ describe('RunRepository', () => {
       expect(seq).toBe(3);
     });
 
+    it('runs on the caller transaction so the runs row lock is held until commit', async () => {
+      const tx = { execute: jest.fn().mockResolvedValue({ rows: [{ last_event_seq: 7 }] }) };
+
+      const seq = await repo.allocateSequence('run-1', 2, tx as any);
+
+      expect(tx.execute).toHaveBeenCalledTimes(1);
+      expect(mockDb.execute).not.toHaveBeenCalled();
+      expect(seq).toBe(6);
+    });
+
     it('throws when run not found', async () => {
       mockDb.execute.mockResolvedValue({ rows: [] });
 
