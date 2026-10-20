@@ -1,0 +1,1 @@
+- 2026-10-18: `task-orchestrator.integration.spec.ts:33` timed out once in main CI after #114 (run 39204284095); the tree was identical to the green PR head and the rerun passed, so this is a flake to watch, not a regression.

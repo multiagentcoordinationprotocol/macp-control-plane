@@ -1636,3 +1636,4 @@ Owner decisions (asked 2026-10-18, before P2): **Q1** `REGISTRY_READ_ONLY` stays
 | Finalization (§4) | DONE | 1 | Opus whole-feature verify over main...HEAD: PASS, no defects. Doc fixes: drift-endpoint 429 qualifier, TROUBLESHOOTING UNKNOWN_POLICY_VERSION 400/404, WatchSessions reconcile runs on every (re)connect. Suites: unit 59/1070, mock integration 25 passed/6 skipped, docker integration has the same 8 pre-existing failing suites (28 tests) as the 0.8.6 baseline; new policy-registry-readonly + signal-auth-live pass. Reconcile: no UNCONFIRMED entries for this plan | see git log |
 | Ship | pushed | feat/runtime-0.9.0-alignment 1eab723 |
 | Ship | PR #114 opened | https://github.com/multiagentcoordinationprotocol/macp-control-plane/pull/114 |
+| Ship | merged #114 | cab0e5a |
