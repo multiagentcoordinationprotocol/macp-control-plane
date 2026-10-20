@@ -7,7 +7,7 @@ import { ReplayService } from '../replay/replay.service';
 import { StreamHubService } from '../events/stream-hub.service';
 import { AppConfigService } from '../config/app-config.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
-import { ProjectionService } from '../projection/projection.service';
+import { RunEventService } from '../events/run-event.service';
 import { OutboundMessageRepository } from '../storage/outbound-message.repository';
 
 describe('RunsController (observer mode)', () => {
@@ -30,8 +30,8 @@ describe('RunsController (observer mode)', () => {
   let mockReplayService: Partial<ReplayService>;
   let mockStreamHub: Partial<StreamHubService>;
   let mockConfig: Partial<AppConfigService>;
-  let mockProjectionService: {
-    rebuild: jest.Mock;
+  let mockRunEventService: {
+    rebuildProjection: jest.Mock;
   };
   let mockOutboundMessageRepository: {
     listByRunId: jest.Mock;
@@ -56,7 +56,7 @@ describe('RunsController (observer mode)', () => {
     mockReplayService = {};
     mockStreamHub = {};
     mockConfig = { streamSseHeartbeatMs: 15000 };
-    mockProjectionService = { rebuild: jest.fn() };
+    mockRunEventService = { rebuildProjection: jest.fn() };
     mockOutboundMessageRepository = { listByRunId: jest.fn() };
 
     controller = new RunsController(
@@ -66,12 +66,12 @@ describe('RunsController (observer mode)', () => {
       mockReplayService as unknown as ReplayService,
       mockStreamHub as unknown as StreamHubService,
       mockConfig as unknown as AppConfigService,
-      mockProjectionService as unknown as ProjectionService,
       mockOutboundMessageRepository as unknown as OutboundMessageRepository,
       {
         activeSseConnections: { inc: jest.fn(), dec: jest.fn() },
         signalsTotal: { inc: jest.fn() }
-      } as unknown as InstrumentationService
+      } as unknown as InstrumentationService,
+      mockRunEventService as unknown as RunEventService
     );
   });
 
@@ -217,14 +217,22 @@ describe('RunsController (observer mode)', () => {
   });
 
   describe('rebuildProjection', () => {
-    it('fetches events and delegates to projectionService.rebuild', async () => {
+    it('delegates to the transactional runEventService.rebuildProjection', async () => {
       mockRunManager.getRun.mockResolvedValue({ id: 'run-1', status: 'completed' });
-      mockEventRepository.listCanonicalByRun.mockResolvedValue([{ id: 'e1', seq: 1, type: 'run.created' }]);
-      mockProjectionService.rebuild.mockResolvedValue({ run: { runId: 'run-1' } });
+      mockRunEventService.rebuildProjection.mockResolvedValue({ run: { runId: 'run-1' } });
 
-      await controller.rebuildProjection('run-1');
+      const result = await controller.rebuildProjection('run-1');
 
-      expect(mockProjectionService.rebuild).toHaveBeenCalledWith('run-1', expect.any(Array));
+      expect(mockRunEventService.rebuildProjection).toHaveBeenCalledWith('run-1');
+      expect(mockEventRepository.listCanonicalByRun).not.toHaveBeenCalled();
+      expect(result).toEqual({ run: { runId: 'run-1' } });
+    });
+
+    it('does not rebuild a run that does not exist', async () => {
+      mockRunManager.getRun.mockRejectedValue(new Error('run not found'));
+
+      await expect(controller.rebuildProjection('run-1')).rejects.toThrow('run not found');
+      expect(mockRunEventService.rebuildProjection).not.toHaveBeenCalled();
     });
   });
 });

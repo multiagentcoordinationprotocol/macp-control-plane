@@ -201,12 +201,13 @@ export class EventRepository {
     }
   }
 
-  async listCanonicalUpTo(runId: string, seq?: number) {
+  async listCanonicalUpTo(runId: string, seq?: number, tx?: Tx) {
+    const db = tx ?? this.database.db;
     const where =
       seq === undefined
         ? eq(runEventsCanonical.runId, runId)
         : and(eq(runEventsCanonical.runId, runId), lte(runEventsCanonical.seq, seq));
-    return this.database.db.select().from(runEventsCanonical).where(where).orderBy(asc(runEventsCanonical.seq));
+    return db.select().from(runEventsCanonical).where(where).orderBy(asc(runEventsCanonical.seq));
   }
 
   private serializeRaw(raw: RawRuntimeEvent): Record<string, unknown> {

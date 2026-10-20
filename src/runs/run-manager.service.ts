@@ -502,11 +502,7 @@ export class RunManagerService {
     const metrics = await this.metricsService.get(runId);
     if (!metrics || (metrics.decisionCount ?? 0) <= 0) return projection;
 
-    const events = await this.eventRepository.listCanonicalUpTo(runId);
-    const rebuilt = await this.projectionService.rebuild(
-      runId,
-      events as unknown as Parameters<typeof this.projectionService.rebuild>[1]
-    );
+    const rebuilt = await this.runEventService.rebuildProjection(runId);
     if (rebuilt.decision.current?.finalized === true) {
       this.logger.warn(`self-healed stale decision projection for terminal run ${runId}`);
       return rebuilt;

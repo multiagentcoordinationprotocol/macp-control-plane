@@ -1,13 +1,11 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, ValidationPipe } from '@nestjs/common';
 import { ApiBody, ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ArtifactService } from '../artifacts/artifact.service';
-import { CanonicalEvent } from '../contracts/control-plane';
 import { CreateArtifactDto } from '../dto/create-artifact.dto';
 import { MetricsSummaryDto } from '../dto/run-responses.dto';
 import { RunEventService } from '../events/run-event.service';
 import { MetricsService } from '../metrics/metrics.service';
 import { ProjectionService } from '../projection/projection.service';
-import { EventRepository } from '../storage/event.repository';
 import { RunManagerService } from '../runs/run-manager.service';
 
 @ApiTags('observability')
@@ -18,8 +16,7 @@ export class ObservabilityController {
     private readonly artifactService: ArtifactService,
     private readonly metricsService: MetricsService,
     private readonly projectionService: ProjectionService,
-    private readonly eventService: RunEventService,
-    private readonly eventRepository: EventRepository
+    private readonly eventService: RunEventService
   ) {}
 
   @Get('runs/:id/traces')
@@ -98,8 +95,7 @@ export class ObservabilityController {
   @ApiOperation({ summary: 'Rebuild the projection for a run from canonical events.' })
   async rebuildProjection(@Param('id', new ParseUUIDPipe()) id: string) {
     await this.runManager.getRun(id);
-    const events = await this.eventRepository.listCanonicalUpTo(id);
-    const projection = await this.projectionService.rebuild(id, events as unknown as CanonicalEvent[]);
+    const projection = await this.eventService.rebuildProjection(id);
     return { rebuilt: true, latestSeq: projection.timeline.latestSeq };
   }
 }

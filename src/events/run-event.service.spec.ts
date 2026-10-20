@@ -77,7 +77,10 @@ describe('RunEventService', () => {
     } as unknown as jest.Mocked<DatabaseService>;
 
     runRepository = {
-      allocateSequence: jest.fn().mockResolvedValue(1)
+      allocateSequence: jest.fn().mockResolvedValue(1),
+      lockForUpdate: jest.fn(async () => {
+        callOrder.push('repo:lockForUpdate');
+      })
     } as unknown as jest.Mocked<RunRepository>;
 
     eventRepository = {
@@ -86,12 +89,20 @@ describe('RunEventService', () => {
       }),
       appendCanonical: jest.fn(async () => {
         callOrder.push('repo:appendCanonical');
+      }),
+      listCanonicalUpTo: jest.fn(async () => {
+        callOrder.push('repo:listCanonicalUpTo');
+        return [{ id: 'e1', seq: 1, type: 'run.created' }];
       })
     } as unknown as jest.Mocked<EventRepository>;
 
     projectionService = {
       applyAndPersist: jest.fn(async () => {
         callOrder.push('projection:applyAndPersist');
+        return fakeProjection;
+      }),
+      rebuild: jest.fn(async () => {
+        callOrder.push('projection:rebuild');
         return fakeProjection;
       })
     } as unknown as jest.Mocked<ProjectionService>;
@@ -143,6 +154,34 @@ describe('RunEventService', () => {
 
   afterEach(() => {
     errorSpy.mockRestore();
+  });
+
+  describe('rebuildProjection', () => {
+    it('locks the run, reads the event log and force-writes the projection in one transaction', async () => {
+      const result = await service.rebuildProjection('run-1');
+
+      expect(database.db.transaction).toHaveBeenCalledTimes(1);
+      expect(runRepository.lockForUpdate).toHaveBeenCalledWith('run-1', mockTx);
+      expect(eventRepository.listCanonicalUpTo).toHaveBeenCalledWith('run-1', undefined, mockTx);
+      expect(projectionService.rebuild).toHaveBeenCalledWith(
+        'run-1',
+        [{ id: 'e1', seq: 1, type: 'run.created' }],
+        mockTx
+      );
+      // The lock must come before the read, or an event batch could commit in between.
+      expect(callOrder).toEqual(['repo:lockForUpdate', 'repo:listCanonicalUpTo', 'projection:rebuild', 'tx:committed']);
+      expect(result).toBe(fakeProjection);
+    });
+
+    it('rolls back without reading or writing when the run is missing', async () => {
+      runRepository.lockForUpdate.mockRejectedValueOnce(new Error('run run-1 not found'));
+
+      await expect(service.rebuildProjection('run-1')).rejects.toThrow('run run-1 not found');
+
+      expect(eventRepository.listCanonicalUpTo).not.toHaveBeenCalled();
+      expect(projectionService.rebuild).not.toHaveBeenCalled();
+      expect(callOrder).toEqual(['tx:rolled-back']);
+    });
   });
 
   describe('emitControlPlaneEvents', () => {

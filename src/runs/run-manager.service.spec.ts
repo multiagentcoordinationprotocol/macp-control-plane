@@ -107,7 +107,8 @@ describe('RunManagerService', () => {
         {
           provide: RunEventService,
           useValue: {
-            emitControlPlaneEvents: jest.fn().mockResolvedValue([])
+            emitControlPlaneEvents: jest.fn().mockResolvedValue([]),
+            rebuildProjection: jest.fn()
           }
         },
         {
@@ -749,15 +750,16 @@ describe('RunManagerService', () => {
         runRepository.findById.mockResolvedValue(makeRunRecord() as any);
         projectionService.get.mockResolvedValue(staleTerminalProjection());
         (service as any).metricsService.get.mockResolvedValue({ decisionCount: 1 });
-        (service as any).eventRepository.listCanonicalUpTo.mockResolvedValue([{ seq: 121, type: 'decision.finalized' }]);
         const repaired = makeEmptyProjection('run-1');
         repaired.run.status = 'completed';
         repaired.decision = { current: { finalized: true, action: 'decline', outcomePositive: false } } as any;
-        projectionService.rebuild.mockResolvedValue(repaired);
+        runEventService.rebuildProjection.mockResolvedValue(repaired);
 
         const result = await service.getState('run-1');
 
-        expect(projectionService.rebuild).toHaveBeenCalledWith('run-1', expect.any(Array));
+        // Through the transactional rebuild, never a bare projectionService.rebuild outside the run lock.
+        expect(runEventService.rebuildProjection).toHaveBeenCalledWith('run-1');
+        expect(projectionService.rebuild).not.toHaveBeenCalled();
         expect(result.decision.current?.finalized).toBe(true);
         expect(result.decision.current?.action).toBe('decline');
       });
@@ -769,7 +771,7 @@ describe('RunManagerService', () => {
 
         const result = await service.getState('run-1');
 
-        expect(projectionService.rebuild).not.toHaveBeenCalled();
+        expect(runEventService.rebuildProjection).not.toHaveBeenCalled();
         expect(result.decision.current?.finalized).toBe(false);
       });
 
@@ -781,7 +783,7 @@ describe('RunManagerService', () => {
 
         await service.getState('run-1');
 
-        expect(projectionService.rebuild).not.toHaveBeenCalled();
+        expect(runEventService.rebuildProjection).not.toHaveBeenCalled();
       });
 
       it('does NOT rebuild when the decision is already finalized', async () => {
@@ -793,7 +795,7 @@ describe('RunManagerService', () => {
 
         await service.getState('run-1');
 
-        expect(projectionService.rebuild).not.toHaveBeenCalled();
+        expect(runEventService.rebuildProjection).not.toHaveBeenCalled();
       });
     });
   });

@@ -314,4 +314,22 @@ describe('RunRepository', () => {
       );
     });
   });
+
+  // ------ lockForUpdate ------
+  describe('lockForUpdate', () => {
+    it('takes the runs row lock on the caller transaction', async () => {
+      const tx = { execute: jest.fn().mockResolvedValue({ rows: [{ id: 'run-1' }] }) };
+
+      await repo.lockForUpdate('run-1', tx as any);
+
+      expect(tx.execute).toHaveBeenCalledTimes(1);
+      expect(mockDb.execute).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the run does not exist', async () => {
+      const tx = { execute: jest.fn().mockResolvedValue({ rows: [] }) };
+
+      await expect(repo.lockForUpdate('missing-id', tx as any)).rejects.toThrow(NotFoundException);
+    });
+  });
 });

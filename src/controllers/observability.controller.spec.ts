@@ -4,16 +4,14 @@ import { ArtifactService } from '../artifacts/artifact.service';
 import { MetricsService } from '../metrics/metrics.service';
 import { ProjectionService } from '../projection/projection.service';
 import { RunEventService } from '../events/run-event.service';
-import { EventRepository } from '../storage/event.repository';
 
 describe('ObservabilityController', () => {
   let controller: ObservabilityController;
   let mockRunManager: { getRun: jest.Mock };
   let mockArtifactService: { list: jest.Mock; register: jest.Mock };
   let mockMetricsService: { get: jest.Mock };
-  let mockProjectionService: { get: jest.Mock; rebuild: jest.Mock };
-  let mockEventService: { emitControlPlaneEvents: jest.Mock };
-  let mockEventRepository: { listCanonicalUpTo: jest.Mock };
+  let mockProjectionService: { get: jest.Mock };
+  let mockEventService: { emitControlPlaneEvents: jest.Mock; rebuildProjection: jest.Mock };
 
   const runId = '11111111-1111-1111-1111-111111111111';
 
@@ -34,14 +32,11 @@ describe('ObservabilityController', () => {
       get: jest.fn()
     };
     mockProjectionService = {
-      get: jest.fn(),
-      rebuild: jest.fn()
+      get: jest.fn()
     };
     mockEventService = {
-      emitControlPlaneEvents: jest.fn().mockResolvedValue([])
-    };
-    mockEventRepository = {
-      listCanonicalUpTo: jest.fn()
+      emitControlPlaneEvents: jest.fn().mockResolvedValue([]),
+      rebuildProjection: jest.fn()
     };
 
     controller = new ObservabilityController(
@@ -49,8 +44,7 @@ describe('ObservabilityController', () => {
       mockArtifactService as unknown as ArtifactService,
       mockMetricsService as unknown as MetricsService,
       mockProjectionService as unknown as ProjectionService,
-      mockEventService as unknown as RunEventService,
-      mockEventRepository as unknown as EventRepository
+      mockEventService as unknown as RunEventService
     );
   });
 
@@ -243,24 +237,17 @@ describe('ObservabilityController', () => {
   // rebuildProjection
   // ===========================================================================
   describe('rebuildProjection', () => {
-    it('calls rebuild with canonical events and returns result', async () => {
-      const events = [
-        { id: 'e1', seq: 1, type: 'run.created' },
-        { id: 'e2', seq: 2, type: 'session.started' }
-      ];
-      mockEventRepository.listCanonicalUpTo.mockResolvedValue(events);
-
+    it('rebuilds through the transactional runEventService.rebuildProjection and returns the latest seq', async () => {
       const rebuiltProjection = {
         run: { runId, status: 'completed' },
         timeline: { latestSeq: 2 }
       };
-      mockProjectionService.rebuild.mockResolvedValue(rebuiltProjection);
+      mockEventService.rebuildProjection.mockResolvedValue(rebuiltProjection);
 
       const result = await controller.rebuildProjection(runId);
 
       expect(mockRunManager.getRun).toHaveBeenCalledWith(runId);
-      expect(mockEventRepository.listCanonicalUpTo).toHaveBeenCalledWith(runId);
-      expect(mockProjectionService.rebuild).toHaveBeenCalledWith(runId, events);
+      expect(mockEventService.rebuildProjection).toHaveBeenCalledWith(runId);
       expect(result).toEqual({ rebuilt: true, latestSeq: 2 });
     });
   });
