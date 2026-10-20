@@ -382,9 +382,14 @@ export class StreamConsumerService implements OnModuleDestroy {
     // Consume the per-session stream. On disconnect, resubscribe from the
     // persisted envelope ordinal (T7) instead of degrading straight to polling —
     // unless STREAM_RESUME_ENABLED is off, or the runtime reports the resume
-    // point was compacted away (FAILED_PRECONDITION), in which case we emit a
-    // `session.stream.gap` and fall through to poll-only (resubscribing from 0
-    // would re-ingest history — the CP has no message-id dedup).
+    // point was compacted away, in which case we emit a `session.stream.gap`
+    // and fall through to poll-only (resubscribing from 0 would re-ingest
+    // history — the CP has no message-id dedup). Since runtime 0.9.0 that
+    // report is a non-terminal inline frame coded `INVALID_ENVELOPE` (the
+    // registry code, carried in `macp-error-code`) and identified by its
+    // compacted-history sentence; an uncoded terminal FAILED_PRECONDITION is
+    // only a fallback for non-runtime peers. See
+    // isCompactedHistoryInlineError / isCompactedHistoryTerminalError.
     let handle = params.sessionHandle;
     marker.handle = handle;
     if (handle && !params.pollOnly) {
