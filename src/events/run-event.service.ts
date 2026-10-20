@@ -95,6 +95,20 @@ export class RunEventService {
   }
 
   /**
+   * Rebuild the projection from the full event log. The event read and the forced write share
+   * one transaction behind the run's row lock — the lock every event transaction takes first
+   * in `allocateSequence` — so a batch that commits mid-rebuild can neither be left out of the
+   * rebuilt projection nor have its projection change overwritten by it.
+   */
+  async rebuildProjection(runId: string): Promise<RunStateProjection> {
+    return this.database.db.transaction(async (tx) => {
+      await this.runRepository.lockForUpdate(runId, tx);
+      const events = await this.eventRepository.listCanonicalUpTo(runId, undefined, tx);
+      return this.projectionService.rebuild(runId, events as unknown as CanonicalEvent[], tx);
+    });
+  }
+
+  /**
    * `cursor.envelopeOrdinal`, when given, is written (with the highest event seq of this
    * batch) to `runtime_sessions` in the SAME transaction as the events. A crash can then
    * never leave the persisted resume ordinal one envelope behind the events it covers,

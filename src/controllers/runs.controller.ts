@@ -26,7 +26,6 @@ import { ListRunsQueryDto } from '../dto/list-runs-query.dto';
 import { ReplayRequestDto } from '../dto/replay-request.dto';
 import { CloneRunDto } from '../dto/clone-run.dto';
 import { StreamRunQueryDto } from '../dto/stream-run-query.dto';
-import { ProjectionService } from '../projection/projection.service';
 import { OutboundMessageRepository } from '../storage/outbound-message.repository';
 import {
   CanonicalEventDto,
@@ -40,6 +39,7 @@ import { ReplayService } from '../replay/replay.service';
 import { EventRepository } from '../storage/event.repository';
 import { RunExecutorService } from '../runs/run-executor.service';
 import { RunManagerService } from '../runs/run-manager.service';
+import { RunEventService } from '../events/run-event.service';
 
 /**
  * RFC-MACP-0001 §5.3 forbids HTTP bypass of MACP. Control-plane removed all
@@ -72,9 +72,9 @@ export class RunsController {
     private readonly replayService: ReplayService,
     private readonly streamHub: StreamHubService,
     private readonly config: AppConfigService,
-    private readonly projectionService: ProjectionService,
     private readonly outboundMessageRepository: OutboundMessageRepository,
-    private readonly instrumentation: InstrumentationService
+    private readonly instrumentation: InstrumentationService,
+    private readonly runEventService: RunEventService
   ) {}
 
   @Post('validate')
@@ -417,8 +417,7 @@ export class RunsController {
   @ApiOperation({ summary: 'Rebuild the projection from persisted canonical events.' })
   async rebuildProjection(@Param('id', new ParseUUIDPipe()) id: string) {
     await this.runManager.getRun(id);
-    const events = await this.eventRepository.listCanonicalByRun(id, 0, 100000);
-    return this.projectionService.rebuild(id, events as unknown as CanonicalEvent[]);
+    return this.runEventService.rebuildProjection(id);
   }
 
   @Post(':id/archive')

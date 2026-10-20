@@ -113,6 +113,16 @@ export class RunRepository {
     return Number(row.last_event_seq) - count + 1;
   }
 
+  /**
+   * Take the same per-run row lock `allocateSequence` takes, without bumping the sequence, and
+   * hold it until `tx` commits. A projection rebuild reads the event log under it so no event
+   * transaction can commit between that read and the rebuild's forced write.
+   */
+  async lockForUpdate(runId: string, tx: Tx): Promise<void> {
+    const result = await tx.execute(sql`SELECT id FROM runs WHERE id = ${runId} FOR NO KEY UPDATE`);
+    if (result.rows.length === 0) throw new NotFoundException(`run ${runId} not found`);
+  }
+
   private async transitionTo(id: string, targetStatus: RunStatus, patch: Partial<typeof runs.$inferInsert>) {
     const validFrom = Object.entries(VALID_TRANSITIONS)
       .filter(([, targets]) => targets.includes(targetStatus))

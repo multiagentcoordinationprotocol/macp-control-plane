@@ -1248,6 +1248,15 @@ describe('ProjectionService', () => {
       // drops the write when the stale projection already carries this seq.
       expect(mockProjectionRepository.upsert).toHaveBeenCalledWith('run-1', expect.any(Object), 5, 3, undefined, true);
     });
+
+    it('writes on the caller transaction that holds the run lock', async () => {
+      mockProjectionRepository.upsert.mockResolvedValue(undefined);
+      const tx = { marker: 'tx' };
+
+      await service.rebuild('run-1', [makeEvent({ type: 'run.created', seq: 2, data: { status: 'starting' } })], tx);
+
+      expect(mockProjectionRepository.upsert).toHaveBeenCalledWith('run-1', expect.any(Object), 2, 3, tx, true);
+    });
   });
 
   // -----------------------------------------------------------------------

@@ -2,6 +2,7 @@ import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { decisionModeRequest, decisionHappyScript } from '../fixtures/decision-mode';
 import { waitFor } from '../helpers/wait-for';
 import { RunEventService } from '../../src/events/run-event.service';
+import { EventRepository } from '../../src/storage/event.repository';
 
 describe('Projection (integration, observer mode)', () => {
   let ctx: TestAppContext;
@@ -26,7 +27,7 @@ describe('Projection (integration, observer mode)', () => {
         const s = (await ctx.client.getState(runId)) as any;
         return s.timeline?.totalEvents >= 1 ? s : null;
       },
-      { timeoutMs: 5000, label: 'projection populated' },
+      { timeoutMs: 5000, label: 'projection populated' }
     );
 
     expect(state).toHaveProperty('run');
@@ -70,6 +71,61 @@ describe('Projection (integration, observer mode)', () => {
     expect(state.timeline.latestSeq).toBeGreaterThanOrEqual(ids.length);
   });
 
+  // A projection rebuild force-writes what it read from the event log. It must hold the run lock
+  // from that read to the write, or a batch committed in between vanishes from the projection.
+  it('a rebuild racing event transactions keeps every projection change', async () => {
+    const { runId } = await ctx.client.createRun(decisionModeRequest());
+    const runEvents = ctx.module.get(RunEventService);
+    const eventRepository = ctx.module.get(EventRepository);
+    const ids = Array.from({ length: 12 }, (_, i) => `rebuild-race-${i}`);
+    let lastEmittedSeq = 0;
+
+    // Each rebuild's event-log read signals the test, then holds for a moment: the emits below
+    // start only once the rebuild has read, so they land in the window between its read and its
+    // forced write — the window the run lock has to close.
+    let signalRead: () => void = () => undefined;
+    const real = eventRepository.listCanonicalUpTo.bind(eventRepository);
+    const spy = jest.spyOn(eventRepository, 'listCanonicalUpTo').mockImplementation(async (...args) => {
+      const rows = await real(...args);
+      signalRead();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return rows;
+    });
+
+    try {
+      for (let i = 0; i < ids.length; i += 3) {
+        const read = new Promise<void>((resolve) => (signalRead = resolve));
+        const rebuild = ctx.client.rebuildProjection(runId);
+        await read;
+        const emitted = await Promise.all(
+          ids.slice(i, i + 3).map((id) =>
+            runEvents.emitControlPlaneEvents(runId, [
+              {
+                ts: new Date().toISOString(),
+                type: 'participant.seen',
+                source: { kind: 'macp-control-plane', name: 'projection-rebuild-race-test' },
+                subject: { kind: 'participant', id },
+                data: { participantId: id, status: 'idle' }
+              }
+            ])
+          )
+        );
+        await rebuild;
+        for (const events of emitted) {
+          lastEmittedSeq = Math.max(lastEmittedSeq, ...events.map((e) => e.seq));
+        }
+      }
+    } finally {
+      spy.mockRestore();
+    }
+
+    const state = (await ctx.client.getState(runId)) as any;
+    const projected = (state.participants ?? []).map((p: any) => p.participantId);
+    expect(projected).toEqual(expect.arrayContaining(ids));
+    // A rebuild that wrote a stale event list would also move the version backwards.
+    expect(state.timeline.latestSeq).toBeGreaterThanOrEqual(lastEmittedSeq);
+  });
+
   it('projection tracks participant status from scripted events', async () => {
     const { runId } = await ctx.client.createRun(decisionModeRequest());
 
@@ -78,7 +134,7 @@ describe('Projection (integration, observer mode)', () => {
         const s = (await ctx.client.getState(runId)) as any;
         return s.participants?.length > 0 ? s : null;
       },
-      { timeoutMs: 5000, label: 'participants populated' },
+      { timeoutMs: 5000, label: 'participants populated' }
     );
 
     expect(state.participants[0]).toHaveProperty('participantId');
@@ -93,7 +149,7 @@ describe('Projection (integration, observer mode)', () => {
         const s = (await ctx.client.getState(runId)) as any;
         return s.timeline?.totalEvents > 0 ? s : null;
       },
-      { timeoutMs: 5000, label: 'timeline populated' },
+      { timeoutMs: 5000, label: 'timeline populated' }
     );
 
     expect(state.timeline.latestSeq).toBeGreaterThan(0);
@@ -108,7 +164,7 @@ describe('Projection (integration, observer mode)', () => {
         const s = (await ctx.client.getState(runId)) as any;
         return s.graph?.nodes?.length > 0 ? s : null;
       },
-      { timeoutMs: 5000, label: 'graph populated' },
+      { timeoutMs: 5000, label: 'graph populated' }
     );
 
     expect(state.graph).toHaveProperty('nodes');
@@ -123,7 +179,7 @@ describe('Projection (integration, observer mode)', () => {
         const run = (await ctx.client.getRun(runId)) as any;
         return ['completed', 'failed', 'cancelled'].includes(run.status) ? run : null;
       },
-      { timeoutMs: 5000, label: 'run terminal' },
+      { timeoutMs: 5000, label: 'run terminal' }
     );
 
     const before = (await ctx.client.getState(runId)) as any;
