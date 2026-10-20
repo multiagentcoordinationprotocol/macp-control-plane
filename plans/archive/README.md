@@ -10,3 +10,4 @@ not-needed. References elsewhere (e.g. `ASSUMPTIONS.md`, `DECISIONS.md`) to `pla
 | `absorb-runtime-v0.7.0.md` | 2026-10-03 (cursor-in-tx → PR #104) |
 | `absorb-runtime-v0.8.0.md` | 2026-10-03 (closed-set policy rules → PR #104) |
 | `cross-repo/macp-runtime-docker-tag-trigger.md` | 2026-09-25 (macp-runtime #184) |
+| `macp-runtime-0.9.0-alignment.md` | 2026-10-19 (P1–P5 + finalization → PR #114) |
