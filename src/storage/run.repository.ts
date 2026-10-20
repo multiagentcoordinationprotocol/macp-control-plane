@@ -1,9 +1,13 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, desc, eq, gt, inArray, isNull, lt, sql, SQL } from 'drizzle-orm';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { randomUUID } from 'node:crypto';
 import { RunStatus } from '../contracts/control-plane';
 import { DatabaseService } from '../db/database.service';
+import * as schema from '../db/schema';
 import { runs } from '../db/schema';
+
+type Tx = NodePgDatabase<typeof schema>;
 
 const VALID_TRANSITIONS: Record<RunStatus, RunStatus[]> = {
   queued: ['starting', 'failed', 'cancelled'],
@@ -89,8 +93,15 @@ export class RunRepository {
     return this.findByIdOrThrow(id);
   }
 
-  async allocateSequence(runId: string, count = 1): Promise<number> {
-    const result = await this.database.db.execute(sql`
+  /**
+   * Pass the caller's transaction: the row lock this UPDATE takes on `runs` is then held
+   * until that transaction commits, which serializes every per-run event + projection
+   * transaction. Without it the lock is released at once, two writers read the same
+   * projection, and the projection version guard silently drops the lower-seq write (#117).
+   */
+  async allocateSequence(runId: string, count = 1, tx?: Tx): Promise<number> {
+    const db = tx ?? this.database.db;
+    const result = await db.execute(sql`
       UPDATE runs
       SET last_event_seq = last_event_seq + ${count},
           updated_at = now()

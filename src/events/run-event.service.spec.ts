@@ -181,7 +181,7 @@ describe('RunEventService', () => {
       expect(database.db.transaction).toHaveBeenCalledTimes(1);
 
       // Should have allocated sequence for 2 events
-      expect(runRepository.allocateSequence).toHaveBeenCalledWith('run-1', 2);
+      expect(runRepository.allocateSequence).toHaveBeenCalledWith('run-1', 2, mockTx);
 
       // Should have appended canonical events with tx
       expect(eventRepository.appendCanonical).toHaveBeenCalledTimes(1);
@@ -349,7 +349,7 @@ describe('RunEventService', () => {
       const result = await service.persistRawAndCanonical('run-1', rawEvent, canonicalEvents);
 
       // Should allocate total = 1 (raw) + 2 (canonical) = 3
-      expect(runRepository.allocateSequence).toHaveBeenCalledWith('run-1', 3);
+      expect(runRepository.allocateSequence).toHaveBeenCalledWith('run-1', 3, mockTx);
 
       // Should append raw with startSeq
       expect(eventRepository.appendRaw).toHaveBeenCalledWith('run-1', 5, rawEvent, mockTx);

@@ -27,8 +27,8 @@ export class ProjectionService {
 
   constructor(private readonly projectionRepository: ProjectionRepository) {}
 
-  async get(runId: string): Promise<RunStateProjection | null> {
-    const row = await this.projectionRepository.get(runId);
+  async get(runId: string, tx?: unknown): Promise<RunStateProjection | null> {
+    const row = await this.projectionRepository.get(runId, tx as Parameters<typeof this.projectionRepository.get>[1]);
     if (!row) return null;
 
     // Schema version migration: if stored schema is older, mark as needing rebuild
@@ -66,10 +66,12 @@ export class ProjectionService {
   }
 
   async applyAndPersist(runId: string, events: CanonicalEvent[], tx?: unknown): Promise<RunStateProjection> {
-    // Chain on the per-run lock so concurrent updates serialize.
+    // Chain on the per-run lock so concurrent updates serialize. Across transactions the
+    // caller's `runs` row lock (RunRepository.allocateSequence on `tx`) is what serializes
+    // up to commit; reading through `tx` keeps this read inside that same snapshot.
     const prior = this.applyLocks.get(runId) ?? Promise.resolve();
     const next = prior.then(async () => {
-      const current = (await this.get(runId)) ?? this.empty(runId);
+      const current = (await this.get(runId, tx)) ?? this.empty(runId);
       const merged = this.applyEvents(current, events);
       const version = (events.at(-1)?.seq ?? current.timeline.latestSeq) || 0;
       await this.projectionRepository.upsert(
