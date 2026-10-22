@@ -90,12 +90,4 @@ export class ObservabilityController {
       }
     );
   }
-
-  @Post('runs/:id/projection/rebuild')
-  @ApiOperation({ summary: 'Rebuild the projection for a run from canonical events.' })
-  async rebuildProjection(@Param('id', new ParseUUIDPipe()) id: string) {
-    await this.runManager.getRun(id);
-    const projection = await this.eventService.rebuildProjection(id);
-    return { rebuilt: true, latestSeq: projection.timeline.latestSeq };
-  }
 }

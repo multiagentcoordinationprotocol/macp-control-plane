@@ -210,7 +210,7 @@ Archive a run. Sets `archivedAt` timestamp and adds `'archived'` tag. Excluded f
 Delete a terminal run (completed, failed, or cancelled only).
 
 ### `POST /runs/:id/projection/rebuild`
-Rebuild the projection from canonical events.
+Rebuild the projection from canonical events. Returns the rebuilt projection (the same shape as `GET /runs/:id/state`); `404` if the run does not exist.
 
 ---
 
