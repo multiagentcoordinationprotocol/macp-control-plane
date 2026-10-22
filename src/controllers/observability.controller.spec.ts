@@ -11,7 +11,7 @@ describe('ObservabilityController', () => {
   let mockArtifactService: { list: jest.Mock; register: jest.Mock };
   let mockMetricsService: { get: jest.Mock };
   let mockProjectionService: { get: jest.Mock };
-  let mockEventService: { emitControlPlaneEvents: jest.Mock; rebuildProjection: jest.Mock };
+  let mockEventService: { emitControlPlaneEvents: jest.Mock };
 
   const runId = '11111111-1111-1111-1111-111111111111';
 
@@ -35,8 +35,7 @@ describe('ObservabilityController', () => {
       get: jest.fn()
     };
     mockEventService = {
-      emitControlPlaneEvents: jest.fn().mockResolvedValue([]),
-      rebuildProjection: jest.fn()
+      emitControlPlaneEvents: jest.fn().mockResolvedValue([])
     };
 
     controller = new ObservabilityController(
@@ -230,25 +229,6 @@ describe('ObservabilityController', () => {
         decisionCount: 0,
         streamReconnectCount: 0
       });
-    });
-  });
-
-  // ===========================================================================
-  // rebuildProjection
-  // ===========================================================================
-  describe('rebuildProjection', () => {
-    it('rebuilds through the transactional runEventService.rebuildProjection and returns the latest seq', async () => {
-      const rebuiltProjection = {
-        run: { runId, status: 'completed' },
-        timeline: { latestSeq: 2 }
-      };
-      mockEventService.rebuildProjection.mockResolvedValue(rebuiltProjection);
-
-      const result = await controller.rebuildProjection(runId);
-
-      expect(mockRunManager.getRun).toHaveBeenCalledWith(runId);
-      expect(mockEventService.rebuildProjection).toHaveBeenCalledWith(runId);
-      expect(result).toEqual({ rebuilt: true, latestSeq: 2 });
     });
   });
 });
