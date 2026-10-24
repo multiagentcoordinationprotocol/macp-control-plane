@@ -15,6 +15,7 @@ import { MetricsController } from './controllers/metrics.controller';
 import { EventsController } from './controllers/events.controller';
 import { ObservabilityController } from './controllers/observability.controller';
 import { RunInsightsController } from './controllers/run-insights.controller';
+import { VerificationController } from './controllers/verification.controller';
 import { RunsController } from './controllers/runs.controller';
 import { RuntimeController } from './controllers/runtime.controller';
 import { PolicyRulesValidatorService } from './policy/policy-rules-validator.service';
@@ -47,6 +48,7 @@ import { InstrumentationService } from './telemetry/instrumentation.service';
 import { RedactionService } from './telemetry/redaction.service';
 import { TraceService } from './telemetry/trace.service';
 import { RunInsightsService } from './insights/run-insights.service';
+import { CommitmentVerificationService } from './verification/commitment-verification.service';
 import { RunExecutorService } from './runs/run-executor.service';
 import { RunManagerService } from './runs/run-manager.service';
 import { RunRecoveryService } from './runs/run-recovery.service';
@@ -83,6 +85,7 @@ import { WebhookService } from './webhooks/webhook.service';
     // RunsController registered first, `:id` would capture "batch" and the batch
     // handlers would be unreachable (ParseUUIDPipe → 400).
     RunInsightsController,
+    VerificationController,
     RunsController,
     RuntimeController,
     ObservabilityController,
@@ -138,6 +141,7 @@ import { WebhookService } from './webhooks/webhook.service';
     RunExecutorService,
     RunRecoveryService,
     RunInsightsService,
+    CommitmentVerificationService,
     DataRetentionService,
     WebhookRepository,
     WebhookDeliveryRepository,

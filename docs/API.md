@@ -279,6 +279,41 @@ Stream replayed canonical events as SSE.
 ### `GET /runs/:id/replay/state`
 Project run state at a specific sequence: `?seq=42`
 
+### `GET /runs/:id/verification`
+Audit check of the run's binding outcome (read-only, computed on each request). Recomputes the
+[RFC-MACP-0013](https://github.com/multiagentcoordinationprotocol/multiagentcoordinationprotocol/blob/main/rfcs/RFC-MACP-0013-commitment-hash.md)
+canonical commitment hash (`macp-commitment-hash/1`) of the run's `Commitment` with
+`macp-sdk-typescript`, two ways, and cross-checks them:
+
+| Check (`checks[].id`) | What it establishes |
+|---|---|
+| `wire_recompute` | The hash of the `CommitmentPayload` the control plane stored equals the hash recomputed from the envelope's raw payload bytes |
+| `rfc0013_verify` | RFC-MACP-0013 §6.1 verify of those bytes against that hash returns `match` (so no field outside the frozen set was dropped) |
+| `projection_consistency` | The finalized decision the run view shows (action, a committed positive outcome) is the one that was hashed. Present once the decision is finalized |
+| `supersedes_canonical` | `supersedes.commitment_hash` has the canonical `sha256:<64 hex>` shape. Present only when the Commitment supersedes another |
+
+```json
+{
+  "runId": "…",
+  "status": "verified",
+  "match": true,
+  "label": "macp-commitment-hash/1",
+  "commitmentHash": "sha256:9f58…5d41",
+  "recomputed": "sha256:9f58…5d41",
+  "wireVerdict": "match",
+  "commitment": { "messageId": "…", "sender": "…", "sessionId": "…", "acceptedAt": "…", "payload": { "commitment_id": "…", "action": "…", "…": "…" } },
+  "checks": [{ "id": "wire_recompute", "description": "…", "passed": true }],
+  "notVerified": ["Authenticity: …", "Replay: …", "Runtime acceptance: …"],
+  "checkedAt": "2026-10-24T00:00:00.000Z"
+}
+```
+
+`status` is `verified` (every check passed), `mismatch`, `cannot_verify` (the payload bytes are
+missing or carry a field outside the label), or `pending` (no `Commitment` yet; hashes are `null`).
+`commitment.payload` is the RFC-MACP-0013 §3 projection, i.e. exactly what was hashed. It does not
+verify authenticity (no signature or attestation), does not re-execute the session, and has no
+runtime-reported hash to compare against; `notVerified` says so in the response itself.
+
 ---
 
 ## Batch Operations
