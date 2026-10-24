@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { and, asc, count, eq, gt, gte, inArray, lt, lte, sql, SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, gte, inArray, lt, lte, sql, SQL } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { randomUUID } from 'node:crypto';
 import { CanonicalEvent } from '../contracts/control-plane';
@@ -177,6 +177,44 @@ export class EventRepository {
       .where(and(eq(runEventsRaw.runId, runId), gt(runEventsRaw.seq, afterSeq)))
       .orderBy(asc(runEventsRaw.seq))
       .limit(limit);
+  }
+
+  /**
+   * The latest raw `stream-envelope` row whose envelope carries `messageType` — e.g. the run's
+   * `Commitment`. The row keeps the payload's exact wire bytes as `envelope.payloadBase64`, which
+   * is what commitment verification (RFC-MACP-0013 §6.1) needs.
+   */
+  async findLatestRawEnvelope(runId: string, messageType: string) {
+    const [row] = await this.database.db
+      .select()
+      .from(runEventsRaw)
+      .where(
+        and(
+          eq(runEventsRaw.runId, runId),
+          eq(runEventsRaw.kind, 'stream-envelope'),
+          sql`${runEventsRaw.payload}->'envelope'->>'messageType' = ${messageType}`
+        )
+      )
+      .orderBy(desc(runEventsRaw.seq))
+      .limit(1);
+    return row;
+  }
+
+  /** The `message.received` canonical event the normalizer recorded for one envelope. */
+  async findReceivedMessage(runId: string, messageId: string) {
+    const [row] = await this.database.db
+      .select()
+      .from(runEventsCanonical)
+      .where(
+        and(
+          eq(runEventsCanonical.runId, runId),
+          eq(runEventsCanonical.type, 'message.received'),
+          sql`${runEventsCanonical.data}->>'messageId' = ${messageId}`
+        )
+      )
+      .orderBy(desc(runEventsCanonical.seq))
+      .limit(1);
+    return row;
   }
 
   async *streamCanonicalByRun(
