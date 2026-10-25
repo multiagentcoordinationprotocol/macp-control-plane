@@ -33,7 +33,7 @@ test → integration-test (postgres:16 service on 5433, mock runtime)
 
 1. Bump `version` in `package.json` (the release workflow warns on tag/package.json drift).
 2. `git tag v0.6.0 && git push origin v0.6.0`
-3. The workflow builds the image, scans it with Trivy (`CRITICAL`, `ignore-unfixed`) **before** anything reaches the registry, then pushes `v0.6.0`, `v0.6`, and `latest` (pre-release tags like `v0.6.0-rc.1` skip `latest` and are marked pre-release), and creates a GitHub Release with generated notes.
+3. The workflow builds the image, scans it with Trivy (`CRITICAL`, `ignore-unfixed`) **before** anything reaches the registry, then pushes a multi-arch (`linux/amd64` + `linux/arm64`, arm64 via QEMU) image as `v0.6.0`, `v0.6`, `0.6.0`, `0.6`, and `latest` (pre-release tags like `v0.6.0-rc.1` skip `latest` and are marked pre-release), and creates a GitHub Release with generated notes.
 
 ## Security & dependency automation
 

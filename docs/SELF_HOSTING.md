@@ -1,0 +1,87 @@
+# Self-hosting the control plane
+
+The one-command self-host stack (runtime, control plane, Postgres, console, optional playground) lives in
+[`macp-runtime/deploy/docker-compose.yml`](../../macp-runtime/deploy/docker-compose.yml). This page is the
+control plane's contract for that stack: which image to pull, which env it needs, and how to health-check it.
+
+## Image
+
+`ghcr.io/multiagentcoordinationprotocol/macp-control-plane` (public). Multi-arch: `linux/amd64` and `linux/arm64`.
+
+| Tag | Moves? | Use |
+|-----|--------|-----|
+| `0.6.0` / `v0.6.0` | never | **pin this** in compose |
+| `0.6` / `v0.6` | on each patch release | tracks fixes within a minor |
+| `latest` | on every release | not for compose |
+| `sha-<short>` | never | a specific `main` commit (CI build, not a release) |
+
+Release tags are cut by [release.yml](../.github/workflows/release.yml) (Trivy-gated before push). See [CICD.md](CICD.md#releases).
+
+## Boot behaviour
+
+- **Migrations run on start.** `main.ts` applies every pending `drizzle/*.sql` migration (tracked in `_migrations`)
+  before Nest boots, so a fresh, empty Postgres needs no init step. Point `DATABASE_URL` at an existing database;
+  the CP doesn't create the database itself, so set `POSTGRES_DB` on the Postgres container.
+- **The image runs with `NODE_ENV=production`**, so the production fail-fast checks apply (below). There is
+  no hosted-only requirement: no auth service, no Redis, no OTel collector.
+- The CP is an observer. It never opens sessions; agents do that against the runtime directly.
+
+## Environment
+
+Required in compose (the production checks refuse to start without the first three):
+
+| Variable | Example | Why |
+|----------|---------|-----|
+| `DATABASE_URL` | `postgres://postgres:postgres@postgres:5432/macp_control_plane` | Postgres connection |
+| `AUTH_API_KEYS` | `dev-key-1` | Comma-separated API keys, exact match on `Authorization: Bearer <key>`. No commas inside a key. Empty fails startup in production |
+| `RUNTIME_ALLOW_INSECURE` | `true` | Plaintext gRPC to the runtime. Without it, production requires `RUNTIME_TLS=true` |
+| `RUNTIME_ADDRESS` | `runtime:50051` | Runtime gRPC `host:port` (default `127.0.0.1:50051` is wrong inside compose) |
+| `RUNTIME_BEARER_TOKEN` | `macp-control-plane` | Observer identity sent to the runtime. Against a dev-mode runtime (`MACP_ALLOW_INSECURE=1`) any value is accepted and becomes the sender. Against an authenticated runtime it must be a token in the runtime's `MACP_AUTH_TOKENS_JSON`. Unset → startup warning and every runtime call is rejected |
+
+Useful optional variables:
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `PORT` | `3001` | Listen port (`HOST` defaults to `0.0.0.0`) |
+| `CORS_ORIGIN` | `http://localhost:3000` | Set to the console's browser origin if it calls the CP directly |
+| `SESSION_DISCOVERY_ENABLED` | `true` | Auto-creates runs for sessions seen on `WatchSessions`, and consumes `WatchSignals`. Keep it on so agent-launched sessions show up without a `POST /runs` |
+| `LOG_LEVEL` | `info` | |
+| `DB_POOL_MAX` | `20` | Must be ≥ 2 |
+
+Leave these **unset** in compose: `MACP_AUTH_SERVICE_URL` (JWT mint; hosted only), `STREAM_HUB_STRATEGY`/`REDIS_URL`
+(single instance is fine; a `memory` warning is logged), `OTEL_*`, `RUNTIME_USE_DEV_HEADER` (deprecated; the
+dev-bearer fallback is refused in production, so use `RUNTIME_BEARER_TOKEN`). The full list is in
+[`.env.example`](../.env.example).
+
+## Health
+
+| Endpoint | Auth | `ok` means |
+|----------|------|-----------|
+| `GET /healthz` | public | process up **and** Postgres reachable: `{"ok":true,"service":"macp-control-plane"}` |
+| `GET /readyz` | public | Postgres **and** runtime **and** stream consumer **and** circuit breaker not `OPEN` |
+
+**Both return HTTP 200 even when `ok` is `false`**, so a status-code probe only proves the process answers.
+For the compose healthcheck, probe **`/healthz` and match `"ok":true` in the body**. It doesn't depend on the
+runtime being up, so startup order can't deadlock. Don't gate `depends_on` on `/readyz`: it stays `ok:false`
+until the runtime is reachable. (The image's built-in `HEALTHCHECK` is status-only; the compose `healthcheck`
+below overrides it.)
+
+```yaml
+control-plane:
+  image: ghcr.io/multiagentcoordinationprotocol/macp-control-plane:0.6.0
+  environment:
+    DATABASE_URL: postgres://postgres:postgres@postgres:5432/macp_control_plane
+    AUTH_API_KEYS: ${CP_API_KEYS:-dev-key-1}
+    RUNTIME_ADDRESS: runtime:50051
+    RUNTIME_ALLOW_INSECURE: "true"
+    RUNTIME_BEARER_TOKEN: macp-control-plane
+  ports: ["3001:3001"]
+  depends_on:
+    postgres: { condition: service_healthy }
+  healthcheck:
+    test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/healthz | grep -q '\"ok\":true'"]
+    interval: 10s
+    timeout: 3s
+    start_period: 20s
+    retries: 5
+```

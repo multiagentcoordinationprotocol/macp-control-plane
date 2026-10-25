@@ -133,11 +133,11 @@ See [docs/INTEGRATION.md § Running Integration Tests](docs/INTEGRATION.md#runni
 ## CI/CD & deployment
 
 - **CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)): lint, typecheck, unit + integration tests (with coverage summary), `npm audit` gate, secret scan, CLAUDE.md convention sweeps, build, and a Docker build on every PR (pushed to GHCR + Trivy-scanned on `main`).
-- **Release** ([.github/workflows/release.yml](.github/workflows/release.yml)): pushing a `v*.*.*` tag builds the image, gates it with a Trivy CRITICAL scan **before** pushing semver tags (`vX.Y.Z`, `vX.Y`, `latest`) to GHCR, and creates a GitHub Release with generated notes.
+- **Release** ([.github/workflows/release.yml](.github/workflows/release.yml)): pushing a `v*.*.*` tag builds the image, gates it with a Trivy CRITICAL scan **before** pushing multi-arch (`linux/amd64` + `linux/arm64`) semver tags (`vX.Y.Z`, `vX.Y`, `X.Y.Z`, `X.Y`, `latest`) to GHCR, and creates a GitHub Release with generated notes.
 - **CodeQL** ([.github/workflows/codeql.yml](.github/workflows/codeql.yml)) and **Dependabot** ([.github/dependabot.yml](.github/dependabot.yml)) run on a weekly schedule.
 - **Deployment**: single-VM Docker Compose under [deploy/](deploy/README.md) — `./deploy.sh deploy <tag>` pulls the pinned GHCR image, runs migrations, starts the stack, and verifies `/healthz`; an optional SSH deploy workflow ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)) activates once `DEPLOY_SSH_*` secrets exist.
 
-See [docs/CICD.md](docs/CICD.md) for the full pipeline reference.
+See [docs/CICD.md](docs/CICD.md) for the full pipeline reference, and [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) for the image/env/health contract used by the one-command self-host stack in `macp-runtime/deploy/`.
 
 Runtime compatibility (currently absorbed through macp-runtime v0.9.0, tested range `>=0.8.0 <0.10.0`) is tracked in [docs/INTEGRATION.md](docs/INTEGRATION.md#runtime-v087v090-absorption); wire/spec details live in the [runtime docs](../macp-runtime/docs/README.md) and RFCs, not here.
 
