@@ -1,4 +1,5 @@
 import { AppConfigService } from './app-config.service';
+import packageJson from '../../package.json';
 
 describe('AppConfigService', () => {
   const originalEnv = { ...process.env };
@@ -225,7 +226,7 @@ describe('AppConfigService', () => {
   describe('clientVersion', () => {
     it('should read version from package.json', () => {
       const config = new AppConfigService();
-      expect(config.clientVersion).toBe('0.3.0');
+      expect(config.clientVersion).toBe(packageJson.version);
     });
   });
 
