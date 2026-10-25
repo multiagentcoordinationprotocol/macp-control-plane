@@ -717,10 +717,10 @@ silently-empty diff.
 ## Health (Public, no auth)
 
 ### `GET /healthz`
-Liveness probe: `{ "status": "ok" }`
+Liveness probe: `{ "ok": boolean, "service": "macp-control-plane" }`. **Always 200** while the process answers; `ok` (Postgres reachable, no pool error) is informational.
 
 ### `GET /readyz`
-Readiness probe: `{ "status", "checks": { "database", "runtime", "streamConsumer", "circuitBreaker" } }`
+Readiness probe: `{ "ok", "database", "runtime": { "ok", "runtimeKind", "detail"? }, "streamConsumer", "circuitBreaker" }`. **200 when `ok`, 503 when not** — same body either way.
 
 ### `GET /metrics`
 Prometheus metrics (text format).

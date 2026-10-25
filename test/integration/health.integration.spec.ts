@@ -22,7 +22,7 @@ describe('Health Probes (integration)', () => {
 
   it('GET /readyz returns 200 with subsystem statuses', async () => {
     const result = await client.readyz() as Record<string, unknown>;
-    expect(result).toHaveProperty('ok');
+    expect(result).toHaveProperty('ok', true);
     expect(result).toHaveProperty('database');
     expect(result).toHaveProperty('runtime');
     expect(result).toHaveProperty('streamConsumer');

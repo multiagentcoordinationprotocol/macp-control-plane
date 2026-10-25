@@ -78,6 +78,10 @@ export async function createTestApp(
   process.env.LOG_LEVEL = 'warn';
   process.env.RUNTIME_ALLOW_INSECURE = 'true';
   process.env.RUN_RECOVERY_ENABLED = 'false';
+  // The scripted mock registers under its own kind; make it the configured runtime so
+  // config.runtimeKind lookups (/readyz, /runtime/*) reach it instead of an unregistered 'rust'.
+  if (runtimeMode === 'mock') process.env.RUNTIME_KIND = 'scripted-mock';
+  else delete process.env.RUNTIME_KIND;
   // Integration tests poll HTTP endpoints aggressively (waitFor). The production
   // default of 100 req/60s per user starves long-running suites with silent 429s,
   // so raise the limit unless a test explicitly overrides it.
