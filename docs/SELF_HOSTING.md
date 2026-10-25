@@ -10,7 +10,7 @@ control plane's contract for that stack: which image to pull, which env it needs
 
 | Tag | Moves? | Use |
 |-----|--------|-----|
-| `0.6.0` / `v0.6.0` | never | **pin this** in compose |
+| `0.6.1` / `v0.6.1` | never | **pin this** in compose |
 | `0.6` / `v0.6` | on each patch release | tracks fixes within a minor |
 | `latest` | on every release | not for compose |
 | `sha-<short>` | never | a specific `main` commit (CI build, not a release) |
@@ -55,20 +55,25 @@ dev-bearer fallback is refused in production, so use `RUNTIME_BEARER_TOKEN`). Th
 
 ## Health
 
-| Endpoint | Auth | `ok` means |
-|----------|------|-----------|
-| `GET /healthz` | public | process up **and** Postgres reachable: `{"ok":true,"service":"macp-control-plane"}` |
-| `GET /readyz` | public | Postgres **and** runtime **and** stream consumer **and** circuit breaker not `OPEN` |
+| Endpoint | Auth | HTTP | `ok` means |
+|----------|------|------|-----------|
+| `GET /healthz` | public | **200 whenever the process answers** (liveness) | Postgres reachable and no pool error. Informational only |
+| `GET /readyz` | public | **200 when `ok`, 503 when not** (same JSON body either way) | Postgres **and** runtime **and** stream consumer **and** circuit breaker not `OPEN` |
 
-**Both return HTTP 200 even when `ok` is `false`**, so a status-code probe only proves the process answers.
-For the compose healthcheck, probe **`/healthz` and match `"ok":true` in the body**. It doesn't depend on the
-runtime being up, so startup order can't deadlock. Don't gate `depends_on` on `/readyz`: it stays `ok:false`
-until the runtime is reachable. (The image's built-in `HEALTHCHECK` is status-only; the compose `healthcheck`
-below overrides it.)
+`/readyz` body (identical on 200 and 503):
+`{"ok":false,"database":"ok","runtime":{"ok":false,"runtimeKind":"rust","detail":"..."},"streamConsumer":"ok","circuitBreaker":"CLOSED"}`
+
+- **Compose / Kubernetes readiness / load balancers: probe `/readyz` by status code.** The CP only reports
+  healthy once it can actually serve: database up and runtime reachable. Gate the console on
+  `control-plane: service_healthy`. The CP itself gates only on `postgres: service_healthy`, never on the runtime.
+- **Liveness (restart) probes: `/healthz`.** A DB outage doesn't fail it, because a restart wouldn't fix that.
+  A wedged process fails it by timing out. The image's built-in `HEALTHCHECK` uses `/healthz`, and the compose
+  `healthcheck` below overrides it.
+- Before 0.6.1, `/readyz` returned 200 even when `ok:false`. If you pin an older image, match `"ok":true` in the body.
 
 ```yaml
 control-plane:
-  image: ghcr.io/multiagentcoordinationprotocol/macp-control-plane:0.6.0
+  image: ghcr.io/multiagentcoordinationprotocol/macp-control-plane:0.6.1
   environment:
     DATABASE_URL: postgres://postgres:postgres@postgres:5432/macp_control_plane
     AUTH_API_KEYS: ${CP_API_KEYS:-dev-key-1}
@@ -79,7 +84,7 @@ control-plane:
   depends_on:
     postgres: { condition: service_healthy }
   healthcheck:
-    test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/healthz | grep -q '\"ok\":true'"]
+    test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/readyz"]
     interval: 10s
     timeout: 3s
     start_period: 20s

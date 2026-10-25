@@ -1,3 +1,4 @@
+import type { Response } from 'express';
 import { HealthController } from './health.controller';
 import { DatabaseService } from '../db/database.service';
 import { AppConfigService } from '../config/app-config.service';
@@ -13,6 +14,7 @@ describe('HealthController', () => {
   let mockRuntimeRegistry: { get: jest.Mock };
   let mockRustProvider: { getCircuitBreakerState: jest.Mock };
   let mockStreamConsumer: { isHealthy: jest.Mock };
+  let mockRes: { status: jest.Mock };
 
   beforeEach(() => {
     mockPool = { query: jest.fn() };
@@ -32,6 +34,7 @@ describe('HealthController', () => {
     mockStreamConsumer = {
       isHealthy: jest.fn()
     };
+    mockRes = { status: jest.fn() };
 
     controller = new HealthController(
       mockDatabase as DatabaseService,
@@ -93,7 +96,7 @@ describe('HealthController', () => {
       });
       mockStreamConsumer.isHealthy.mockReturnValue(true);
 
-      const result = await controller.readyz();
+      const result = await controller.readyz(mockRes as unknown as Response);
 
       expect(result).toEqual({
         ok: true,
@@ -102,6 +105,7 @@ describe('HealthController', () => {
         streamConsumer: 'ok',
         circuitBreaker: 'CLOSED'
       });
+      expect(mockRes.status).not.toHaveBeenCalled();
     });
 
     it('returns ok:false when db is unhealthy', async () => {
@@ -112,10 +116,11 @@ describe('HealthController', () => {
       });
       mockStreamConsumer.isHealthy.mockReturnValue(true);
 
-      const result = await controller.readyz();
+      const result = await controller.readyz(mockRes as unknown as Response);
 
       expect(result.ok).toBe(false);
       expect(result.database).toBe('unhealthy');
+      expect(mockRes.status).toHaveBeenCalledWith(503);
     });
 
     it('returns ok:false when runtime is unhealthy', async () => {
@@ -126,10 +131,11 @@ describe('HealthController', () => {
       });
       mockStreamConsumer.isHealthy.mockReturnValue(true);
 
-      const result = await controller.readyz();
+      const result = await controller.readyz(mockRes as unknown as Response);
 
       expect(result.ok).toBe(false);
       expect(result.runtime).toEqual(runtimeHealth);
+      expect(mockRes.status).toHaveBeenCalledWith(503);
     });
 
     it('returns ok:false when runtime.health() throws', async () => {
@@ -139,7 +145,7 @@ describe('HealthController', () => {
       });
       mockStreamConsumer.isHealthy.mockReturnValue(true);
 
-      const result = await controller.readyz();
+      const result = await controller.readyz(mockRes as unknown as Response);
 
       expect(result.ok).toBe(false);
       expect(result.runtime).toEqual(
@@ -159,7 +165,7 @@ describe('HealthController', () => {
       });
       mockStreamConsumer.isHealthy.mockReturnValue(false);
 
-      const result = await controller.readyz();
+      const result = await controller.readyz(mockRes as unknown as Response);
 
       expect(result.ok).toBe(false);
       expect(result.streamConsumer).toBe('unhealthy');
@@ -172,12 +178,27 @@ describe('HealthController', () => {
       });
       mockStreamConsumer.isHealthy.mockReturnValue(false);
 
-      const result = await controller.readyz();
+      const result = await controller.readyz(mockRes as unknown as Response);
 
       expect(result.ok).toBe(false);
       expect(result.database).toBe('unhealthy');
       expect(result.runtime.ok).toBe(false);
       expect(result.streamConsumer).toBe('unhealthy');
+    });
+
+    it('returns 503 when only the circuit breaker is OPEN', async () => {
+      mockPool.query.mockResolvedValue({ rows: [{ ok: 1 }] });
+      mockRuntimeRegistry.get.mockReturnValue({
+        health: jest.fn().mockResolvedValue({ ok: true, runtimeKind: 'rust' })
+      });
+      mockStreamConsumer.isHealthy.mockReturnValue(true);
+      mockRustProvider.getCircuitBreakerState.mockReturnValue('OPEN');
+
+      const result = await controller.readyz(mockRes as unknown as Response);
+
+      expect(result.ok).toBe(false);
+      expect(result.circuitBreaker).toBe('OPEN');
+      expect(mockRes.status).toHaveBeenCalledWith(503);
     });
   });
 });
