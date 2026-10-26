@@ -977,7 +977,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnMod
           policyId: c.policyId,
           mode: c.mode,
           description: c.description,
-          rules: typeof c.rules === 'string' ? Buffer.from(c.rules) : c.rules,
+          // `string rules = 4`: the JSON text itself, never base64.
+          rules: typeof c.rules === 'string' ? c.rules : c.rules.toString('utf8'),
           schemaVersion: c.schemaVersion
         }
       },

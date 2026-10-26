@@ -1151,13 +1151,18 @@ describe('RustRuntimeProvider.whatIfReplay — WhatIfReplay wire mapping (RFC-MA
     schemaVersion: 3
   };
 
-  it('sends the session id and the candidate descriptor, rules as bytes', async () => {
+  it('sends the session id and the candidate, rules as the JSON text (`string rules = 4`)', async () => {
     const { provider, unary } = setup({});
     await provider.whatIfReplay({ runtimeSessionId: 's1', candidate });
-    expect(unary).toHaveBeenCalledWith('WhatIfReplay', { sessionId: 's1', candidate }, expect.anything());
+    const rulesText = '{"voting":{"algorithm":"unanimous"}}';
+    expect(unary).toHaveBeenCalledWith(
+      'WhatIfReplay',
+      { sessionId: 's1', candidate: { ...candidate, rules: rulesText } },
+      expect.anything()
+    );
     expect(method.requestDeserialize(method.requestSerialize(unary.mock.calls[0][1]))).toMatchObject({
       sessionId: 's1',
-      candidate: { policyId: 'cand', schemaVersion: 3 }
+      candidate: { policyId: 'cand', schemaVersion: 3, rules: rulesText }
     });
   });
 
