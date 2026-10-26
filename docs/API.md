@@ -314,6 +314,69 @@ missing or carry a field outside the label), or `pending` (no `Commitment` yet; 
 verify authenticity (no signature or attestation), does not re-execute the session, and has no
 runtime-reported hash to compare against; `notVerified` says so in the response itself.
 
+### `POST /runs/:id/what-if`
+Replays the run's session under a **candidate policy** and diffs the outcome against the recorded one
+([RFC-MACP-0012](https://github.com/multiagentcoordinationprotocol/multiagentcoordinationprotocol/blob/main/rfcs/RFC-MACP-0012-policy.md)
+§8.1, runtime `WhatIfReplay`). Read-only on both sides: the candidate passes the same admission as
+`POST /runtime/policies` but is never registered, nothing is persisted, and no envelope is emitted.
+Requires macp-runtime ≥ 0.10; gate the UI on `GET /runtime/capabilities` →
+`capabilities.policyRegistry.whatIfReplay === true`.
+
+```json
+{ "candidate": { "rules": { "voting": { "algorithm": "unanimous" } }, "mode": "macp.mode.decision.v1", "schemaVersion": 3, "policyId": "draft-1", "description": "" } }
+```
+
+Only `candidate.rules` (a JSON object) is required. `mode` defaults to the session's mode (`*` replays
+a wildcard policy); `schemaVersion` defaults to `3` like `POST /runtime/policies`; `policyId` is echoed back
+as `candidatePolicyId` and need not exist. Unknown keys are stripped. The rules get the same closed-set
+pre-check as policy registration.
+
+```json
+{
+  "runId": "…",
+  "sessionId": "…",
+  "recordedPolicyId": "policy.default",
+  "candidatePolicyId": "draft-1",
+  "recorded": {
+    "state": "RESOLVED",
+    "resolution": { "commitmentId": "…", "action": "decision.approved", "outcomePositive": true, "…": "…" },
+    "resolvedBy": { "historyIndex": 3, "messageId": "…", "messageType": "Commitment" }
+  },
+  "candidate": { "state": "OPEN", "resolution": null, "resolvedBy": null },
+  "firstDivergence": 3,
+  "denials": [{ "historyIndex": 3, "messageId": "…", "details": { "reasons": ["…"], "denials": [{ "code": "…", "message": "…", "participants": [] }] } }],
+  "entries": [
+    {
+      "historyIndex": 3,
+      "messageId": "…",
+      "messageType": "Commitment",
+      "recorded":  { "kind": "APPLIED", "state": "RESOLVED", "errorCode": null, "details": null },
+      "candidate": { "kind": "REFUSED", "state": "OPEN", "errorCode": "POLICY_DENIED", "details": { "reasons": ["…"] } }
+    }
+  ]
+}
+```
+
+- `state`: `OPEN` | `RESOLVED` | `EXPIRED` | `CANCELLED` | `SUSPENDED`, or `null` when the runtime sent none
+  (always `null` for `NOT_OPEN`/`NO_SESSION` entries).
+- `entries[].*.kind`: `APPLIED` (accepted; `state` is the session state after it), `NOT_OPEN` (session no
+  longer open, e.g. it resolved earlier under the candidate), `REFUSED` (`errorCode` + `details` say why),
+  `NO_SESSION`. One entry per accepted history entry, `historyIndex` 0-based.
+- `firstDivergence`: the first `historyIndex` whose outcome differs, or `null` when the two replays agree.
+- `resolution`: the resolving `CommitmentPayload`, decoded; `null` when that replay did not resolve.
+- `denials`: every policy denial the candidate replay hit. `details` is the same `{reasons, denials}` shape as
+  a `POLICY_DENIED` error's `metadata`, or `null`.
+
+| HTTP | `errorCode` | When |
+|---|---|---|
+| 400 | none | Body shape (Nest validation body: `message` is an array of field errors) |
+| 400 | `INVALID_POLICY_DEFINITION` | The candidate's rules fail admission (CP closed-set pre-check or the runtime's own) |
+| 404 | `RUN_NOT_FOUND` | Unknown run (a malformed id is a plain 400) |
+| 404 | `NOT_FOUND` | Run has no runtime session yet, or the runtime no longer knows the session |
+| 409 | `HISTORY_UNAVAILABLE` | Permanent: the session ended and the runtime compacted its log. Runtimes keep it with `MACP_COMPACT_TERMINAL_LOGS=0` |
+| 501 | `WHAT_IF_REPLAY_UNSUPPORTED` | The runtime does not advertise `policyRegistry.whatIfReplay` (any 0.9.x) |
+| 403 / 429 / 500 / 503 | `FORBIDDEN` / `RATE_LIMITED` / `INTERNAL_ERROR` / `RUNTIME_UNAVAILABLE` | As for any runtime call |
+
 ---
 
 ## Batch Operations
@@ -512,6 +575,12 @@ Registered execution modes with message types and terminal types.
 
 ### `GET /runtime/roots`
 Runtime root descriptors.
+
+### `GET /runtime/capabilities`
+A fresh `Initialize` handshake with the configured runtime:
+`{ runtimeInfo: {name, version, …}, selectedProtocolVersion, supportedModes, capabilities }`.
+Feature flags live under `capabilities` (absent = unsupported), e.g.
+`capabilities.policyRegistry.whatIfReplay` gates `POST /runs/:id/what-if`. 503 when the runtime is unreachable.
 
 ### `GET /runtime/health`
 Runtime health: `{ "ok": true, "runtimeKind": "rust", "detail": "..." }`

@@ -14,6 +14,7 @@ import {
   RuntimeUnregisterPolicyResultDto
 } from '../dto/runtime-responses.dto';
 import { macpErrorCodeOf } from '../runtime/grpc-helpers';
+import { RuntimeCapabilitiesService } from '../runtime/runtime-capabilities.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { DEFAULT_POLICY_SCHEMA_VERSION, POLICY_SCHEMA_VERSIONS, PolicySchemaVersion } from '../contracts/runtime';
 
@@ -23,7 +24,8 @@ export class RuntimeController {
   constructor(
     private readonly config: AppConfigService,
     private readonly runtimeRegistry: RuntimeProviderRegistry,
-    private readonly policyRulesValidator: PolicyRulesValidatorService
+    private readonly policyRulesValidator: PolicyRulesValidatorService,
+    private readonly runtimeCapabilities: RuntimeCapabilitiesService
   ) {}
 
   @Get('manifest')
@@ -45,6 +47,23 @@ export class RuntimeController {
   @ApiOkResponse({ type: [RuntimeRootDescriptorDto] })
   async listRoots() {
     return this.runtimeRegistry.get(this.config.runtimeKind).listRoots();
+  }
+
+  @Get('capabilities')
+  @ApiOperation({
+    summary: 'Fresh Initialize handshake: the runtime version and its advertised capabilities.',
+    description:
+      'Gate optional features on this — e.g. `capabilities.policyRegistry.whatIfReplay` for ' +
+      '`POST /runs/:id/what-if`. Absent flags mean unsupported.'
+  })
+  async getCapabilities() {
+    const init = await this.runtimeCapabilities.refresh(this.runtimeRegistry.get(this.config.runtimeKind));
+    return {
+      runtimeInfo: init.runtimeInfo,
+      selectedProtocolVersion: init.selectedProtocolVersion,
+      supportedModes: init.supportedModes,
+      capabilities: init.capabilities ?? {}
+    };
   }
 
   @Get('health')
@@ -89,21 +108,8 @@ export class RuntimeController {
     }
 
     // Mode-specific conditional validations
-    const rules = body.rules as Record<string, unknown>;
-    const voting = rules.voting as Record<string, unknown> | undefined;
-    if (voting?.algorithm === 'weighted' && (!voting.weights || typeof voting.weights !== 'object')) {
-      throw new BadRequestException('weighted voting algorithm requires a weights map');
-    }
-    if (voting?.algorithm === 'supermajority' && (typeof voting.threshold !== 'number' || voting.threshold <= 0.5)) {
-      throw new BadRequestException('supermajority voting requires threshold > 0.5');
-    }
-    const commitment = rules.commitment as Record<string, unknown> | undefined;
-    if (commitment?.authority === 'designated_role') {
-      const roles = commitment.designated_roles ?? commitment.designatedRoles;
-      if (!Array.isArray(roles) || roles.length === 0) {
-        throw new BadRequestException('designated_role authority requires non-empty designated_roles list');
-      }
-    }
+    const targetedError = this.policyRulesValidator.targetedRuleError(body.rules);
+    if (targetedError) throw new BadRequestException(targetedError);
 
     const provider = this.runtimeRegistry.get(this.config.runtimeKind);
 

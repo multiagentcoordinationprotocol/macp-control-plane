@@ -53,6 +53,13 @@ Leave these **unset** in compose: `MACP_AUTH_SERVICE_URL` (JWT mint; hosted only
 dev-bearer fallback is refused in production, so use `RUNTIME_BEARER_TOKEN`). The full list is in
 [`.env.example`](../.env.example).
 
+### Runtime retention for what-if replay
+
+`POST /runs/:id/what-if` (runtime ≥ 0.10) replays a session's full history. By default the runtime
+compacts a session's log when it ends, so what-if on a finished run answers `409 HISTORY_UNAVAILABLE`.
+To keep finished sessions replayable, set **`MACP_COMPACT_TERMINAL_LOGS=0` on the runtime** (not the CP).
+That trades disk for replayability. The CP needs no setting; it reads the capability from the runtime.
+
 ## Health
 
 | Endpoint | Auth | HTTP | `ok` means |

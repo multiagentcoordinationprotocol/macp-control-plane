@@ -3,6 +3,7 @@ import { SessionState } from '../../src/contracts/control-plane';
 import {
   RawRuntimeEvent,
   RuntimeAck,
+  RuntimeCapabilities,
   RuntimeCancelResult,
   RuntimeCancelSessionRequest,
   RuntimeGetPolicyRequest,
@@ -28,6 +29,8 @@ import {
   RuntimeSuspendSessionRequest,
   RuntimeUnregisterPolicyRequest,
   RuntimeUnregisterPolicyResult,
+  RuntimeWhatIfReplayRequest,
+  RuntimeWhatIfReplayResult,
   SessionLifecycleEvent,
 } from '../../src/contracts/runtime';
 
@@ -56,6 +59,10 @@ export interface RuntimeScript {
    * Simulates the initiator agent opening the session. Default: 0ms (immediate).
    */
   sessionOpenAfterMs?: number;
+  /** Advertised from `initialize()` — e.g. `{ policyRegistry: { whatIfReplay: true } }`. */
+  capabilities?: RuntimeCapabilities;
+  /** `whatIfReplay()` result, or an error it throws instead. Unset → throws. */
+  whatIfReplay?: RuntimeWhatIfReplayResult | Error;
 }
 
 /**
@@ -108,6 +115,7 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
       selectedProtocolVersion: '1.0',
       runtimeInfo: { name: 'scripted-mock', version: '0.0.1' },
       supportedModes: this.script.supportedModes,
+      capabilities: this.script.capabilities,
     };
   }
 
@@ -326,6 +334,17 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
       return all.filter((p) => p.mode === req.mode || p.mode === '*');
     }
     return all;
+  }
+
+  /** Requests seen by `whatIfReplay()`, for assertions. */
+  readonly whatIfRequests: RuntimeWhatIfReplayRequest[] = [];
+
+  async whatIfReplay(req: RuntimeWhatIfReplayRequest): Promise<RuntimeWhatIfReplayResult> {
+    this.whatIfRequests.push(req);
+    const result = this.script.whatIfReplay;
+    if (!result) throw new Error('scripted mock: no whatIfReplay result scripted');
+    if (result instanceof Error) throw result;
+    return result;
   }
 
   // ── Session lifecycle observation (stub) ────────────────────────────

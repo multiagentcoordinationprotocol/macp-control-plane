@@ -38,5 +38,10 @@ export enum ErrorCode {
   // Retryable (HTTP 503): the runtime dropped a stream consumer that fell behind.
   STREAM_LAGGED = 'STREAM_LAGGED',
   INVALID_ENVELOPE = 'INVALID_ENVELOPE',
-  DUPLICATE_MESSAGE = 'DUPLICATE_MESSAGE'
+  DUPLICATE_MESSAGE = 'DUPLICATE_MESSAGE',
+  // Permanent (HTTP 409): WhatIfReplay named a session whose full history the runtime
+  // no longer holds — it compacts a terminal session's log (RFC-MACP-0012 §8.1 item 8).
+  HISTORY_UNAVAILABLE = 'HISTORY_UNAVAILABLE',
+  // HTTP 501: the runtime does not advertise `policyRegistry.whatIfReplay` (any 0.9.x).
+  WHAT_IF_REPLAY_UNSUPPORTED = 'WHAT_IF_REPLAY_UNSUPPORTED'
 }

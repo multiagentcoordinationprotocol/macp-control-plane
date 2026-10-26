@@ -15,6 +15,9 @@ import { MetricsController } from './controllers/metrics.controller';
 import { EventsController } from './controllers/events.controller';
 import { ObservabilityController } from './controllers/observability.controller';
 import { RunInsightsController } from './controllers/run-insights.controller';
+import { WhatIfController } from './controllers/what-if.controller';
+import { RuntimeCapabilitiesService } from './runtime/runtime-capabilities.service';
+import { WhatIfReplayService } from './what-if/what-if-replay.service';
 import { VerificationController } from './controllers/verification.controller';
 import { RunsController } from './controllers/runs.controller';
 import { RuntimeController } from './controllers/runtime.controller';
@@ -86,6 +89,7 @@ import { WebhookService } from './webhooks/webhook.service';
     // handlers would be unreachable (ParseUUIDPipe → 400).
     RunInsightsController,
     VerificationController,
+    WhatIfController,
     RunsController,
     RuntimeController,
     ObservabilityController,
@@ -142,6 +146,8 @@ import { WebhookService } from './webhooks/webhook.service';
     RunRecoveryService,
     RunInsightsService,
     CommitmentVerificationService,
+    WhatIfReplayService,
+    RuntimeCapabilitiesService,
     DataRetentionService,
     WebhookRepository,
     WebhookDeliveryRepository,

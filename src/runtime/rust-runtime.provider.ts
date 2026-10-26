@@ -28,6 +28,10 @@ import {
   RuntimeRegisterPolicyResult,
   RuntimeUnregisterPolicyRequest,
   RuntimeUnregisterPolicyResult,
+  RuntimeWhatIfEntryOutcome,
+  RuntimeWhatIfOutcome,
+  RuntimeWhatIfReplayRequest,
+  RuntimeWhatIfReplayResult,
   RuntimeGetPolicyRequest,
   RuntimeListPoliciesRequest,
   RuntimeListSessionsResult,
@@ -962,6 +966,61 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnMod
     }));
   }
 
+  async whatIfReplay(req: RuntimeWhatIfReplayRequest): Promise<RuntimeWhatIfReplayResult> {
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+    const c = req.candidate;
+    const response = await this.unary(
+      'WhatIfReplay',
+      {
+        sessionId: req.runtimeSessionId,
+        candidate: {
+          policyId: c.policyId,
+          mode: c.mode,
+          description: c.description,
+          rules: typeof c.rules === 'string' ? Buffer.from(c.rules) : c.rules,
+          schemaVersion: c.schemaVersion
+        }
+      },
+      buildMetadata(creds.metadata)
+    );
+    // `longs: String` → uint64s arrive as strings; `optional first_divergence` is
+    // undefined when unset (0 is a real index), and an absent sub-message is null.
+    const outcome = (o: any): RuntimeWhatIfOutcome => ({
+      state: o?.state ?? 'SESSION_STATE_UNSPECIFIED',
+      resolution: toBuffer(o?.resolution),
+      resolvedByHistoryIndex: Number(o?.resolvedByHistoryIndex ?? 0),
+      resolvedByMessageId: o?.resolvedByMessageId ?? '',
+      resolvedByMessageType: o?.resolvedByMessageType ?? ''
+    });
+    const entryOutcome = (o: any): RuntimeWhatIfEntryOutcome => ({
+      kind: o?.kind ?? 'KIND_UNSPECIFIED',
+      state: o?.state ?? 'SESSION_STATE_UNSPECIFIED',
+      errorCode: o?.errorCode ?? '',
+      details: toBuffer(o?.details)
+    });
+    return {
+      candidatePolicyId: response.candidatePolicyId ?? '',
+      recordedPolicyId: response.recordedPolicyId ?? '',
+      recorded: outcome(response.recorded),
+      candidate: outcome(response.candidate),
+      ...(response.firstDivergence !== undefined && response.firstDivergence !== null
+        ? { firstDivergence: Number(response.firstDivergence) }
+        : {}),
+      denials: (response.denials ?? []).map((d: any) => ({
+        historyIndex: Number(d.historyIndex ?? 0),
+        messageId: d.messageId ?? '',
+        details: toBuffer(d.details)
+      })),
+      entries: (response.entries ?? []).map((e: any) => ({
+        historyIndex: Number(e.historyIndex ?? 0),
+        messageId: e.messageId ?? '',
+        messageType: e.messageType ?? '',
+        recorded: entryOutcome(e.recorded),
+        candidate: entryOutcome(e.candidate)
+      }))
+    };
+  }
+
   private async unary(
     method: string,
     request: unknown,
@@ -997,4 +1056,10 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnMod
       throw mapGrpcError(error, method) ?? error;
     }
   }
+}
+
+function toBuffer(value: unknown): Buffer {
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Uint8Array) return Buffer.from(value);
+  return Buffer.alloc(0);
 }

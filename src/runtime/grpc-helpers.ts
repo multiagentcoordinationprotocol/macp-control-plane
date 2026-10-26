@@ -214,6 +214,8 @@ export const MACP_ERROR_REGISTRY: Readonly<Record<string, { http: HttpStatus; co
   // Retryable: the runtime dropped this consumer for falling behind (S13; owner decision Q2).
   STREAM_LAGGED: { http: HttpStatus.SERVICE_UNAVAILABLE, code: ErrorCode.STREAM_LAGGED },
   AGENT_NOT_FOUND: { http: HttpStatus.NOT_FOUND, code: ErrorCode.NOT_FOUND },
+  // Permanent: WhatIfReplay on a session whose log was compacted (RFC-MACP-0012 1.8.1-draft).
+  HISTORY_UNAVAILABLE: { http: HttpStatus.CONFLICT, code: ErrorCode.HISTORY_UNAVAILABLE },
   // Deprecated registry alias for FORBIDDEN; the runtime never emits it.
   UNAUTHORIZED: { http: HttpStatus.FORBIDDEN, code: ErrorCode.FORBIDDEN }
 };
