@@ -235,6 +235,8 @@ export interface RuntimeCapabilities {
     listChanged?: boolean;
     /** Vendor rule extensions (`x-…` keys) the runtime implements (proto 0.1.11; `[]` from a 0.8.x runtime). */
     ruleExtensions?: string[];
+    /** Runtime implements the read-only `WhatIfReplay` RPC (RFC-MACP-0012 §8.1; proto 0.1.12, runtime ≥0.10). */
+    whatIfReplay?: boolean;
   };
 }
 
@@ -312,6 +314,11 @@ export interface RuntimeProvider {
   unregisterPolicy(req: RuntimeUnregisterPolicyRequest): Promise<RuntimeUnregisterPolicyResult>;
   getPolicy(req: RuntimeGetPolicyRequest): Promise<RuntimePolicyDescriptor>;
   listPolicies(req?: RuntimeListPoliciesRequest): Promise<RuntimePolicyDescriptor[]>;
+  /**
+   * Replay a session's accepted history under a candidate policy (RFC-MACP-0012 §8.1).
+   * Read-only; callers MUST check `capabilities.policyRegistry.whatIfReplay` first.
+   */
+  whatIfReplay(req: RuntimeWhatIfReplayRequest): Promise<RuntimeWhatIfReplayResult>;
 }
 
 // ── Policy types (RFC-MACP-0012) ────────────────────────────────────
@@ -336,6 +343,48 @@ export interface RuntimePolicyDescriptor {
   rules: Buffer | string;
   schemaVersion: number;
   registeredAtUnixMs?: number;
+}
+
+export interface RuntimeWhatIfReplayRequest {
+  runtimeSessionId: string;
+  /** Admission-validated like RegisterPolicy, never registered. `policyId` is free. */
+  candidate: RuntimePolicyDescriptor;
+}
+
+/** `WhatIfEntryOutcome`, enums as proto names (e.g. `KIND_APPLIED`, `SESSION_STATE_OPEN`). */
+export interface RuntimeWhatIfEntryOutcome {
+  kind: string;
+  state: string;
+  errorCode: string;
+  details: Buffer;
+}
+
+/** `WhatIfReplayResponse` with uint64 fields as numbers and bytes as Buffers. */
+export interface RuntimeWhatIfReplayResult {
+  candidatePolicyId: string;
+  recordedPolicyId: string;
+  recorded: RuntimeWhatIfOutcome;
+  candidate: RuntimeWhatIfOutcome;
+  /** Unset when both replays agree on every entry. */
+  firstDivergence?: number;
+  denials: Array<{ historyIndex: number; messageId: string; details: Buffer }>;
+  entries: Array<{
+    historyIndex: number;
+    messageId: string;
+    messageType: string;
+    recorded: RuntimeWhatIfEntryOutcome;
+    candidate: RuntimeWhatIfEntryOutcome;
+  }>;
+}
+
+export interface RuntimeWhatIfOutcome {
+  state: string;
+  /** The resolving Commitment's payload bytes; empty if unresolved. */
+  resolution: Buffer;
+  resolvedByHistoryIndex: number;
+  /** Empty if unresolved. */
+  resolvedByMessageId: string;
+  resolvedByMessageType: string;
 }
 
 export interface RuntimeRegisterPolicyRequest {

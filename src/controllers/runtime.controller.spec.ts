@@ -4,11 +4,13 @@ import { PolicyRulesValidatorService } from '../policy/policy-rules-validator.se
 import { RuntimeController } from './runtime.controller';
 import { AppConfigService } from '../config/app-config.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
+import { RuntimeCapabilitiesService } from '../runtime/runtime-capabilities.service';
 
 describe('RuntimeController', () => {
   let controller: RuntimeController;
   let mockConfig: Partial<AppConfigService>;
   let mockRuntimeRegistry: { get: jest.Mock };
+  let mockCapabilities: { refresh: jest.Mock };
   let mockProvider: {
     getManifest: jest.Mock;
     listModes: jest.Mock;
@@ -37,11 +39,43 @@ describe('RuntimeController', () => {
       get: jest.fn().mockReturnValue(mockProvider)
     };
 
+    mockCapabilities = { refresh: jest.fn() };
+
     controller = new RuntimeController(
       mockConfig as AppConfigService,
       mockRuntimeRegistry as unknown as RuntimeProviderRegistry,
-      new PolicyRulesValidatorService()
+      new PolicyRulesValidatorService(),
+      mockCapabilities as unknown as RuntimeCapabilitiesService
     );
+  });
+
+  // ===========================================================================
+  // getCapabilities
+  // ===========================================================================
+  describe('getCapabilities', () => {
+    it('returns a fresh Initialize of the configured runtime', async () => {
+      mockCapabilities.refresh.mockResolvedValue({
+        selectedProtocolVersion: '1.0',
+        runtimeInfo: { name: 'macp-runtime', version: '0.10.0' },
+        supportedModes: ['macp.mode.decision.v1'],
+        capabilities: { policyRegistry: { whatIfReplay: true } },
+        instructions: 'not echoed'
+      });
+
+      await expect(controller.getCapabilities()).resolves.toEqual({
+        runtimeInfo: { name: 'macp-runtime', version: '0.10.0' },
+        selectedProtocolVersion: '1.0',
+        supportedModes: ['macp.mode.decision.v1'],
+        capabilities: { policyRegistry: { whatIfReplay: true } }
+      });
+      expect(mockRuntimeRegistry.get).toHaveBeenCalledWith('rust');
+      expect(mockCapabilities.refresh).toHaveBeenCalledWith(mockProvider);
+    });
+
+    it('answers {} when the runtime advertises no capabilities', async () => {
+      mockCapabilities.refresh.mockResolvedValue({ selectedProtocolVersion: '1.0', runtimeInfo: {}, supportedModes: [] });
+      expect((await controller.getCapabilities()).capabilities).toEqual({});
+    });
   });
 
   // ===========================================================================

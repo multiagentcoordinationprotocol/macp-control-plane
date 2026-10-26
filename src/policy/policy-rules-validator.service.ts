@@ -164,6 +164,28 @@ export class PolicyRulesValidatorService {
     }
   }
 
+  /**
+   * Cross-field rules the schemas don't express, with the messages `POST /runtime/policies`
+   * has always returned. The first violation, or undefined.
+   */
+  targetedRuleError(rules: Record<string, unknown>): string | undefined {
+    const voting = rules.voting as Record<string, unknown> | undefined;
+    if (voting?.algorithm === 'weighted' && (!voting.weights || typeof voting.weights !== 'object')) {
+      return 'weighted voting algorithm requires a weights map';
+    }
+    if (voting?.algorithm === 'supermajority' && (typeof voting.threshold !== 'number' || voting.threshold <= 0.5)) {
+      return 'supermajority voting requires threshold > 0.5';
+    }
+    const commitment = rules.commitment as Record<string, unknown> | undefined;
+    if (commitment?.authority === 'designated_role') {
+      const roles = commitment.designated_roles ?? commitment.designatedRoles;
+      if (!Array.isArray(roles) || roles.length === 0) {
+        return 'designated_role authority requires non-empty designated_roles list';
+      }
+    }
+    return undefined;
+  }
+
   /** Validation errors for `rules` under `mode`; empty when valid or when the mode has no vendored schema. */
   validateRules(mode: string, rules: unknown, options: ValidateRulesOptions = {}): string[] {
     if (mode === WILDCARD_MODE) return this.validateWildcardRules(rules, options.ruleExtensions);

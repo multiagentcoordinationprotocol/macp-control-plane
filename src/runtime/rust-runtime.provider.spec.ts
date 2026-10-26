@@ -1116,3 +1116,105 @@ describe('RustRuntimeProvider — runtime v0.9.0 coded statuses vs. the real Cir
     expect(provider.getCircuitBreakerState()).toBe('CLOSED');
   });
 });
+
+describe('RustRuntimeProvider.whatIfReplay — WhatIfReplay wire mapping (RFC-MACP-0012 §8.1)', () => {
+  // Round-trip through the real proto-loader definition with the provider's own loader options,
+  // so the test sees exactly what grpc-js hands `unary()`: uint64s as strings, an unset
+  // `optional first_divergence` as undefined, an absent sub-message as null.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const protoLoader = require('@grpc/proto-loader');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { protoDir } = require('@multiagentcoordinationprotocol/proto');
+  const method = protoLoader.loadSync([`${protoDir}/macp/v1/core.proto`], {
+    keepCase: false,
+    longs: String,
+    enums: String,
+    defaults: true,
+    oneofs: true,
+    includeDirs: [protoDir]
+  })['macp.v1.MACPRuntimeService'].WhatIfReplay;
+  const wire = (msg: Record<string, unknown>) => method.responseDeserialize(method.responseSerialize(msg));
+
+  function setup(response: Record<string, unknown>) {
+    const { provider } = makeProvider(() => makeFakeStream());
+    const unary = jest
+      .spyOn(provider as unknown as { unary: (...a: unknown[]) => Promise<unknown> }, 'unary')
+      .mockResolvedValue(wire(response));
+    return { provider, unary };
+  }
+
+  const candidate = {
+    policyId: 'cand',
+    mode: 'macp.mode.decision.v1',
+    description: '',
+    rules: Buffer.from('{"voting":{"algorithm":"unanimous"}}'),
+    schemaVersion: 3
+  };
+
+  it('sends the session id and the candidate, rules as the JSON text (`string rules = 4`)', async () => {
+    const { provider, unary } = setup({});
+    await provider.whatIfReplay({ runtimeSessionId: 's1', candidate });
+    const rulesText = '{"voting":{"algorithm":"unanimous"}}';
+    expect(unary).toHaveBeenCalledWith(
+      'WhatIfReplay',
+      { sessionId: 's1', candidate: { ...candidate, rules: rulesText } },
+      expect.anything()
+    );
+    expect(method.requestDeserialize(method.requestSerialize(unary.mock.calls[0][1]))).toMatchObject({
+      sessionId: 's1',
+      candidate: { policyId: 'cand', schemaVersion: 3, rules: rulesText }
+    });
+  });
+
+  it('maps a diverging replay: numbers, buffers, and a first divergence of 0', async () => {
+    const { provider } = setup({
+      candidatePolicyId: 'cand',
+      recordedPolicyId: 'policy.default',
+      recorded: {
+        state: 'SESSION_STATE_RESOLVED',
+        resolution: Buffer.from([0x0a, 0x01, 0x78]),
+        resolvedByHistoryIndex: 4,
+        resolvedByMessageId: 'm5',
+        resolvedByMessageType: 'Commitment'
+      },
+      candidate: { state: 'SESSION_STATE_OPEN' },
+      firstDivergence: 0,
+      denials: [{ historyIndex: 0, messageId: 'm1', details: Buffer.from('{"reasons":["x"]}') }],
+      entries: [
+        {
+          historyIndex: 0,
+          messageId: 'm1',
+          messageType: 'Proposal',
+          recorded: { kind: 'KIND_APPLIED', state: 'SESSION_STATE_OPEN' },
+          candidate: { kind: 'KIND_REFUSED', state: 'SESSION_STATE_OPEN', errorCode: 'POLICY_DENIED' }
+        }
+      ]
+    });
+
+    const result = await provider.whatIfReplay({ runtimeSessionId: 's1', candidate });
+
+    expect(result.firstDivergence).toBe(0);
+    expect(result.recorded).toEqual({
+      state: 'SESSION_STATE_RESOLVED',
+      resolution: Buffer.from([0x0a, 0x01, 0x78]),
+      resolvedByHistoryIndex: 4,
+      resolvedByMessageId: 'm5',
+      resolvedByMessageType: 'Commitment'
+    });
+    expect(result.candidate.resolution).toEqual(Buffer.alloc(0));
+    expect(result.denials).toEqual([{ historyIndex: 0, messageId: 'm1', details: Buffer.from('{"reasons":["x"]}') }]);
+    expect(result.entries[0]).toMatchObject({
+      historyIndex: 0,
+      recorded: { kind: 'KIND_APPLIED', errorCode: '' },
+      candidate: { kind: 'KIND_REFUSED', errorCode: 'POLICY_DENIED' }
+    });
+  });
+
+  it('omits firstDivergence when the replays agree, and defaults absent outcomes', async () => {
+    const { provider } = setup({ candidatePolicyId: 'cand', recordedPolicyId: 'p' });
+    const result = await provider.whatIfReplay({ runtimeSessionId: 's1', candidate });
+    expect('firstDivergence' in result).toBe(false);
+    expect(result.recorded.state).toBe('SESSION_STATE_UNSPECIFIED');
+    expect(result.entries).toEqual([]);
+  });
+});
