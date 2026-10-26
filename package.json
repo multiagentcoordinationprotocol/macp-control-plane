@@ -1,6 +1,6 @@
 {
   "name": "macp-control-plane",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "private": true,
   "description": "Scenario-agnostic control plane for the MACP runtime, built with NestJS.",
   "license": "Apache-2.0",

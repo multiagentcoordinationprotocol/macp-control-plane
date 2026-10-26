@@ -64,21 +64,36 @@ export const describeWithPreSeededRuntime: jest.Describe =
  *   a runtime binary at $MACP_RUNTIME_DIR/target/debug/macp-runtime
  */
 export function localRuntimeSkipReason(): string | undefined {
+  const authed = authedRuntimeSkipReason();
+  if (authed) return authed;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const fs = require('node:fs') as typeof import('node:fs');
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const path = require('node:path') as typeof import('node:path');
+  const runtimeDir = process.env.MACP_RUNTIME_DIR ?? path.resolve(__dirname, '../../../macp-runtime');
+  if (!fs.existsSync(path.join(runtimeDir, 'target/debug/macp-runtime'))) {
+    return `needs a built runtime binary at ${runtimeDir}/target/debug/macp-runtime`;
+  }
+  return undefined;
+}
+
+/**
+ * Why a spec that needs a token-authenticated runtime (per-agent identities from an auth-tokens
+ * file) cannot run, or `undefined` when it can. Unlike `localRuntimeSkipReason` it never restarts
+ * the runtime, so any process works, including the released image:
+ *   INTEGRATION_RUNTIME=remote
+ *   MACP_RUNTIME_AUTH_TOKENS_FILE=<the tokens file the runtime was started with>
+ */
+export function authedRuntimeSkipReason(): string | undefined {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require('node:fs') as typeof import('node:fs');
   if (!isRealRuntime) return 'INTEGRATION_RUNTIME is mock';
   if ((process.env.INTEGRATION_RUNTIME ?? '').toLowerCase() !== 'remote') {
-    return 'needs INTEGRATION_RUNTIME=remote (a restartable local runtime), not the docker-compose runtime';
+    return 'needs INTEGRATION_RUNTIME=remote (a token-authenticated runtime), not the docker-compose runtime';
   }
   const tokensFile = process.env.MACP_RUNTIME_AUTH_TOKENS_FILE;
   if (!tokensFile || !fs.existsSync(tokensFile)) {
     return 'needs MACP_RUNTIME_AUTH_TOKENS_FILE pointing at an existing auth-tokens file';
-  }
-  const runtimeDir = process.env.MACP_RUNTIME_DIR ?? path.resolve(__dirname, '../../../macp-runtime');
-  if (!fs.existsSync(path.join(runtimeDir, 'target/debug/macp-runtime'))) {
-    return `needs a built runtime binary at ${runtimeDir}/target/debug/macp-runtime`;
   }
   return undefined;
 }
@@ -91,3 +106,8 @@ if (isRealRuntime && localRuntimeReason) {
 
 /** `describe` for specs that need the hand-managed local runtime above; `describe.skip` otherwise. */
 export const describeWithLocalRuntime: jest.Describe = localRuntimeReason ? describe.skip : describe;
+
+const authedRuntimeReason = authedRuntimeSkipReason();
+
+/** `describe` for specs that need a token-authenticated runtime (never restarted); `describe.skip` otherwise. */
+export const describeWithAuthedRuntime: jest.Describe = authedRuntimeReason ? describe.skip : describe;
