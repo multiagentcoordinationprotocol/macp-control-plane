@@ -471,6 +471,25 @@ describe('StreamConsumerService', () => {
       expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
     });
 
+    it('exhausts the reconnect budget when every resubscribe opens then fails (opened frames do not reset it)', async () => {
+      (config as any).streamBackoffBaseMs = 1;
+      (config as any).streamBackoffMaxMs = 1;
+      eventService.persistRawAndCanonical.mockResolvedValue([] as any);
+      const opened = { kind: 'stream-status', receivedAt: 't', streamStatus: { status: 'opened' } };
+      const notFound = () => makeHandle([opened], new Error("5 NOT_FOUND: Session 'session-1' not found"));
+      const mockProvider = {
+        subscribeSession: jest.fn().mockImplementation(notFound),
+        getSession: jest.fn().mockRejectedValue(new Error("5 NOT_FOUND: Session 'session-1' not found"))
+      };
+      runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+      const marker = newMarker();
+      await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: notFound() });
+
+      expect(mockProvider.subscribeSession).toHaveBeenCalledTimes(5); // streamMaxRetries, then poll fallback
+      expect(runManager.markFailed).toHaveBeenCalled();
+    });
+
     it('leaves the envelope ordinal unchanged when persistRawAndCanonical throws (increment happens only after a successful persist)', async () => {
       eventService.persistRawAndCanonical.mockRejectedValueOnce(new Error('db unavailable'));
 

@@ -357,8 +357,8 @@ pre-check as policy registration.
 }
 ```
 
-- `state`: `OPEN` | `RESOLVED` | `EXPIRED` | `CANCELLED` | `SUSPENDED`, or `null` when the runtime sent none
-  (always `null` for `NOT_OPEN`/`NO_SESSION` entries).
+- `state`: `OPEN` | `RESOLVED` | `EXPIRED` | `CANCELLED` | `SUSPENDED`, or `null` when the runtime sent none.
+  On an entry outcome it is `null` unless `kind` is `APPLIED` (the runtime sets it only for applied entries).
 - `entries[].*.kind`: `APPLIED` (accepted; `state` is the session state after it), `NOT_OPEN` (session no
   longer open, e.g. it resolved earlier under the candidate), `REFUSED` (`errorCode` + `details` say why),
   `NO_SESSION`. One entry per accepted history entry, `historyIndex` 0-based.

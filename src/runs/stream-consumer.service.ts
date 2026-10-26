@@ -437,8 +437,11 @@ export class StreamConsumerService implements OnModuleDestroy {
 
             await this.handleRawEvent(params.runId, raw, context, params.runtimeSessionId, marker);
             if (marker.finalized) return;
-            // Healthy delivery resets the reconnect budget.
-            streamRetries = 0;
+            // A delivered envelope resets the reconnect budget. Not any frame: the provider's
+            // synthetic `stream-status: opened` arrives on every subscribe, so counting it let a
+            // session the runtime no longer has (NOT_FOUND after a runtime restart) resubscribe
+            // forever and hold /readyz at 503.
+            if (raw.kind === 'stream-envelope') streamRetries = 0;
           }
         } catch (error) {
           marker.connected = false;
