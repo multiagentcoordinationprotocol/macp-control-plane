@@ -30,9 +30,9 @@ For the agent-side bootstrap and how `sessionId` flows from `POST /runs` to the 
 - **TypeScript SDK** — [README.md § Agent Framework](../../macp-sdk-typescript/README.md#agent-framework) and [docs/guides/agent-framework.md](../../macp-sdk-typescript/docs/guides/agent-framework.md) (`fromBootstrap()` + strategies)
 - **Migration** — `../../macp-ui-console/plans/direct-agent-auth.md` (end-to-end story of the 2026-04-15 refactor)
 
-### Runtime v0.8.7–v0.9.0 absorption
+### Runtime v0.8.7–v0.10.0 absorption
 
-Proto package `^0.1.11`; tested runtime range `>=0.8.0 <0.10.0` (`TESTED_RUNTIME_RANGE` in `src/runtime/runtime-version.ts`); the integration harness pins `ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.9.0`. Every 0.9.0 change the control plane reacts to is keyed on a signal a 0.8.x runtime does not send (`macp-error-code` metadata, inline `MACPError.details`, `WatchSignalsResponse.sender_authenticated`, `PolicyRegistryCapability.rule_extensions`); when the signal is absent the control plane keeps its 0.8.x behaviour, so 0.8.x runtimes stay supported. `sender_authenticated` is the exception: the field has no presence, so a 0.8.x runtime's signals carry `senderAuthenticated: false`, the proto's documented safe reading.
+Proto package `^0.1.12`; tested runtime range `>=0.8.0 <0.11.0` (`TESTED_RUNTIME_RANGE` in `src/runtime/runtime-version.ts`); the integration harness pins `ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.10.0`. Runtime 0.10.0 adds the read-only `WhatIfReplay` RPC behind `PolicyRegistryCapability.what_if_replay`, proxied as `POST /runs/:id/what-if` ([API.md](API.md)); against an older runtime the capability reads `false` and the endpoint answers 501, so nothing else changes. Live proof: `test/integration/what-if-replay-live.integration.spec.ts`. Every 0.9.0 change the control plane reacts to is keyed on a signal a 0.8.x runtime does not send (`macp-error-code` metadata, inline `MACPError.details`, `WatchSignalsResponse.sender_authenticated`, `PolicyRegistryCapability.rule_extensions`); when the signal is absent the control plane keeps its 0.8.x behaviour, so 0.8.x runtimes stay supported. `sender_authenticated` is the exception: the field has no presence, so a 0.8.x runtime's signals carry `senderAuthenticated: false`, the proto's documented safe reading.
 
 ### Runtime v0.8.1–v0.8.6 absorption
 

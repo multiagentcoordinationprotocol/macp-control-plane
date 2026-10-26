@@ -10,8 +10,8 @@ control plane's contract for that stack: which image to pull, which env it needs
 
 | Tag | Moves? | Use |
 |-----|--------|-----|
-| `0.6.1` / `v0.6.1` | never | **pin this** in compose |
-| `0.6` / `v0.6` | on each patch release | tracks fixes within a minor |
+| `0.7.0` / `v0.7.0` | never | **pin this** in compose |
+| `0.7` / `v0.7` | on each patch release | tracks fixes within a minor |
 | `latest` | on every release | not for compose |
 | `sha-<short>` | never | a specific `main` commit (CI build, not a release) |
 
@@ -80,7 +80,7 @@ That trades disk for replayability. The CP needs no setting; it reads the capabi
 
 ```yaml
 control-plane:
-  image: ghcr.io/multiagentcoordinationprotocol/macp-control-plane:0.6.1
+  image: ghcr.io/multiagentcoordinationprotocol/macp-control-plane:0.7.0
   environment:
     DATABASE_URL: postgres://postgres:postgres@postgres:5432/macp_control_plane
     AUTH_API_KEYS: ${CP_API_KEYS:-dev-key-1}

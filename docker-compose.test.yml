@@ -26,7 +26,7 @@ services:
   # (the published image no longer bakes it in). MACP_ALLOW_DEV_SENDER_HEADER was
   # removed upstream — the dev-header auth path no longer exists.
   runtime:
-    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.9.0
+    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.10.0
     ports:
       - '50051:50051'
     environment:
@@ -48,7 +48,7 @@ services:
   # (test/integration/policy-registry-readonly.integration.spec.ts). Separate
   # service so the main runtime's registry stays writable for every other spec.
   runtime-readonly:
-    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.9.0
+    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.10.0
     ports:
       - '50052:50051'
     environment:
