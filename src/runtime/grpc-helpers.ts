@@ -121,15 +121,31 @@ export function fromSessionMetadata(metadata: any): RuntimeSessionSnapshot {
 
 /**
  * Build gRPC metadata from a credential map, injecting W3C trace context so
- * runtime-side spans become children of the active control-plane span.
+ * runtime-side spans become children of the active control-plane span —
+ * unless gRPC auto-instrumentation is active, which injects it itself.
  */
 export function buildMetadata(metadataInput: Record<string, string>): grpc.Metadata {
   const metadata = new grpc.Metadata();
   for (const [key, value] of Object.entries(metadataInput)) {
     if (value) metadata.set(key, value);
   }
-  injectTraceContext(metadata);
+  if (!isGrpcClientAutoInstrumented()) injectTraceContext(metadata);
   return metadata;
+}
+
+/**
+ * True when `@opentelemetry/instrumentation-grpc` has patched the grpc-js client
+ * (it shimmer-wraps the four `Client.prototype.make*Request` methods together,
+ * marking each wrapper `__wrapped`). The instrumentation then opens a client span
+ * per call and writes `traceparent`/`tracestate` into that call's metadata, so a
+ * second, manual injection would only race it with the parent span's context.
+ * Exactly one injector per outgoing call: the instrumentation when it is active,
+ * {@link injectTraceContext} otherwise (for example when `OTEL_NODE_DISABLED_INSTRUMENTATIONS`
+ * includes `grpc`, or grpc-js loaded before the SDK could patch it).
+ */
+export function isGrpcClientAutoInstrumented(): boolean {
+  const fn: unknown = grpc.Client.prototype.makeUnaryRequest;
+  return typeof fn === 'function' && (fn as { __wrapped?: unknown }).__wrapped === true;
 }
 
 /** W3C trace context propagation via OTel API — traceparent + optional tracestate. */

@@ -10,6 +10,7 @@ import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { RedactionService } from '../telemetry/redaction.service';
+import { MACP_CP_ATTR } from '../telemetry/semconv';
 import { TraceService } from '../telemetry/trace.service';
 import { StreamHubService } from './stream-hub.service';
 
@@ -28,8 +29,9 @@ const KEY_EVENT_SPAN_ANNOTATIONS: Record<
   'policy.denied': {
     errorCode: (e) => (e.data.errorCode as string | undefined) ?? ''
   },
+  // No `action`: it is commitment content, which docs/opentelemetry.md
+  // ("Privacy") keeps out of telemetry. The boolean outcome is a type, not text.
   'decision.finalized': {
-    action: (e) => String((e.data.decodedPayload as Record<string, unknown> | undefined)?.action ?? ''),
     outcome: (e) => {
       const p = e.data.decodedPayload as Record<string, unknown> | undefined;
       const v = p?.outcomePositive ?? p?.outcome_positive;
@@ -73,7 +75,7 @@ export class RunEventService {
     const { events, projection } = await this.traceService.withRunSpan(
       runId,
       'run-event.emit',
-      { 'macp.event_count': stamped.length },
+      { [MACP_CP_ATTR.EVENT_COUNT]: stamped.length },
       () =>
         this.database.db.transaction(async (tx) => {
           const startSeq = await this.runRepository.allocateSequence(runId, stamped.length, tx);
@@ -135,7 +137,7 @@ export class RunEventService {
     const { normalized, projection } = await this.traceService.withRunSpan(
       runId,
       'run-event.persist',
-      { 'macp.event_count': stamped.length, 'macp.raw_kind': rawEvent.kind },
+      { [MACP_CP_ATTR.EVENT_COUNT]: stamped.length, [MACP_CP_ATTR.RAW_EVENT_KIND]: rawEvent.kind },
       () =>
         this.database.db.transaction(async (tx) => {
           const startSeq = await this.runRepository.allocateSequence(runId, total, tx);

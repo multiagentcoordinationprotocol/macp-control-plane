@@ -490,15 +490,22 @@ The control plane instruments its critical paths with OpenTelemetry spans parent
 
 Parent: `run.lifecycle` (started in `RunManager.createRun`, ended in `markCompleted`/`markFailed`/`markCancelled`).
 
-Child spans emitted by the control plane:
-- `runtime.send_message` — outbound session-bound message (`RunExecutor.sendMessage`); attributes: `macp.message_type`, `macp.sender`.
-- `stream.handle_raw_event` — each raw event pulled from the runtime stream; attributes: `macp.raw_kind`, `macp.message_type`, `macp.session_id`.
-- `run-event.persist` — transactional raw + canonical event persistence with projection update; attribute: `macp.event_count`, `macp.raw_kind`.
-- `run-event.emit` — transactional emission of control-plane-synthesized events; attribute: `macp.event_count`.
+Attribute names follow the spec's OpenTelemetry semantic conventions, `macp-semconv/0.1` (`schemas/otel/macp-semconv.json`, explained by `docs/opentelemetry.md` in the spec repo). Registry names (`macp.session.id`, `macp.message.id`, `macp.message.type`, `macp.mode.id`, `macp.sender.id`) are used where the registry defines them; control-plane-only names live under `macp.cp.*`. The set is defined in `src/telemetry/semconv.ts`.
+
+Every span parented to the run carries `macp.cp.run.id`. Spans:
+- `run.lifecycle` — `macp.cp.run.id`, `macp.cp.runtime.kind`, `macp.mode.id`, `macp.cp.execution.mode`; on end `macp.cp.run.terminal_status`.
+- `runtime.initialize` / `runtime.await_session_open` — `macp.cp.run.id`, `macp.cp.runtime.kind`, plus `macp.mode.id` / `macp.session.id` respectively.
+- `stream.handle_raw_event` — each raw event pulled from the runtime stream; `macp.cp.raw_event.kind`, `macp.session.id`, and for an envelope `macp.message.type`, `macp.message.id`, `macp.sender.id`, `macp.mode.id`.
+- `run-event.persist` — transactional raw + canonical event persistence with projection update; `macp.cp.event.count`, `macp.cp.raw_event.kind`.
+- `run-event.emit` — transactional emission of control-plane-synthesized events; `macp.cp.event.count`.
+
+Spans carry identifiers and types only, never payload, `reason` or commitment content (the `decision.finalized` span annotation records `outcome`, not the commitment's `action`).
+
+**Deprecated names, dual-emitted for one release (0.8.x), removed after:** `run_id` (→ `macp.cp.run.id`), `session_id` and `macp.session_id` (→ `macp.session.id`), `macp.message_type` (→ `macp.message.type`), `mode_name` (→ `macp.mode.id`), `runtime_kind`, `execution_mode`, `macp.raw_kind`, `macp.event_count`, `run.terminal_status` (→ their `macp.cp.*` names). Move dashboards and alerts to the new names now.
 
 Span annotations (`addEvent`) are attached to the run span for key canonical events: `signal.emitted`, `signal.acknowledged`, `policy.denied`, `decision.finalized`. These appear inline on the waterfall without requiring new span instrumentation.
 
-**gRPC traceparent propagation.** All calls to the Rust runtime carry W3C `traceparent` + `tracestate` headers via gRPC metadata, so spans emitted by the runtime or downstream agents will become children of the active control-plane span when their tracers honour the context.
+**gRPC traceparent propagation.** All calls to the Rust runtime carry W3C `traceparent` + `tracestate` headers via gRPC metadata, so spans emitted by the runtime or downstream agents will become children of the control-plane trace when their tracers honour the context. Exactly one component injects them per call: the OpenTelemetry gRPC auto-instrumentation when it has patched grpc-js (the header then names its client span), otherwise `buildMetadata` (the header names the active control-plane span). See `isGrpcClientAutoInstrumented` in `src/runtime/grpc-helpers.ts`.
 
 **Canonical event trace context.** `CanonicalEvent.trace.traceId` / `spanId` are stamped from the active run span when events are emitted by the control plane (and back-filled for runtime-emitted events that don't carry their own trace context). This ties the event stream to the waterfall even when upstream exporters aren't fully wired.
 
