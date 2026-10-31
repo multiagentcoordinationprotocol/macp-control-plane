@@ -128,7 +128,7 @@ describeMock('decision receipt routes (integration, mock runtime)', () => {
     expect((await get('/runs/not-a-uuid/receipt')).status).toBe(400);
   });
 
-  it('409 RECEIPT_UNAVAILABLE when the runtime has no receipt to issue', async () => {
+  it('passes a mapped 409 RECEIPT_UNAVAILABLE through the exception filter (mapping: grpc-helpers.spec)', async () => {
     ctx.mockRuntime.setScript({
       ...decisionHappyScript(),
       capabilities: SUPPORTED,
@@ -139,7 +139,7 @@ describeMock('decision receipt routes (integration, mock runtime)', () => {
     expect(res.body).toMatchObject({ errorCode: 'RECEIPT_UNAVAILABLE' });
   });
 
-  it('404 when the runtime does not know the session (SESSION_NOT_FOUND)', async () => {
+  it('passes a mapped 404 SESSION_NOT_FOUND through with its macpErrorCode (mapping: grpc-helpers.spec)', async () => {
     ctx.mockRuntime.setScript({
       ...decisionHappyScript(),
       capabilities: SUPPORTED,

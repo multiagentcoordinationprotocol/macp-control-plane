@@ -45,6 +45,14 @@ interface CachedKeys {
 @Injectable()
 export class DecisionReceiptService {
   private readonly keyCache = new Map<string, CachedKeys>();
+  /** One in-flight `GetReceiptKeys` per runtime kind, so concurrent cache misses share a call. */
+  private readonly keyFetches = new Map<string, Promise<ReceiptKeysView>>();
+  /**
+   * Kids that already dropped the cache, with when they may do so again. A receipt whose kid the
+   * runtime's set really lacks (a §13 item 8 violation, a garbled header) drops the cache once per
+   * TTL, not on every receipt read.
+   */
+  private readonly invalidatedKids = new Map<string, Map<string, number>>();
 
   constructor(
     private readonly config: AppConfigService,
@@ -69,14 +77,15 @@ export class DecisionReceiptService {
     // A receipt signed with a key the cached set does not hold (a rotation inside the TTL) must
     // not leave the caller with "unknown key" for up to a TTL: drop the cache so the next keys
     // read asks the runtime.
-    const cached = this.keyCache.get(run.runtimeKind);
-    if (cached && signingKids(receipt).some((kid) => !cached.kids.has(kid))) {
-      this.keyCache.delete(run.runtimeKind);
-    }
+    this.invalidateForUnknownKids(run.runtimeKind, signingKids(receipt));
 
     return { runId, sessionId, receiptJson, receipt };
   }
 
+  /**
+   * Keys of the configured runtime. §13 item 9 wants the key set of the runtime that issued the
+   * receipt; the control plane fronts exactly one runtime (`config.runtimeKind`), so that is it.
+   */
   async getReceiptKeys(): Promise<ReceiptKeysView> {
     const kind = this.config.runtimeKind;
     const now = Date.now();
@@ -84,7 +93,14 @@ export class DecisionReceiptService {
     if (cached && cached.expiresAt > now) {
       return { jwksJson: cached.jwksJson, maxAgeSeconds: Math.max(0, Math.ceil((cached.expiresAt - now) / 1000)) };
     }
+    const inflight = this.keyFetches.get(kind);
+    if (inflight) return inflight;
+    const fetch = this.fetchKeys(kind).finally(() => this.keyFetches.delete(kind));
+    this.keyFetches.set(kind, fetch);
+    return fetch;
+  }
 
+  private async fetchKeys(kind: string): Promise<ReceiptKeysView> {
     const provider = this.runtimeRegistry.get(kind);
     await this.assertSupported(provider);
     const { jwksJson } = await provider.getReceiptKeys();
@@ -92,13 +108,32 @@ export class DecisionReceiptService {
     if (!Array.isArray(jwks.keys)) {
       throw badGateway('GetReceiptKeys jwks_json is not a JWK Set (no "keys" array)');
     }
-    const kids = new Set(
-      jwks.keys
-        .map((k) => (k && typeof k === 'object' ? (k as { kid?: unknown }).kid : undefined))
-        .filter((kid): kid is string => typeof kid === 'string')
-    );
-    this.keyCache.set(kind, { jwksJson, kids, expiresAt: now + RECEIPT_KEYS_TTL_SECONDS * 1000 });
+    const kids = new Set<string>();
+    for (const key of jwks.keys as unknown[]) {
+      if (!key || typeof key !== 'object' || Array.isArray(key)) {
+        throw badGateway('GetReceiptKeys jwks_json has a key that is not an object');
+      }
+      // This route is public: never republish private key material a misconfigured runtime leaked.
+      if (PRIVATE_JWK_MEMBERS.some((m) => m in key)) {
+        throw badGateway('GetReceiptKeys jwks_json carries private key material; refusing to serve it');
+      }
+      const kid = (key as { kid?: unknown }).kid;
+      if (typeof kid === 'string') kids.add(kid);
+    }
+    this.keyCache.set(kind, { jwksJson, kids, expiresAt: Date.now() + RECEIPT_KEYS_TTL_SECONDS * 1000 });
     return { jwksJson, maxAgeSeconds: RECEIPT_KEYS_TTL_SECONDS };
+  }
+
+  private invalidateForUnknownKids(kind: string, receiptKids: string[]): void {
+    const cached = this.keyCache.get(kind);
+    if (!cached) return;
+    const now = Date.now();
+    const recent = this.invalidatedKids.get(kind) ?? new Map<string, number>();
+    const trigger = receiptKids.find((kid) => !cached.kids.has(kid) && (recent.get(kid) ?? 0) <= now);
+    if (trigger === undefined) return;
+    this.keyCache.delete(kind);
+    recent.set(trigger, now + RECEIPT_KEYS_TTL_SECONDS * 1000);
+    this.invalidatedKids.set(kind, recent);
   }
 
   /** §13 item 1: a client MUST NOT call either RPC unless the runtime advertises it. */
@@ -139,6 +174,13 @@ function parseObject(text: string, what: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** RFC 7517/7518 private members (OKP/EC/RSA `d`, RSA CRT params, symmetric `k`). */
+const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'];
+
+/**
+ * The runtime answered, but with something unusable. 502 (not the registry's 500 for
+ * `INTERNAL_ERROR`): the fault is upstream of the control plane.
+ */
 function badGateway(message: string): AppException {
   return new AppException(ErrorCode.INTERNAL_ERROR, message, HttpStatus.BAD_GATEWAY);
 }

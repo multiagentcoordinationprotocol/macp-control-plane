@@ -6,7 +6,7 @@ import { toCommitmentPayload } from '../../src/verification/commitment-verificat
  * Test-only `macp-receipt/1` verifier (RFC-MACP-0013 Appendix A.4), used to prove that what
  * `GET /runs/:id/receipt` returns verifies against what `GET /runtime/receipt-keys` returns. The
  * control plane itself never verifies receipts. Held to the spec's receipt vectors by
- * `receipt-verifier.integration.spec.ts` (vendored under `test/fixtures/receipts/vectors`).
+ * `src/receipts/receipt-verifier.vectors.spec.ts` (vendored under `test/fixtures/receipts/vectors`).
  */
 export type Integrity = 'match' | 'mismatch' | 'cannot_verify' | null;
 export type AttestationResult = 'valid' | 'invalid' | 'unknown_key' | 'unsupported';
@@ -67,7 +67,12 @@ export function verifyReceipt(
     if (header.alg !== 'EdDSA') return 'unsupported';
     const x = header.kid ? trustedKeys[header.kid] : undefined;
     if (!x) return 'unknown_key';
-    const key = createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x }, format: 'jwk' });
+    let key;
+    try {
+      key = createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x }, format: 'jwk' });
+    } catch {
+      return 'invalid';
+    }
     return verify(null, signingInput(protectedB64), key, Buffer.from(sigB64, 'base64url')) ? 'valid' : 'invalid';
   });
 
@@ -77,6 +82,8 @@ export function verifyReceipt(
 function checkIntegrity(receipt: Record<string, unknown>): Integrity {
   const claimed = receipt.commitment_hash;
   if (typeof claimed !== 'string') return 'mismatch';
+  const c = receipt.commitment;
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return 'mismatch';
   const fromProjection = commitmentHash(toCommitmentPayload(receipt.commitment as Record<string, unknown>));
   if (fromProjection !== claimed) return 'mismatch';
   const wireB64 = receipt.commitment_wire_b64;

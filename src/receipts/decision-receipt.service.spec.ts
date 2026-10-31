@@ -94,7 +94,8 @@ describe('DecisionReceiptService', () => {
     it.each([
       ['not JSON', 'nope'],
       ['an array', '[]'],
-      ['null', 'null']
+      ['null', 'null'],
+      ['empty (field absent)', '']
     ])('502 when receipt_json is %s', async (_label, text) => {
       provider.getDecisionReceipt.mockResolvedValue({ receiptJson: text });
       const err = await rejection(service.getReceipt('run-1'));
@@ -148,6 +149,27 @@ describe('DecisionReceiptService', () => {
       expect(err?.getStatus()).toBe(HttpStatus.NOT_IMPLEMENTED);
       expect(err?.errorCode).toBe(ErrorCode.DECISION_RECEIPT_UNSUPPORTED);
       expect(provider.getReceiptKeys).not.toHaveBeenCalled();
+
+      capabilities.forDecisionReceipt.mockResolvedValue(SUPPORTED);
+      await service.getReceiptKeys();
+      expect(provider.getReceiptKeys).toHaveBeenCalledTimes(1);
+    });
+
+    it('shares one runtime call between concurrent cache misses', async () => {
+      const [a, b] = await Promise.all([service.getReceiptKeys(), service.getReceiptKeys()]);
+      expect(a.jwksJson).toBe(JWKS);
+      expect(b.jwksJson).toBe(JWKS);
+      expect(provider.getReceiptKeys).toHaveBeenCalledTimes(1);
+    });
+
+    it('drops the cache at most once per TTL for a kid the runtime set really lacks', async () => {
+      await service.getReceiptKeys();
+      provider.getDecisionReceipt.mockResolvedValue({ receiptJson: receiptText('ghost') });
+      await service.getReceipt('run-1');
+      await service.getReceiptKeys();
+      await service.getReceipt('run-1');
+      await service.getReceiptKeys();
+      expect(provider.getReceiptKeys).toHaveBeenCalledTimes(2);
     });
 
     it('serves the empty set {"keys":[]} (runtime without keys)', async () => {
@@ -157,7 +179,10 @@ describe('DecisionReceiptService', () => {
 
     it.each([
       ['not JSON', '{'],
-      ['missing keys', '{"kty":"OKP"}']
+      ['missing keys', '{"kty":"OKP"}'],
+      ['empty (field absent)', ''],
+      ['a non-object key', '{"keys":["x"]}'],
+      ['a private key (d)', '{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"k1","x":"AA","d":"AA"}]}']
     ])('502 when jwks_json is %s', async (_label, text) => {
       provider.getReceiptKeys.mockResolvedValue({ jwksJson: text });
       expect((await rejection(service.getReceiptKeys()))?.getStatus()).toBe(HttpStatus.BAD_GATEWAY);
