@@ -238,6 +238,13 @@ export interface RuntimeCapabilities {
     /** Runtime implements the read-only `WhatIfReplay` RPC (RFC-MACP-0012 §8.1; proto 0.1.12, runtime ≥0.10). */
     whatIfReplay?: boolean;
   };
+  /** Runtime-issued decision receipts (RFC-MACP-0013 §13; proto 0.1.13, runtime ≥0.11). */
+  decisionReceipt?: {
+    /** Runtime implements `GetDecisionReceipt` and `GetReceiptKeys`. Clients MUST NOT call them otherwise. */
+    getDecisionReceipt?: boolean;
+    /** Every receipt issued from now on carries an EdDSA `jws` attestation. Says nothing about earlier ones. */
+    signed?: boolean;
+  };
 }
 
 /**
@@ -319,6 +326,29 @@ export interface RuntimeProvider {
    * Read-only; callers MUST check `capabilities.policyRegistry.whatIfReplay` first.
    */
   whatIfReplay(req: RuntimeWhatIfReplayRequest): Promise<RuntimeWhatIfReplayResult>;
+  /**
+   * The session's `macp-receipt/1` decision receipt as the runtime's JSON text (RFC-MACP-0013 §13).
+   * Callers MUST check `capabilities.decisionReceipt.getDecisionReceipt` first.
+   */
+  getDecisionReceipt(req: RuntimeGetDecisionReceiptRequest): Promise<RuntimeGetDecisionReceiptResult>;
+  /** The JWK Set that verifies the runtime's receipt signatures, as JSON text. Same capability gate. */
+  getReceiptKeys(): Promise<RuntimeGetReceiptKeysResult>;
+}
+
+// ── Decision receipts (RFC-MACP-0013 §13) ───────────────────────────
+
+export interface RuntimeGetDecisionReceiptRequest {
+  runtimeSessionId: string;
+}
+
+export interface RuntimeGetDecisionReceiptResult {
+  /** `macp-receipt/1` JSON text, verbatim (byte-identical once an attested receipt was issued). */
+  receiptJson: string;
+}
+
+export interface RuntimeGetReceiptKeysResult {
+  /** JWK Set JSON text; `{"keys":[]}` when the runtime has no keys. */
+  jwksJson: string;
 }
 
 // ── Policy types (RFC-MACP-0012) ────────────────────────────────────

@@ -273,6 +273,7 @@ describe('gRPC helpers (Q3-1)', () => {
       ['STREAM_LAGGED', grpc.status.RESOURCE_EXHAUSTED, 503, ErrorCode.STREAM_LAGGED],
       ['AGENT_NOT_FOUND', grpc.status.NOT_FOUND, 404, ErrorCode.NOT_FOUND],
       ['HISTORY_UNAVAILABLE', grpc.status.FAILED_PRECONDITION, 409, ErrorCode.HISTORY_UNAVAILABLE],
+      ['RECEIPT_UNAVAILABLE', grpc.status.FAILED_PRECONDITION, 409, ErrorCode.RECEIPT_UNAVAILABLE],
       ['UNAUTHORIZED', grpc.status.PERMISSION_DENIED, 403, ErrorCode.FORBIDDEN]
     ];
 

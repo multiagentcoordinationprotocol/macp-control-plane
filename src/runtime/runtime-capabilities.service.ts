@@ -24,4 +24,11 @@ export class RuntimeCapabilitiesService {
     if (cached?.policyRegistry?.whatIfReplay === true) return cached;
     return (await this.refresh(provider)).capabilities;
   }
+
+  /** The cached capabilities when they already advertise decision receipts, else a refresh's. */
+  async forDecisionReceipt(provider: RuntimeProvider): Promise<RuntimeCapabilities | undefined> {
+    const cached = (provider as { capabilities?: RuntimeCapabilities }).capabilities;
+    if (cached?.decisionReceipt?.getDecisionReceipt === true) return cached;
+    return (await this.refresh(provider)).capabilities;
+  }
 }

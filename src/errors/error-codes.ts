@@ -43,5 +43,10 @@ export enum ErrorCode {
   // no longer holds — it compacts a terminal session's log (RFC-MACP-0012 §8.1 item 8).
   HISTORY_UNAVAILABLE = 'HISTORY_UNAVAILABLE',
   // HTTP 501: the runtime does not advertise `policyRegistry.whatIfReplay` (any 0.9.x).
-  WHAT_IF_REPLAY_UNSUPPORTED = 'WHAT_IF_REPLAY_UNSUPPORTED'
+  WHAT_IF_REPLAY_UNSUPPORTED = 'WHAT_IF_REPLAY_UNSUPPORTED',
+  // Permanent (HTTP 409): GetDecisionReceipt named a session with no receipt to issue — not
+  // RESOLVED, resolved without a CommitmentPayload, or not issuable (RFC-MACP-0013 §13 item 3).
+  RECEIPT_UNAVAILABLE = 'RECEIPT_UNAVAILABLE',
+  // HTTP 501: the runtime does not advertise `decisionReceipt.getDecisionReceipt` (any < 0.11).
+  DECISION_RECEIPT_UNSUPPORTED = 'DECISION_RECEIPT_UNSUPPORTED'
 }

@@ -377,6 +377,40 @@ pre-check as policy registration.
 | 501 | `WHAT_IF_REPLAY_UNSUPPORTED` | The runtime does not advertise `policyRegistry.whatIfReplay` (any 0.9.x) |
 | 403 / 429 / 500 / 503 | `FORBIDDEN` / `RATE_LIMITED` / `INTERNAL_ERROR` / `RUNTIME_UNAVAILABLE` | As for any runtime call |
 
+### `GET /runs/:id/receipt`
+The run's **runtime-issued decision receipt**
+([RFC-MACP-0013](https://github.com/multiagentcoordinationprotocol/multiagentcoordinationprotocol/blob/main/rfcs/RFC-MACP-0013-commitment-hash.md)
+§13, runtime `GetDecisionReceipt`): a `macp-receipt/1` document a third party can verify offline.
+Read-only proxy; the control plane neither stores nor verifies receipts. Requires macp-runtime ≥ 0.11;
+gate the UI on `GET /runtime/capabilities` → `capabilities.decisionReceipt.getDecisionReceipt === true`
+(`capabilities.decisionReceipt.signed` says whether new receipts carry an EdDSA signature).
+
+```json
+{
+  "runId": "…",
+  "sessionId": "…",
+  "receiptJson": "{\"receipt_format\":\"macp-receipt/1\",…}",
+  "receipt": { "receipt_format": "macp-receipt/1", "session_id": "…", "mode": "…", "commitment": { "…": "…" }, "commitment_hash": "sha256:…", "commitment_wire_b64": "…", "issuer": "runtime:…", "issued_at": "…", "attestations": [{ "type": "jws", "jws": "<protected>..<signature>" }] }
+}
+```
+
+- `receiptJson` is the runtime's text **verbatim**: verify over it, never over a re-serialization of
+  `receipt` (which is the same document parsed, for display). Once an attested receipt was issued the
+  runtime serves it byte-identical on every call.
+- Verify `jws` attestations against `GET /runtime/receipt-keys` (A.4): integrity from `commitment_hash`,
+  authenticity from a `jws` whose signature verifies under the key with that `kid`. A receipt reveals the full Commitment, `reason`
+  included (§13 item 11).
+
+| HTTP | `errorCode` | When |
+|---|---|---|
+| 400 | none | Malformed run id |
+| 404 | `RUN_NOT_FOUND` | Unknown run |
+| 404 | `NOT_FOUND` | Run has no runtime session yet, or the runtime does not know the session (`metadata.macpErrorCode: "SESSION_NOT_FOUND"`) |
+| 409 | `RECEIPT_UNAVAILABLE` | No receipt to issue: the session is not RESOLVED, resolved without a `CommitmentPayload`, or no receipt could be issued for any other reason |
+| 501 | `DECISION_RECEIPT_UNSUPPORTED` | The runtime does not advertise `decisionReceipt.getDecisionReceipt` (any < 0.11) |
+| 502 | `INTERNAL_ERROR` | The runtime's `receipt_json` is not a JSON object (502, not the registry's 500: the fault is upstream) |
+| 403 / 429 / 500 / 503 | `FORBIDDEN` / `RATE_LIMITED` / `INTERNAL_ERROR` / `RUNTIME_UNAVAILABLE` | As for any runtime call |
+
 ---
 
 ## Batch Operations
@@ -587,7 +621,19 @@ Runtime root descriptors.
 A fresh `Initialize` handshake with the configured runtime:
 `{ runtimeInfo: {name, version, …}, selectedProtocolVersion, supportedModes, capabilities }`.
 Feature flags live under `capabilities` (absent = unsupported), e.g.
-`capabilities.policyRegistry.whatIfReplay` gates `POST /runs/:id/what-if`. 503 when the runtime is unreachable.
+`capabilities.policyRegistry.whatIfReplay` gates `POST /runs/:id/what-if`, and
+`capabilities.decisionReceipt.getDecisionReceipt` gates `GET /runs/:id/receipt` and `GET /runtime/receipt-keys`.
+503 when the runtime is unreachable.
+
+### `GET /runtime/receipt-keys`
+The runtime's receipt verification keys (RFC-MACP-0013 §13 item 8, runtime `GetReceiptKeys`): its JWK Set
+JSON **verbatim**, `Content-Type: application/jwk-set+json`, `{"keys":[]}` when it has none. Public keys
+only. Cached for 60 s (`Cache-Control: private, max-age=<seconds left, ≤ 60>`); a receipt fetched through
+`GET /runs/:id/receipt` signed by a `kid` the cached set lacks drops the server cache (at most once per
+kid per 60 s), so a key rotation is picked up on the next read that is not served from the client's own
+HTTP cache. A verifier that gets `unknown_key` should re-fetch bypassing its cache. 501
+`DECISION_RECEIPT_UNSUPPORTED` when the runtime does not advertise `decisionReceipt.getDecisionReceipt`;
+502 `INTERNAL_ERROR` when the runtime's text is not a JWK Set or carries private key members.
 
 ### `GET /runtime/health`
 Runtime health: `{ "ok": true, "runtimeKind": "rust", "detail": "..." }`

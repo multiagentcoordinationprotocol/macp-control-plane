@@ -54,7 +54,8 @@ export class RuntimeController {
     summary: 'Fresh Initialize handshake: the runtime version and its advertised capabilities.',
     description:
       'Gate optional features on this — e.g. `capabilities.policyRegistry.whatIfReplay` for ' +
-      '`POST /runs/:id/what-if`. Absent flags mean unsupported.'
+      '`POST /runs/:id/what-if`, `capabilities.decisionReceipt.getDecisionReceipt` for ' +
+      '`GET /runs/:id/receipt` and `GET /runtime/receipt-keys`. Absent flags mean unsupported.'
   })
   async getCapabilities() {
     const init = await this.runtimeCapabilities.refresh(this.runtimeRegistry.get(this.config.runtimeKind));

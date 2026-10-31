@@ -31,6 +31,9 @@ import {
   RuntimeUnregisterPolicyResult,
   RuntimeWhatIfReplayRequest,
   RuntimeWhatIfReplayResult,
+  RuntimeGetDecisionReceiptRequest,
+  RuntimeGetDecisionReceiptResult,
+  RuntimeGetReceiptKeysResult,
   SessionLifecycleEvent,
 } from '../../src/contracts/runtime';
 
@@ -63,6 +66,10 @@ export interface RuntimeScript {
   capabilities?: RuntimeCapabilities;
   /** `whatIfReplay()` result, or an error it throws instead. Unset → throws. */
   whatIfReplay?: RuntimeWhatIfReplayResult | Error;
+  /** `getDecisionReceipt()` receipt JSON text, or an error it throws instead. Unset → throws. */
+  decisionReceipt?: string | Error;
+  /** `getReceiptKeys()` JWK Set JSON text, or an error it throws instead. Unset → throws. */
+  receiptKeys?: string | Error;
 }
 
 /**
@@ -345,6 +352,27 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
     if (!result) throw new Error('scripted mock: no whatIfReplay result scripted');
     if (result instanceof Error) throw result;
     return result;
+  }
+
+  /** Requests seen by `getDecisionReceipt()`, for assertions. */
+  readonly decisionReceiptRequests: RuntimeGetDecisionReceiptRequest[] = [];
+  /** Number of `getReceiptKeys()` calls, for cache assertions. */
+  receiptKeysCalls = 0;
+
+  async getDecisionReceipt(req: RuntimeGetDecisionReceiptRequest): Promise<RuntimeGetDecisionReceiptResult> {
+    this.decisionReceiptRequests.push(req);
+    const result = this.script.decisionReceipt;
+    if (result === undefined) throw new Error('scripted mock: no decisionReceipt scripted');
+    if (result instanceof Error) throw result;
+    return { receiptJson: result };
+  }
+
+  async getReceiptKeys(): Promise<RuntimeGetReceiptKeysResult> {
+    this.receiptKeysCalls += 1;
+    const result = this.script.receiptKeys;
+    if (result === undefined) throw new Error('scripted mock: no receiptKeys scripted');
+    if (result instanceof Error) throw result;
+    return { jwksJson: result };
   }
 
   // ── Session lifecycle observation (stub) ────────────────────────────

@@ -235,6 +235,8 @@ export const MACP_ERROR_REGISTRY: Readonly<Record<string, { http: HttpStatus; co
   AGENT_NOT_FOUND: { http: HttpStatus.NOT_FOUND, code: ErrorCode.NOT_FOUND },
   // Permanent: WhatIfReplay on a session whose log was compacted (RFC-MACP-0012 1.8.1-draft).
   HISTORY_UNAVAILABLE: { http: HttpStatus.CONFLICT, code: ErrorCode.HISTORY_UNAVAILABLE },
+  // Permanent: GetDecisionReceipt on a session that has no receipt to issue (RFC-MACP-0013 §13 item 3).
+  RECEIPT_UNAVAILABLE: { http: HttpStatus.CONFLICT, code: ErrorCode.RECEIPT_UNAVAILABLE },
   // Deprecated registry alias for FORBIDDEN; the runtime never emits it.
   UNAUTHORIZED: { http: HttpStatus.FORBIDDEN, code: ErrorCode.FORBIDDEN }
 };
