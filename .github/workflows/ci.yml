@@ -132,6 +132,77 @@ jobs:
           INTEGRATION_RUNTIME: mock
         run: npm run test:integration
 
+  # The describeWithAuthedRuntime specs (decision receipts, what-if replay) against the released
+  # runtime image, one leg per receipt-signing mode. EXPECT_DECISION_RECEIPTS makes the receipt spec
+  # strict, so a runtime that stops advertising decision_receipt fails instead of returning early.
+  live-runtime:
+    runs-on: ubuntu-latest
+    needs: [test]
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        receipts: [signed, unsigned]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: macp_control_plane_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+          --tmpfs /var/lib/postgresql/data
+    env:
+      LIVE_RUNTIME_DIR: /tmp/macp-runtime
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+          scope: '@multiagentcoordinationprotocol'
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Start macp-runtime (${{ matrix.receipts }} receipts)
+        run: test/scripts/start-live-runtime.sh ${{ matrix.receipts }} 50051 "$LIVE_RUNTIME_DIR"
+      - name: Run migrations
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5433/macp_control_plane_test
+        run: npx ts-node src/db/migrate.ts
+      - name: Run live-runtime specs
+        env:
+          CI: true
+          DATABASE_URL: postgres://postgres:postgres@localhost:5433/macp_control_plane_test
+          NODE_ENV: development
+          OTEL_ENABLED: false
+          LOG_LEVEL: warn
+          RUNTIME_ALLOW_INSECURE: true
+          RUN_RECOVERY_ENABLED: false
+          INTEGRATION_RUNTIME: remote
+          RUNTIME_ADDRESS: 127.0.0.1:50051
+          MACP_RUNTIME_AUTH_TOKENS_FILE: ${{ env.LIVE_RUNTIME_DIR }}/tokens.json
+          EXPECT_DECISION_RECEIPTS: ${{ matrix.receipts }}
+          MACP_RUNTIME_ID: cp-live-${{ matrix.receipts }}
+          MACP_COMPACT_TERMINAL_LOGS: '0'
+        run: >-
+          npx jest -c test/jest.integration.config.ts --runInBand --verbose
+          test/integration/decision-receipt-live test/integration/what-if-replay-live
+      - name: Runtime logs
+        if: failure()
+        run: docker logs macp-live-runtime-${{ matrix.receipts }}
+
   # Report-only for now: the current dependency tree has high/critical advisories
   # with no non-breaking fix (e.g. multer / path-to-regexp via @nestjs, protobufjs
   # via otel), so a hard gate would fail every build until those are upgraded.

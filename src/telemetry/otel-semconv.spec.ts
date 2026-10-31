@@ -18,7 +18,7 @@ import {
   ReadableSpan,
   SimpleSpanProcessor
 } from '@opentelemetry/sdk-trace-base';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildMetadata, isGrpcClientAutoInstrumented } from '../runtime/grpc-helpers';
 import { StreamConsumerService } from '../runs/stream-consumer.service';
@@ -269,6 +269,23 @@ describe('traceparent injection on outgoing gRPC calls', () => {
     expect(received[0][0].split('-')[2]).toBe(callerSpanId);
   });
 
+  // macp-sdk-typescript >= 0.20 injects traceparent itself, but only inside `MacpClient.send`
+  // (its CLIENT `send` span). The control plane talks to the runtime through RustRuntimeProvider,
+  // never MacpClient, and loading the SDK patches nothing, so buildMetadata stays the one injector
+  // (docs/opentelemetry.md in the spec repo: exactly one traceparent per call).
+  it('loading macp-sdk-typescript adds no second injector, and src/ never constructs a MacpClient', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require('macp-sdk-typescript');
+    expect(isGrpcClientAutoInstrumented()).toBe(false);
+    const callerSpanId = await callEcho(grpc.makeGenericClientConstructor(ECHO_SERVICE, 'Echo'));
+    expect(received).toEqual([[expect.stringContaining(`-${callerSpanId}-`)]]);
+
+    const offenders = sourceFiles(join(__dirname, '..')).filter((f) =>
+      /\bnew\s+MacpClient\b|\bMacpClient\s*\(/.test(readFileSync(f, 'utf8'))
+    );
+    expect(offenders).toEqual([]);
+  });
+
   // Note what this proves. Both injectors use Metadata.set and the instrumentation
   // writes last, so even a double injection would put one header on the wire
   // naming the client span. The change under test is the `probe` assertion:
@@ -310,3 +327,11 @@ describe('traceparent injection on outgoing gRPC calls', () => {
     expect(isGrpcClientAutoInstrumented()).toBe(false);
   });
 });
+
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) return sourceFiles(p);
+    return e.name.endsWith('.ts') && !e.name.endsWith('.spec.ts') ? [p] : [];
+  });
+}

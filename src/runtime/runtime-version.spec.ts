@@ -1,11 +1,23 @@
 import { classifyRuntimeVersion } from './runtime-version';
 
 describe('classifyRuntimeVersion', () => {
-  it.each(['0.8.0', '0.8.6', 'v0.8.12', '0.8.6-rc1', '0.9.0', 'v0.9.7', '0.9.0-rc1', '0.10.0', 'v0.10.3'])('treats %s as tested', (v) => {
+  it.each([
+    '0.8.0',
+    '0.8.6',
+    'v0.8.12',
+    '0.8.6-rc1',
+    '0.9.0',
+    'v0.9.7',
+    '0.9.0-rc1',
+    '0.10.0',
+    'v0.10.3',
+    '0.11.0',
+    'v0.11.4'
+  ])('treats %s as tested', (v) => {
     expect(classifyRuntimeVersion(v)).toBe('tested');
   });
 
-  it.each(['0.7.6', '0.11.0', '1.0.0', '0.5.0'])('treats %s as untested', (v) => {
+  it.each(['0.7.6', '0.12.0', '1.0.0', '0.5.0'])('treats %s as untested', (v) => {
     expect(classifyRuntimeVersion(v)).toBe('untested');
   });
 
