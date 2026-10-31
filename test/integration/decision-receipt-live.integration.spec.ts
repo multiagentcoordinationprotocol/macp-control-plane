@@ -237,18 +237,26 @@ describeWithAuthedRuntime('Decision receipts against a live macp-runtime (integr
     for (const k of jwks.keys)
       for (const m of ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k']) expect(k).not.toHaveProperty(m);
 
+    // §13: the issuer is `runtime:<MACP_RUNTIME_ID>` whether or not the runtime signs.
+    const runtimeId = process.env.MACP_RUNTIME_ID;
+    if (EXPECTED && !runtimeId) throw new Error('strict leg needs MACP_RUNTIME_ID (start-live-runtime.sh prints it)');
+    if (runtimeId) expect(body.receipt.issuer).toBe(`runtime:${runtimeId}`);
+
     const verdict = verifyReceipt(JSON.parse(body.receiptJson), trustedKeysFromJwks(jwks));
-    if (advertised?.signed) {
-      expect(verdict).toMatchObject({ integrity: 'match', verdict: 'attested' });
+    const expectSigned = EXPECTED ? EXPECTED === 'signed' : advertised?.signed === true;
+    if (expectSigned) {
+      expect(verdict).toEqual({ integrity: 'match', attestations: ['valid'], verdict: 'attested' });
       // §13 item 5: the protected header is exactly {"alg":"EdDSA","kid":<kid>}.
       const header = JSON.parse(
         Buffer.from((body.receipt.attestations[0].jws as string).split('.')[0], 'base64url').toString('utf8')
       );
       expect(Object.keys(header).sort()).toEqual(['alg', 'kid']);
       expect(header.alg).toBe('EdDSA');
-      // The served key set holds the signing kid; the issuer names the runtime (MACP_RUNTIME_ID).
-      expect(jwks.keys.map((k) => k.kid)).toContain(header.kid);
-      if (process.env.MACP_RUNTIME_ID) expect(body.receipt.issuer).toBe(`runtime:${process.env.MACP_RUNTIME_ID}`);
+      // Signed with the key the runtime was booted with.
+      const kid = process.env.MACP_RECEIPT_SIGNING_KID;
+      if (EXPECTED && !kid)
+        throw new Error('signed leg needs MACP_RECEIPT_SIGNING_KID (start-live-runtime.sh prints it)');
+      if (kid) expect(header.kid).toBe(kid);
     } else {
       expect(verdict).toEqual({ integrity: 'match', attestations: [], verdict: 'integrity_only' });
       expect(body.receipt.attestations).toEqual([]);

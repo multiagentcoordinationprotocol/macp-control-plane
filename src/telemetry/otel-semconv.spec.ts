@@ -269,21 +269,38 @@ describe('traceparent injection on outgoing gRPC calls', () => {
     expect(received[0][0].split('-')[2]).toBe(callerSpanId);
   });
 
-  // macp-sdk-typescript >= 0.20 injects traceparent itself, but only inside `MacpClient.send`
-  // (its CLIENT `send` span). The control plane talks to the runtime through RustRuntimeProvider,
-  // never MacpClient, and loading the SDK patches nothing, so buildMetadata stays the one injector
-  // (docs/opentelemetry.md in the spec repo: exactly one traceparent per call).
-  it('loading macp-sdk-typescript adds no second injector, and src/ never constructs a MacpClient', async () => {
+  // macp-sdk-typescript >= 0.20 injects traceparent into the metadata of every MacpClient RPC
+  // made under an active span (MacpClient, Participant and the agent runner all reach it). The
+  // control plane talks to the runtime only through RustRuntimeProvider, whose buildMetadata is
+  // the one injector (docs/opentelemetry.md in the spec repo: exactly one traceparent per call).
+  // So src/ may take only these pure helpers from the SDK as values; anything else (a client, a
+  // session, a runner) would add the SDK's injector, and must come with a decision about which wins.
+  const SDK_VALUE_IMPORTS_ALLOWED = new Set(['commitmentHash', 'isCanonicalCommitmentHash', 'verifyCommitmentHash']);
+
+  it('src/ takes only pure helpers from macp-sdk-typescript, so the SDK never injects a second traceparent', () => {
+    const imported = sourceFiles(join(__dirname, '..')).flatMap((f) =>
+      [...readFileSync(f, 'utf8').matchAll(/import\s+(type\s+)?\{([^}]*)\}\s+from\s+'macp-sdk-typescript'/g)]
+        .filter((m) => !m[1])
+        .flatMap((m) => m[2].split(',').map((n) => n.trim()))
+        .filter((n) => n && !n.startsWith('type '))
+        .map((n) => ({ file: f, name: n.split(/\s+as\s+/)[0] }))
+    );
+    const otherForms = sourceFiles(join(__dirname, '..')).filter((f) =>
+      /import\s+\*\s+as\s+\w+\s+from\s+'macp-sdk-typescript'|require\('macp-sdk-typescript'\)|import\s+(?!type\b)\w+\s*,?\s*(\{[^}]*\})?\s*from\s+'macp-sdk-typescript'/.test(
+        readFileSync(f, 'utf8')
+      )
+    );
+    expect(imported.length).toBeGreaterThan(0); // the scan finds the imports that do exist
+    expect(imported.filter((i) => !SDK_VALUE_IMPORTS_ALLOWED.has(i.name))).toEqual([]);
+    expect(otherForms).toEqual([]);
+  });
+
+  it('loading macp-sdk-typescript patches no gRPC client, so buildMetadata stays the one injector', async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     require('macp-sdk-typescript');
     expect(isGrpcClientAutoInstrumented()).toBe(false);
     const callerSpanId = await callEcho(grpc.makeGenericClientConstructor(ECHO_SERVICE, 'Echo'));
     expect(received).toEqual([[expect.stringContaining(`-${callerSpanId}-`)]]);
-
-    const offenders = sourceFiles(join(__dirname, '..')).filter((f) =>
-      /\bnew\s+MacpClient\b|\bMacpClient\s*\(/.test(readFileSync(f, 'utf8'))
-    );
-    expect(offenders).toEqual([]);
   });
 
   // Note what this proves. Both injectors use Metadata.set and the instrumentation

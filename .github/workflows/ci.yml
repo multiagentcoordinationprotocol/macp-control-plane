@@ -173,8 +173,6 @@ jobs:
       - run: npm ci
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: Start macp-runtime (${{ matrix.receipts }} receipts)
         run: test/scripts/start-live-runtime.sh ${{ matrix.receipts }} 50051 "$LIVE_RUNTIME_DIR"
       - name: Run migrations
@@ -192,10 +190,8 @@ jobs:
           RUN_RECOVERY_ENABLED: false
           INTEGRATION_RUNTIME: remote
           RUNTIME_ADDRESS: 127.0.0.1:50051
-          MACP_RUNTIME_AUTH_TOKENS_FILE: ${{ env.LIVE_RUNTIME_DIR }}/tokens.json
-          EXPECT_DECISION_RECEIPTS: ${{ matrix.receipts }}
-          MACP_RUNTIME_ID: cp-live-${{ matrix.receipts }}
-          MACP_COMPACT_TERMINAL_LOGS: '0'
+          # MACP_RUNTIME_AUTH_TOKENS_FILE, EXPECT_DECISION_RECEIPTS, MACP_RUNTIME_ID, MACP_COMPACT_TERMINAL_LOGS
+          # (and MACP_RECEIPT_SIGNING_KID on the signed leg) come from start-live-runtime.sh via $GITHUB_ENV.
         run: >-
           npx jest -c test/jest.integration.config.ts --runInBand --verbose
           test/integration/decision-receipt-live test/integration/what-if-replay-live

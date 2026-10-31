@@ -21,6 +21,7 @@ audit (npm audit, prod deps, high+) ─┤
 check-env-secrets ─┤
 conventions (CLAUDE.md grep sweeps) ─┘
 test → integration-test (postgres:16 service on 5433, mock runtime)
+test → live-runtime (matrix: signed | unsigned receipts; macp-runtime:0.11.0 via test/scripts/start-live-runtime.sh; decision-receipt-live + what-if-replay-live)
 ```
 
 - **Concurrency**: superseded PR runs are cancelled; `main` pushes never are (a killed docker job could leave a partial `latest` tag).
