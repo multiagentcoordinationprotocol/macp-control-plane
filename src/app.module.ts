@@ -16,6 +16,8 @@ import { EventsController } from './controllers/events.controller';
 import { ObservabilityController } from './controllers/observability.controller';
 import { RunInsightsController } from './controllers/run-insights.controller';
 import { WhatIfController } from './controllers/what-if.controller';
+import { DecisionReceiptController } from './controllers/decision-receipt.controller';
+import { DecisionReceiptService } from './receipts/decision-receipt.service';
 import { RuntimeCapabilitiesService } from './runtime/runtime-capabilities.service';
 import { WhatIfReplayService } from './what-if/what-if-replay.service';
 import { VerificationController } from './controllers/verification.controller';
@@ -90,6 +92,7 @@ import { WebhookService } from './webhooks/webhook.service';
     RunInsightsController,
     VerificationController,
     WhatIfController,
+    DecisionReceiptController,
     RunsController,
     RuntimeController,
     ObservabilityController,
@@ -147,6 +150,7 @@ import { WebhookService } from './webhooks/webhook.service';
     RunInsightsService,
     CommitmentVerificationService,
     WhatIfReplayService,
+    DecisionReceiptService,
     RuntimeCapabilitiesService,
     DataRetentionService,
     WebhookRepository,

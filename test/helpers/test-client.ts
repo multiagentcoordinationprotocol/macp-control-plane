@@ -103,7 +103,7 @@ export class TestClient {
     method: string,
     path: string,
     opts?: RequestOptions
-  ): Promise<{ status: number; body: unknown }> {
+  ): Promise<{ status: number; body: unknown; text: string; headers: http.IncomingHttpHeaders }> {
     const url = this.buildUrl(path, opts?.query);
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -129,7 +129,7 @@ export class TestClient {
             } catch {
               parsed = data;
             }
-            resolve({ status: res.statusCode ?? 0, body: parsed });
+            resolve({ status: res.statusCode ?? 0, body: parsed, text: data, headers: res.headers });
           });
         }
       );

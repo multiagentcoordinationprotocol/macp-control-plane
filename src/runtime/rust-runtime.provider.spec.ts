@@ -1218,3 +1218,63 @@ describe('RustRuntimeProvider.whatIfReplay — WhatIfReplay wire mapping (RFC-MA
     expect(result.entries).toEqual([]);
   });
 });
+
+describe('RustRuntimeProvider decision receipts — GetDecisionReceipt / GetReceiptKeys wire mapping (RFC-MACP-0013 §13)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const protoLoader = require('@grpc/proto-loader');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { protoDir } = require('@multiagentcoordinationprotocol/proto');
+  const service = protoLoader.loadSync([`${protoDir}/macp/v1/core.proto`], {
+    keepCase: false,
+    longs: String,
+    enums: String,
+    defaults: true,
+    oneofs: true,
+    includeDirs: [protoDir]
+  })['macp.v1.MACPRuntimeService'];
+  const wire = (rpc: string, msg: Record<string, unknown>) =>
+    service[rpc].responseDeserialize(service[rpc].responseSerialize(msg));
+
+  function setup(rpc: string, response: Record<string, unknown>) {
+    const { provider } = makeProvider(() => makeFakeStream());
+    const unary = jest
+      .spyOn(provider as unknown as { unary: (...a: unknown[]) => Promise<unknown> }, 'unary')
+      .mockResolvedValue(wire(rpc, response));
+    return { provider, unary };
+  }
+
+  it('GetDecisionReceipt sends the session id and returns receipt_json verbatim', async () => {
+    const text = '{"receipt_format":"macp-receipt/1",  "session_id":"s1"}';
+    const { provider, unary } = setup('GetDecisionReceipt', { receiptJson: text });
+    await expect(provider.getDecisionReceipt({ runtimeSessionId: 's1' })).resolves.toEqual({ receiptJson: text });
+    expect(unary).toHaveBeenCalledWith('GetDecisionReceipt', { sessionId: 's1' }, expect.anything());
+    expect(
+      service.GetDecisionReceipt.requestDeserialize(service.GetDecisionReceipt.requestSerialize(unary.mock.calls[0][1]))
+    ).toEqual({
+      sessionId: 's1'
+    });
+  });
+
+  it('GetReceiptKeys returns jwks_json verbatim', async () => {
+    const { provider, unary } = setup('GetReceiptKeys', { jwksJson: '{"keys":[]}' });
+    await expect(provider.getReceiptKeys()).resolves.toEqual({ jwksJson: '{"keys":[]}' });
+    expect(unary).toHaveBeenCalledWith('GetReceiptKeys', {}, expect.anything());
+  });
+
+  it('Initialize carries Capabilities.decision_receipt (field 8) into the cached capabilities', async () => {
+    const init = service.Initialize;
+    const { provider } = makeProvider(() => makeFakeStream());
+    jest.spyOn(provider as unknown as { unary: (...a: unknown[]) => Promise<unknown> }, 'unary').mockResolvedValue(
+      init.responseDeserialize(
+        init.responseSerialize({
+          selectedProtocolVersion: '1.0',
+          runtimeInfo: { name: 'macp-runtime', version: '0.11.0' },
+          capabilities: { decisionReceipt: { getDecisionReceipt: true, signed: true } }
+        })
+      )
+    );
+    const result = await provider.initialize({ clientName: 'cp', clientVersion: '0' });
+    expect(result.capabilities?.decisionReceipt).toEqual({ getDecisionReceipt: true, signed: true });
+    expect(provider.capabilities?.decisionReceipt).toEqual({ getDecisionReceipt: true, signed: true });
+  });
+});

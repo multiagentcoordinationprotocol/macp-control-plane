@@ -35,4 +35,18 @@ describe('RuntimeCapabilitiesService', () => {
     await expect(service.forWhatIfReplay(p)).resolves.toBe(fresh);
     expect(p.initialize).toHaveBeenCalledTimes(1);
   });
+
+  it('forDecisionReceipt() trusts a cached advertisement without a round trip', async () => {
+    const cached = { decisionReceipt: { getDecisionReceipt: true } };
+    const p = provider(cached, {});
+    await expect(service.forDecisionReceipt(p)).resolves.toBe(cached);
+    expect(p.initialize).not.toHaveBeenCalled();
+  });
+
+  it('forDecisionReceipt() re-initializes when the cache lacks it (runtime upgraded since)', async () => {
+    const fresh = { decisionReceipt: { getDecisionReceipt: true, signed: false } };
+    const p = provider({ policyRegistry: { whatIfReplay: true } }, fresh);
+    await expect(service.forDecisionReceipt(p)).resolves.toBe(fresh);
+    expect(p.initialize).toHaveBeenCalledTimes(1);
+  });
 });

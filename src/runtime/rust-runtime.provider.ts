@@ -32,6 +32,9 @@ import {
   RuntimeWhatIfOutcome,
   RuntimeWhatIfReplayRequest,
   RuntimeWhatIfReplayResult,
+  RuntimeGetDecisionReceiptRequest,
+  RuntimeGetDecisionReceiptResult,
+  RuntimeGetReceiptKeysResult,
   RuntimeGetPolicyRequest,
   RuntimeListPoliciesRequest,
   RuntimeListSessionsResult,
@@ -249,7 +252,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnMod
           manifest: response.capabilities.manifest,
           modeRegistry: response.capabilities.modeRegistry,
           roots: response.capabilities.roots,
-          policyRegistry: response.capabilities.policyRegistry
+          policyRegistry: response.capabilities.policyRegistry,
+          decisionReceipt: response.capabilities.decisionReceipt ?? undefined
         }
       : undefined;
 
@@ -1020,6 +1024,22 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnMod
         candidate: entryOutcome(e.candidate)
       }))
     };
+  }
+
+  async getDecisionReceipt(req: RuntimeGetDecisionReceiptRequest): Promise<RuntimeGetDecisionReceiptResult> {
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+    const response = await this.unary(
+      'GetDecisionReceipt',
+      { sessionId: req.runtimeSessionId },
+      buildMetadata(creds.metadata)
+    );
+    return { receiptJson: response?.receiptJson ?? '' };
+  }
+
+  async getReceiptKeys(): Promise<RuntimeGetReceiptKeysResult> {
+    const creds = await this.credentialResolver.resolve({ runtimeKind: this.kind });
+    const response = await this.unary('GetReceiptKeys', {}, buildMetadata(creds.metadata));
+    return { jwksJson: response?.jwksJson ?? '' };
   }
 
   private async unary(
