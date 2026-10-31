@@ -141,7 +141,10 @@ export function buildMetadata(metadataInput: Record<string, string>): grpc.Metad
  * second, manual injection would only race it with the parent span's context.
  * Exactly one injector per outgoing call: the instrumentation when it is active,
  * {@link injectTraceContext} otherwise (for example when `OTEL_NODE_DISABLED_INSTRUMENTATIONS`
- * includes `grpc`, or grpc-js loaded before the SDK could patch it).
+ * includes `grpc`, or grpc-js loaded before the SDK could patch it — the case today, since
+ * `main.ts` imports `AppModule` before `startTelemetry`). Checked per call, so it follows
+ * whichever is true at the time. Caveat: the instrumentation's `ignoreGrpcMethods` option
+ * (not configured here) keeps the wrapper but skips injection for the listed methods.
  */
 export function isGrpcClientAutoInstrumented(): boolean {
   const fn: unknown = grpc.Client.prototype.makeUnaryRequest;

@@ -298,7 +298,7 @@ describe('RunEventService', () => {
       // accidentally removed.
       redactionService.redact.mockImplementation((attrs: Record<string, unknown>) => ({
         ...attrs,
-        errorCode: '[REDACTED]'
+        'error.type': '[REDACTED]'
       }));
 
       const partialEvents = [
@@ -313,11 +313,14 @@ describe('RunEventService', () => {
 
       await service.emitControlPlaneEvents('run-1', partialEvents);
 
-      expect(redactionService.redact).toHaveBeenCalledWith({ seq: expect.any(Number), errorCode: expect.any(String) });
+      expect(redactionService.redact).toHaveBeenCalledWith({
+        'macp.cp.event.seq': expect.any(Number),
+        'error.type': expect.any(String)
+      });
       expect(traceService.addRunSpanEvent).toHaveBeenCalledWith(
         'run-1',
         'policy.denied',
-        expect.objectContaining({ errorCode: '[REDACTED]' })
+        expect.objectContaining({ 'error.type': '[REDACTED]' })
       );
     });
 

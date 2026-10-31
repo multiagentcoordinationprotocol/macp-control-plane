@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Span, SpanStatusCode, context, trace } from '@opentelemetry/api';
-import { MACP_CP_ATTR, SpanAttributeValue, withLegacyAttributes } from './semconv';
+import { LEGACY_SPAN_EVENT_ATTRIBUTE_ALIASES, MACP_CP_ATTR, SpanAttributeValue, withLegacyAttributes } from './semconv';
 
 type Attributes = Record<string, SpanAttributeValue | undefined>;
 
@@ -62,13 +62,7 @@ export class TraceService {
   ): void {
     const span = this.runSpans.get(runId);
     if (!span) return;
-    const clean: Record<string, string | number | boolean> = {};
-    if (attributes) {
-      for (const [k, v] of Object.entries(attributes)) {
-        if (v !== undefined) clean[k] = v;
-      }
-    }
-    span.addEvent(name, clean);
+    span.addEvent(name, withLegacyAttributes(attributes ?? {}, LEGACY_SPAN_EVENT_ATTRIBUTE_ALIASES));
   }
 
   /** Return the active trace/span IDs for a run (for stamping canonical events). */

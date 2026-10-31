@@ -18,10 +18,30 @@ import {
   ReadableSpan,
   SimpleSpanProcessor
 } from '@opentelemetry/sdk-trace-base';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { buildMetadata, isGrpcClientAutoInstrumented } from '../runtime/grpc-helpers';
 import { StreamConsumerService } from '../runs/stream-consumer.service';
-import { LEGACY_ATTRIBUTE_ALIASES, MACP_ATTR, MACP_CP_ATTR } from './semconv';
+import {
+  LEGACY_ATTRIBUTE_ALIASES,
+  LEGACY_SPAN_EVENT_ATTRIBUTE_ALIASES,
+  MACP_ATTR,
+  MACP_CP_ATTR,
+  OTEL_ATTR
+} from './semconv';
 import { TraceService } from './trace.service';
+
+// Vendored verbatim from the spec repo's schemas/otel/macp-semconv.json (spec @ 50ae62e),
+// as docs/opentelemetry.md asks implementations to do. Re-copy when the spec bumps it.
+const SEMCONV = JSON.parse(readFileSync(join(__dirname, '../../test/fixtures/otel/macp-semconv.json'), 'utf8')) as {
+  schema: string;
+  groups: Array<{ id: string; attributes?: Array<{ id?: string; ref?: string }> }>;
+};
+const REGISTRY_IDS = new Set(
+  SEMCONV.groups
+    .filter((g) => g.id === 'registry.macp' || g.id === 'registry.macp.reused')
+    .flatMap((g) => (g.attributes ?? []).map((a) => a.id ?? a.ref))
+);
 
 const exporter = new InMemorySpanExporter();
 const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
@@ -49,6 +69,18 @@ function spanNamed(name: string): ReadableSpan {
 }
 
 describe('macp-semconv/0.1 span attributes', () => {
+  it('every registry name this code emits is in the vendored macp-semconv/0.1 registry', () => {
+    expect(SEMCONV.schema).toBe('macp-semconv/0.1');
+    for (const name of [...Object.values(MACP_ATTR), ...Object.values(OTEL_ATTR)]) {
+      expect(REGISTRY_IDS.has(name)).toBe(true);
+    }
+    // ...and every macp.cp.* name stays out of the registry namespace proper.
+    for (const name of Object.values(MACP_CP_ATTR)) {
+      expect(name.startsWith('macp.cp.')).toBe(true);
+      expect(REGISTRY_IDS.has(name)).toBe(false);
+    }
+  });
+
   it('stream.handle_raw_event carries the registry names, the macp.cp.* names, and the legacy aliases', async () => {
     const traceService = new TraceService();
     const service = new StreamConsumerService(
@@ -107,10 +139,10 @@ describe('macp-semconv/0.1 span attributes', () => {
     for (const value of Object.values(attrs)) {
       expect(String(value)).not.toMatch(/secret rationale|deploy/);
     }
-    // Every non-legacy key is a registry name or under macp.cp.*.
+    // Every non-legacy key is a vendored-registry name or under macp.cp.*.
     const legacy = new Set(Object.values(LEGACY_ATTRIBUTE_ALIASES).flat());
     for (const key of Object.keys(attrs).filter((k) => !legacy.has(k))) {
-      expect(Object.values(MACP_ATTR).includes(key as never) || key.startsWith('macp.cp.')).toBe(true);
+      expect(REGISTRY_IDS.has(key) || key.startsWith('macp.cp.')).toBe(true);
     }
 
     const lifecycle = spanNamed('run.lifecycle').attributes;
@@ -121,6 +153,31 @@ describe('macp-semconv/0.1 span attributes', () => {
       runtime_kind: 'rust',
       'run.terminal_status': 'completed'
     });
+  });
+
+  it('run-span annotations use the new names and dual-emit the old ones', () => {
+    const traceService = new TraceService();
+    traceService.startRunTrace('run-2', {});
+    traceService.addRunSpanEvent('run-2', 'signal.acknowledged', {
+      [MACP_CP_ATTR.EVENT_SEQ]: 4,
+      [MACP_CP_ATTR.SIGNAL_ID]: 'sig-1',
+      [MACP_ATTR.SENDER_ID]: 'agent://a',
+      [OTEL_ATTR.ERROR_TYPE]: undefined
+    });
+    traceService.endRunTrace('run-2', 'completed');
+    const event = spanNamed('run.lifecycle').events.find((e) => e.name === 'signal.acknowledged');
+    expect(event?.attributes).toEqual({
+      'macp.cp.event.seq': 4,
+      seq: 4,
+      'macp.cp.signal.id': 'sig-1',
+      signalId: 'sig-1',
+      'macp.sender.id': 'agent://a',
+      sender: 'agent://a'
+    });
+    const legacy = new Set(Object.values(LEGACY_SPAN_EVENT_ATTRIBUTE_ALIASES).flat());
+    for (const key of Object.keys(event!.attributes!).filter((k) => !legacy.has(k))) {
+      expect(REGISTRY_IDS.has(key) || key.startsWith('macp.cp.')).toBe(true);
+    }
   });
 
   it('withSpan maps the mode and session onto macp.mode.id / macp.session.id', async () => {
@@ -212,6 +269,10 @@ describe('traceparent injection on outgoing gRPC calls', () => {
     expect(received[0][0].split('-')[2]).toBe(callerSpanId);
   });
 
+  // Note what this proves. Both injectors use Metadata.set and the instrumentation
+  // writes last, so even a double injection would put one header on the wire
+  // naming the client span. The change under test is the `probe` assertion:
+  // inside an active span, buildMetadata leaves traceparent to the instrumentation.
   it('with gRPC auto-instrumentation, buildMetadata injects nothing and the instrumentation is the one injector', async () => {
     const instrumentation = new GrpcInstrumentation();
     instrumentation.setTracerProvider(provider);
