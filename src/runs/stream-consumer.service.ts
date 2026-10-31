@@ -6,6 +6,7 @@ import { EventNormalizerService } from '../events/event-normalizer.service';
 import { RunEventService } from '../events/run-event.service';
 import { StreamHubService } from '../events/stream-hub.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
+import { MACP_ATTR, MACP_CP_ATTR } from '../telemetry/semconv';
 import { TraceService } from '../telemetry/trace.service';
 import { macpErrorCodeOf } from '../runtime/grpc-helpers';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
@@ -591,9 +592,12 @@ export class StreamConsumerService implements OnModuleDestroy {
       runId,
       'stream.handle_raw_event',
       {
-        'macp.raw_kind': raw.kind,
-        'macp.message_type': raw.envelope?.messageType,
-        'macp.session_id': runtimeSessionId
+        [MACP_CP_ATTR.RAW_EVENT_KIND]: raw.kind,
+        [MACP_ATTR.MESSAGE_TYPE]: raw.envelope?.messageType,
+        [MACP_ATTR.MESSAGE_ID]: raw.envelope?.messageId,
+        [MACP_ATTR.SENDER_ID]: raw.envelope?.sender,
+        [MACP_ATTR.MODE_ID]: raw.envelope?.mode || undefined,
+        [MACP_ATTR.SESSION_ID]: runtimeSessionId
       },
       () => this.handleRawEventInner(runId, raw, context, runtimeSessionId, marker)
     );

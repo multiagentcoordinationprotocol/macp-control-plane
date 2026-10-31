@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { RunDescriptor, RunStateProjection } from '../contracts/control-plane';
 import { AuditService } from '../audit/audit.service';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
+import { MACP_ATTR, MACP_CP_ATTR } from '../telemetry/semconv';
 import { TraceService } from '../telemetry/trace.service';
 import { ProjectionService } from '../projection/projection.service';
 import { MetricsService } from '../metrics/metrics.service';
@@ -38,9 +39,9 @@ export class RunManagerService {
 
     const runId = explicitRunId ?? randomUUID();
     const traceId = this.traceService.startRunTrace(runId, {
-      runtime_kind: request.runtime.kind,
-      mode_name: request.session.modeName,
-      execution_mode: request.mode
+      [MACP_CP_ATTR.RUNTIME_KIND]: request.runtime.kind,
+      [MACP_ATTR.MODE_ID]: request.session.modeName,
+      [MACP_CP_ATTR.EXECUTION_MODE]: request.mode
     });
 
     // Auto-tag sandbox runs
@@ -198,9 +199,7 @@ export class RunManagerService {
           policyVersion: request.session.policyVersion || 'policy.default',
           participants: request.session.participants.map((item) => item.id),
           ...(session.contextId ? { contextId: session.contextId } : {}),
-          ...(session.extensionKeys && session.extensionKeys.length > 0
-            ? { extensionKeys: session.extensionKeys }
-            : {})
+          ...(session.extensionKeys && session.extensionKeys.length > 0 ? { extensionKeys: session.extensionKeys } : {})
         }
       },
       ...participantEvents
@@ -491,10 +490,7 @@ export class RunManagerService {
    * so a legitimately-undecided terminal run (e.g. a no-consensus cancellation)
    * is never needlessly rebuilt on every read.
    */
-  private async healStaleTerminalDecision(
-    runId: string,
-    projection: RunStateProjection
-  ): Promise<RunStateProjection> {
+  private async healStaleTerminalDecision(runId: string, projection: RunStateProjection): Promise<RunStateProjection> {
     const terminal = ['completed', 'failed', 'cancelled'].includes(projection.run.status);
     const decisionUnfinalized = !!projection.decision.current && projection.decision.current.finalized !== true;
     if (!terminal || !decisionUnfinalized) return projection;

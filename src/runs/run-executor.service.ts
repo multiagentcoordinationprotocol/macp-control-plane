@@ -10,6 +10,7 @@ import { ErrorCode } from '../errors/error-codes';
 import { macpErrorCodeOf } from '../runtime/grpc-helpers';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
+import { MACP_ATTR, MACP_CP_ATTR } from '../telemetry/semconv';
 import { TraceService } from '../telemetry/trace.service';
 import { classifyRuntimeVersion, TESTED_RUNTIME_RANGE } from '../runtime/runtime-version';
 import { RunRepository } from '../storage/run.repository';
@@ -319,9 +320,9 @@ export class RunExecutorService implements OnModuleDestroy {
       const initResult = await this.traceService.withSpan(
         'runtime.initialize',
         {
-          run_id: runId,
-          runtime_kind: request.runtime.kind,
-          mode_name: request.session.modeName
+          [MACP_CP_ATTR.RUN_ID]: runId,
+          [MACP_CP_ATTR.RUNTIME_KIND]: request.runtime.kind,
+          [MACP_ATTR.MODE_ID]: request.session.modeName
         },
         async () => {
           return provider.initialize(
@@ -348,7 +349,11 @@ export class RunExecutorService implements OnModuleDestroy {
       // Poll GetSession until the initiator agent opens it, or timeout.
       const snapshot = await this.traceService.withSpan(
         'runtime.await_session_open',
-        { run_id: runId, runtime_kind: request.runtime.kind, session_id: sessionId },
+        {
+          [MACP_CP_ATTR.RUN_ID]: runId,
+          [MACP_CP_ATTR.RUNTIME_KIND]: request.runtime.kind,
+          [MACP_ATTR.SESSION_ID]: sessionId
+        },
         async () => this.pollForOpenSession(provider, runId, sessionId)
       );
       if (!snapshot) return; // shutting down mid-poll; run-recovery resumes it on restart
