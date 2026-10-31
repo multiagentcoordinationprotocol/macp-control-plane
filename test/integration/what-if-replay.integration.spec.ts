@@ -5,7 +5,7 @@ import { AppException } from '../../src/errors/app-exception';
 import { ErrorCode } from '../../src/errors/error-codes';
 import { RuntimeWhatIfReplayResult } from '../../src/contracts/runtime';
 
-// Mock-only: the pinned runtime image (0.9.0) predates WhatIfReplay (runtime 0.10).
+// Mock-only: it scripts the runtime replies; what-if-replay-live.integration.spec.ts covers the real runtime.
 const isRealRuntime = process.env.INTEGRATION_RUNTIME === 'docker' || process.env.INTEGRATION_RUNTIME === 'remote';
 const describeMock = isRealRuntime ? describe.skip : describe;
 

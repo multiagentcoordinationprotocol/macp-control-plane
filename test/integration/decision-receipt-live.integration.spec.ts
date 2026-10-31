@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import * as protobuf from 'protobufjs';
-import { describeWithAuthedRuntime } from '../helpers/real-runtime-gate';
-import { trustedKeysFromJwks, verifyReceipt } from '../helpers/receipt-verifier';
+import { authedRuntimeSkipReason, describeWithAuthedRuntime } from '../helpers/real-runtime-gate';
+import { trustedKeysFromJwks, verifyReceipt } from 'macp-sdk-typescript';
 import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { waitFor } from '../helpers/wait-for';
 
@@ -14,15 +14,18 @@ import { waitFor } from '../helpers/wait-for';
  *
  * Gated twice. `describeWithAuthedRuntime` needs `INTEGRATION_RUNTIME=remote`, a runtime at
  * `RUNTIME_ADDRESS` started with `MACP_AUTH_TOKENS_FILE`, and `MACP_RUNTIME_AUTH_TOKENS_FILE`
- * pointing at the same file (tokens as in what-if-replay-live.integration.spec.ts). Then, until
- * such a runtime is released and pinned, every test returns early with a warning when the runtime
- * does not advertise `decisionReceipt.getDecisionReceipt` (Jest cannot skip after an async probe).
+ * pointing at the same file (tokens as in what-if-replay-live.integration.spec.ts).
+ *
+ * `EXPECT_DECISION_RECEIPTS=signed|unsigned` (CI's `live-runtime` job runs one leg of each against
+ * `macp-runtime:0.11.0`) makes the spec strict: the runtime MUST advertise
+ * `decisionReceipt.getDecisionReceipt` with that `signed` value, and every test runs. Unset, a
+ * runtime that does not advertise the capability makes every test return early with a warning
+ * (Jest cannot skip after an async probe), so the spec stays usable against older runtimes.
  *
  * Start the runtime with a signing key to expect an attested receipt: `MACP_RECEIPT_SIGNING_KEY_PATH`
  * or `MACP_RECEIPT_SIGNING_KEY` (not both; that aborts startup), `MACP_RECEIPT_SIGNING_KID` and
  * `MACP_RUNTIME_ID` (`MACP_RECEIPT_PUBLIC_KEYS_PATH` optionally publishes retired keys). Without a
- * key it advertises `signed: false` and the receipt is integrity-only. Verified against
- * `macp-runtime:016afe6` (main, pre-0.11.0) with a signing key: attested.
+ * key it advertises `signed: false` and the receipt is integrity-only, still served.
  */
 const RUNTIME_ADDRESS = process.env.RUNTIME_ADDRESS ?? '127.0.0.1:50051';
 const BUYER = { token: 'agent-alpha-token', sender: 'agent-alpha' };
@@ -30,6 +33,15 @@ const SELLER = { token: 'agent-beta-token', sender: 'agent-beta' };
 const CP_OBSERVER_TOKEN = 'cp-observer-token';
 const PROPOSAL = 'macp.mode.proposal.v1';
 const AUTH = { Authorization: 'Bearer test-key-integration' };
+const EXPECTED = process.env.EXPECT_DECISION_RECEIPTS;
+if (EXPECTED !== undefined && EXPECTED !== 'signed' && EXPECTED !== 'unsigned') {
+  throw new Error(`EXPECT_DECISION_RECEIPTS must be "signed" or "unsigned", got ${JSON.stringify(EXPECTED)}`);
+}
+// A strict leg that would silently describe.skip (missing tokens file, wrong INTEGRATION_RUNTIME)
+// is a misconfigured CI job, not a pass.
+if (EXPECTED && authedRuntimeSkipReason()) {
+  throw new Error(`EXPECT_DECISION_RECEIPTS is set but the live gate is closed: ${authedRuntimeSkipReason()}`);
+}
 
 function loadProtoDir(): string {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -154,7 +166,10 @@ describeWithAuthedRuntime('Decision receipts against a live macp-runtime (integr
     const caps = await ctx.client.requestNoAuth('GET', '/runtime/capabilities', { headers: AUTH });
     advertised = (caps.body as { capabilities?: { decisionReceipt?: typeof advertised } }).capabilities
       ?.decisionReceipt;
-    if (advertised?.getDecisionReceipt !== true) {
+    if (EXPECTED) {
+      // Strict leg: a runtime that stopped advertising (or a mis-booted signing key) is a failure.
+      expect(advertised).toEqual({ getDecisionReceipt: true, signed: EXPECTED === 'signed' });
+    } else if (advertised?.getDecisionReceipt !== true) {
       // eslint-disable-next-line no-console
       console.warn('[decision-receipt-live] runtime does not advertise decisionReceipt.getDecisionReceipt; skipping');
     }
@@ -222,17 +237,31 @@ describeWithAuthedRuntime('Decision receipts against a live macp-runtime (integr
     for (const k of jwks.keys)
       for (const m of ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k']) expect(k).not.toHaveProperty(m);
 
+    // §13: the issuer is `runtime:<MACP_RUNTIME_ID>` whether or not the runtime signs.
+    const runtimeId = process.env.MACP_RUNTIME_ID;
+    if (EXPECTED && !runtimeId) throw new Error('strict leg needs MACP_RUNTIME_ID (start-live-runtime.sh prints it)');
+    if (runtimeId) expect(body.receipt.issuer).toBe(`runtime:${runtimeId}`);
+
     const verdict = verifyReceipt(JSON.parse(body.receiptJson), trustedKeysFromJwks(jwks));
-    if (advertised?.signed) {
-      expect(verdict).toMatchObject({ integrity: 'match', verdict: 'attested' });
+    const expectSigned = EXPECTED ? EXPECTED === 'signed' : advertised?.signed === true;
+    if (expectSigned) {
+      expect(verdict).toEqual({ integrity: 'match', attestations: ['valid'], verdict: 'attested' });
       // §13 item 5: the protected header is exactly {"alg":"EdDSA","kid":<kid>}.
       const header = JSON.parse(
         Buffer.from((body.receipt.attestations[0].jws as string).split('.')[0], 'base64url').toString('utf8')
       );
       expect(Object.keys(header).sort()).toEqual(['alg', 'kid']);
       expect(header.alg).toBe('EdDSA');
+      // Signed with the key the runtime was booted with.
+      const kid = process.env.MACP_RECEIPT_SIGNING_KID;
+      if (EXPECTED && !kid)
+        throw new Error('signed leg needs MACP_RECEIPT_SIGNING_KID (start-live-runtime.sh prints it)');
+      if (kid) expect(header.kid).toBe(kid);
     } else {
       expect(verdict).toEqual({ integrity: 'match', attestations: [], verdict: 'integrity_only' });
+      expect(body.receipt.attestations).toEqual([]);
+      // CI's unsigned leg publishes no retired keys either (§13 item 8 would allow them).
+      if (EXPECTED === 'unsigned') expect(jwks.keys).toEqual([]);
     }
 
     // §13 item 6: served byte-identical on a later call.
