@@ -305,18 +305,21 @@ export class StreamConsumerService implements OnModuleDestroy {
    * Matches the runtime's exact "resume point was compacted" sentence
    * (macp-runtime/src/server.rs:584-590): "session history before ordinal {N}
    * was compacted; resume with after_sequence >= {N} or re-read state via
-   * GetSession". Deliberately **unanchored**, not `^`-anchored — on the legacy
-   * terminal fallback (see `isCompactedHistoryTerminalError` below) the text is
+   * GetSession". Deliberately **unanchored**, not `^`-anchored — on the
+   * terminal path (see `isCompactedHistoryTerminalError` below) the text is
    * grpc-js's own wrapped `ServiceError.message`, "<code> <CODE_NAME>:
    * <details>", which a `^`-anchored regex would never match. This exact
    * unanchored form is prescribed by DECISIONS.md entry 13 — do not re-anchor it.
    *
-   * Still the discriminator from runtime v0.9.0: the inline frame's code is now
-   * the generic registry `INVALID_ENVELOPE`, which every malformed-envelope
-   * rejection shares, so the sentence is the only thing that marks a compacted
-   * resume. Coupled to the runtime's wording: a rewording upstream silently
-   * stops gap detection on the inline path (issue #68's protection), with no
-   * signal short of the live-runtime suite.
+   * Runtime v0.12.0 ends the stream with a terminal status coded
+   * `HISTORY_UNAVAILABLE` (keeping this sentence as the status message), and
+   * the terminal path keys on that code, so the wording no longer matters
+   * there. On the inline path of v0.9.0–v0.11.x the frame's code is the generic
+   * registry `INVALID_ENVELOPE`, which every malformed-envelope rejection
+   * shares, so for those runtimes the sentence is the only thing that marks a
+   * compacted resume: a rewording would silently stop gap detection on that
+   * path (issue #68's protection), with no signal short of the live-runtime
+   * suite.
    */
   private static readonly COMPACTED_HISTORY_RE = /history before ordinal \d+ was compacted/i;
 

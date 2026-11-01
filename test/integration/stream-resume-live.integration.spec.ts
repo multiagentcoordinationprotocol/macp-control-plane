@@ -803,6 +803,7 @@ describeWithLocalRuntime('Stream resume — live macp-runtime 0.7.0 (Phase 5)', 
         expect(typeof details.lowest_available_sequence).toBe('number');
         expect(status.details).toMatch(/history before ordinal \d+ was compacted/i);
         call.cancel();
+        observerClient.close();
 
         // provider.subscribeSession() surfaces it as the iterator's thrown
         // stream failure, which StreamConsumerService's catch path classifies
@@ -841,6 +842,7 @@ describeWithLocalRuntime('Stream resume — live macp-runtime 0.7.0 (Phase 5)', 
       expect(streamEnded).toBe(false);
       expect(streamErrored).toBeNull();
       call.cancel();
+      observerClient.close();
 
       // ── (b), second half — the practical consequence, proven against the
       // REAL production method: subscribing via provider.subscribeSession()
