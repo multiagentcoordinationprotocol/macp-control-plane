@@ -5,7 +5,7 @@
  * (`serve-docs.ts`).
  *
  * Nothing here throws on a content problem: it returns `problems`, and the caller decides (the export
- * script exits non-zero). The CI conventions job bans `throw new Error` under `src/`.
+ * script exits non-zero). The CI conventions job bans raw Error throws under `src/`.
  */
 import { INestApplication, RequestMethod, Type } from '@nestjs/common';
 import { HTTP_CODE_METADATA, METHOD_METADATA, MODULE_METADATA, PATH_METADATA } from '@nestjs/common/constants';
