@@ -48,7 +48,10 @@ import { RuntimeProviderRegistry } from '../../src/runtime/runtime-provider.regi
  *  P4 changed: the control-plane's stream errors for real, and its own
  *  error+backoff+resubscribe code in `StreamConsumerService` runs unmodified.
  *
- *  IMPORTANT caveat on "graceful": macp-runtime's only registered shutdown
+ *  (Runtime 0.12.0 also drains on SIGTERM; SIGINT stays correct for every
+ *  version, so the spec keeps sending it.)
+ *
+ *  IMPORTANT caveat on "graceful" (runtimes before 0.12.0): macp-runtime's only registered shutdown
  *  hook is `tokio::signal::ctrl_c()` (confirmed by inspecting
  *  `../macp-runtime/src/main.rs` — there is no `SignalKind::terminate()`
  *  handler anywhere in the crate), which is SIGINT, not SIGTERM. Sending
@@ -150,7 +153,8 @@ const RUNTIME_ADDRESS = process.env.RUNTIME_ADDRESS ?? '127.0.0.1:50051';
 const RUNTIME_DIR = process.env.MACP_RUNTIME_DIR ?? path.resolve(__dirname, '../../../macp-runtime');
 const RUNTIME_BINARY = path.join(RUNTIME_DIR, 'target/debug/macp-runtime');
 const RUNTIME_RESTART_LOG = path.join(RUNTIME_DIR, '.phase5-live-restart.log');
-const RUNTIME_PORT = 50051;
+// Derived from RUNTIME_ADDRESS so the spec can run beside another runtime on 50051.
+const RUNTIME_PORT = Number(RUNTIME_ADDRESS.split(':').pop()) || 50051;
 // Optional: preserved across a forced restart (seam (a)) so a runtime already
 // running with a non-default data dir / configured auth-tokens file (see the
 // "Runtime auth finding" note above) comes back up the same way instead of
@@ -625,7 +629,15 @@ describeWithLocalRuntime('Stream resume — live macp-runtime 0.7.0 (Phase 5)', 
    * "cannot fire" premise was never actually checked against the real
    * `RustRuntimeProvider` code path.
    *
-   * This test proves, live, both:
+   * Runtime 0.12.0 changed the wire (RFC-MACP-0006 §3.2): the stale resume now
+   * ENDS the stream with FAILED_PRECONDITION, `macp-error-code:
+   * HISTORY_UNAVAILABLE` and `macp-error-details-bin`
+   * `{"lowest_available_sequence":N}`. The test branches on what arrives first:
+   * a status takes the 0.12 path (asserted off the wire, then through
+   * `provider.subscribeSession()`, whose iterator throws it); a data frame takes
+   * the 0.5–0.11 path, (a) and (b) below, kept for older runtimes.
+   *
+   * On 0.5–0.11 this test proves, live, both:
    *
    *  (a) The runtime's rejection of a stale resume against a compacted
    *      session is a non-terminal inline frame, NOT a stream-ending gRPC
@@ -688,7 +700,7 @@ describeWithLocalRuntime('Stream resume — live macp-runtime 0.7.0 (Phase 5)', 
    * resubscribing from ordinal 0.
    */
   it(
-    'criterion 3, part 1 (live): the runtime rejects a stale resume against a compacted session as a non-terminal inline frame — and RustRuntimeProvider.subscribeSession() now correctly surfaces it as a stream-inline-error event (see block comment above for exact server.rs + rust-runtime.provider.ts citations)',
+    'criterion 3, part 1 (live): the runtime rejects a stale resume against a compacted session — a terminal HISTORY_UNAVAILABLE status on >= 0.12.0, a non-terminal inline frame on 0.5–0.11 — and RustRuntimeProvider.subscribeSession() surfaces it (see block comment above)',
     async () => {
       const provider = ctx.module.get(RuntimeProviderRegistry).get('rust');
       const sessionId = randomUUID();
@@ -769,13 +781,50 @@ describeWithLocalRuntime('Stream resume — live macp-runtime 0.7.0 (Phase 5)', 
       call.on('error', (e: Error) => {
         streamErrored = e;
       });
-      const firstFramePromise = new Promise<any>((resolve, reject) => {
-        call.once('data', resolve);
-        call.once('error', reject);
+      // Resolves with the first frame, or with the status the stream ended on.
+      const firstPromise = new Promise<{ frame?: any; status?: grpc.ServiceError }>((resolve) => {
+        call.once('data', (frame: any) => resolve({ frame }));
+        call.once('error', (status: grpc.ServiceError) => resolve({ status }));
       });
       call.write({ subscribeSessionId: sessionId, afterSequence: 0 });
-      const frame = await firstFramePromise;
+      const first = await firstPromise;
 
+      if (first.status) {
+        // ── runtime >= 0.12.0 (RFC-MACP-0006 §3.2): the stream ENDS with
+        // FAILED_PRECONDITION, `macp-error-code: HISTORY_UNAVAILABLE` and
+        // `macp-error-details-bin` = {"lowest_available_sequence":N}. The status
+        // message keeps the compacted-history sentence. ──
+        const status = first.status;
+        expect(status.code).toBe(grpc.status.FAILED_PRECONDITION);
+        expect(status.metadata.get('macp-error-code').map(String)).toEqual(['HISTORY_UNAVAILABLE']);
+        const detailsBin = status.metadata.get('macp-error-details-bin')[0];
+        expect(detailsBin).toBeDefined();
+        const details = JSON.parse(Buffer.from(detailsBin as Buffer).toString('utf8'));
+        expect(typeof details.lowest_available_sequence).toBe('number');
+        expect(status.details).toMatch(/history before ordinal \d+ was compacted/i);
+        call.cancel();
+        observerClient.close();
+
+        // provider.subscribeSession() surfaces it as the iterator's thrown
+        // stream failure, which StreamConsumerService's catch path classifies
+        // as a gap (isCompactedHistoryTerminalError, keyed on the code). ──
+        const probeHandle = provider.subscribeSession({ runId: sessionId, runtimeSessionId: sessionId, afterSequence: 0 });
+        const probeIterator = probeHandle.events[Symbol.asyncIterator]();
+        const opened = await probeIterator.next();
+        expect(opened.value.kind).toBe('stream-status');
+        const thrown = await probeIterator.next().then(
+          () => undefined,
+          (e: unknown) => e as grpc.ServiceError
+        );
+        expect(thrown).toBeDefined();
+        expect(thrown!.code).toBe(grpc.status.FAILED_PRECONDITION);
+        expect(thrown!.metadata.get('macp-error-code').map(String)).toEqual(['HISTORY_UNAVAILABLE']);
+        probeHandle.abort();
+        return;
+      }
+
+      // ── runtime 0.5–0.11: a non-terminal inline frame; the stream stays open. ──
+      const frame = first.frame;
       expect(frame.error).toBeDefined();
       expect(String(frame.error.message)).toMatch(/compact/i);
 
@@ -793,6 +842,7 @@ describeWithLocalRuntime('Stream resume — live macp-runtime 0.7.0 (Phase 5)', 
       expect(streamEnded).toBe(false);
       expect(streamErrored).toBeNull();
       call.cancel();
+      observerClient.close();
 
       // ── (b), second half — the practical consequence, proven against the
       // REAL production method: subscribing via provider.subscribeSession()
@@ -866,9 +916,10 @@ describeWithLocalRuntime('Stream resume — live macp-runtime 0.7.0 (Phase 5)', 
    *      best-effort compaction, per the phase brief.
    *   4. The control-plane's backoff elapses; it resubscribes from its last
    *      delivered ordinal (1) — now strictly below the compacted base — and
-   *      the inline compacted-history frame comes back on that very first
-   *      frame, exactly as part 1 proved happens for any fresh subscribe at
-   *      this point.
+   *      the compacted-history rejection comes back at once (on 0.12.0 the
+   *      terminal HISTORY_UNAVAILABLE status, earlier the inline frame),
+   *      exactly as part 1 proved happens for any fresh subscribe at this
+   *      point.
    *   5. Assert `session.stream.gap` + `historyGap` + the subscribe-call
    *      history, then confirm poll-only is a real, working fallback (not a
    *      dead end) by waiting for the run to reach its true terminal state
