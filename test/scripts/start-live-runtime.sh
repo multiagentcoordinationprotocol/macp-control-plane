@@ -20,7 +20,7 @@ set -euo pipefail
 LEG="${1:?usage: start-live-runtime.sh <signed|unsigned> [port] [config-dir]}"
 PORT="${2:-50051}"
 DIR="${3:-$(mktemp -d)}"
-IMAGE="${MACP_RUNTIME_IMAGE:-ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.12.0}"
+IMAGE="${MACP_RUNTIME_IMAGE:-ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.13.0}"
 NAME="${MACP_RUNTIME_CONTAINER:-macp-live-runtime-$LEG}"
 case "$LEG" in signed | unsigned) ;; *) echo "leg must be signed or unsigned" >&2; exit 2 ;; esac
 
