@@ -166,6 +166,55 @@ describe('StreamConsumerService', () => {
       // getSession should have been called only once (from the first start call's poll loop)
       expect(mockProvider.getSession).toHaveBeenCalledTimes(1);
     });
+
+    // subscribeSession opens its StreamSession call eagerly; a handle start() does not take
+    // must be aborted, or its HTTP/2 stream keeps the runtime socket (and the process) alive.
+    const handleParams = () => ({
+      runId: 'run-h',
+      execution: {
+        mode: 'live' as const,
+        runtime: { kind: 'rust' },
+        session: {
+          modeName: 'decision',
+          modeVersion: '1.0',
+          configurationVersion: '1.0',
+          ttlMs: 60000,
+          participants: []
+        }
+      },
+      runtimeKind: 'rust',
+      runtimeSessionId: 'session-h',
+      subscriberId: 'sub-h',
+      sessionHandle: { events: (async function* () {})(), abort: jest.fn() }
+    });
+
+    it('aborts the handle of a second start() for a run it already streams', async () => {
+      runtimeRegistry.get.mockReturnValue({ getSession: jest.fn().mockReturnValue(new Promise(() => {})) } as any);
+      const first = { ...handleParams(), sessionHandle: undefined };
+      await service.start(first);
+      const second = handleParams();
+      await service.start(second);
+      expect(second.sessionHandle.abort).toHaveBeenCalledTimes(1);
+    });
+
+    it('aborts the handle of a start() that lands while onModuleDestroy is sweeping', async () => {
+      const destroying = service.onModuleDestroy();
+      const late = handleParams();
+      await service.start(late);
+      await destroying;
+      expect(late.sessionHandle.abort).toHaveBeenCalledTimes(1);
+      expect(service.isHealthy()).toBe(true); // nothing registered
+    });
+
+    it('accepts streams again once onModuleDestroy has finished (the test harness reuses the service)', async () => {
+      runtimeRegistry.get.mockReturnValue({ getSession: jest.fn().mockReturnValue(new Promise(() => {})) } as any);
+      await service.onModuleDestroy();
+      const next = handleParams();
+      await service.start(next);
+      expect(next.sessionHandle.abort).not.toHaveBeenCalled();
+      await service.onModuleDestroy();
+      expect(next.sessionHandle.abort).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('stop()', () => {

@@ -26,11 +26,14 @@ services:
   # (the published image no longer bakes it in). MACP_ALLOW_DEV_SENDER_HEADER was
   # removed upstream — the dev-header auth path no longer exists.
   runtime:
-    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.10.0
+    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.11.0
     ports:
       - '50051:50051'
     environment:
       MACP_ALLOW_INSECURE: '1'
+      # 0.11.0: names the receipt issuer (`runtime:<id>`). No signing key, so receipts are
+      # served unsigned (integrity-only); a key would also require this id.
+      MACP_RUNTIME_ID: macp-control-plane-test
     profiles:
       - with-runtime
     healthcheck:
@@ -48,11 +51,12 @@ services:
   # (test/integration/policy-registry-readonly.integration.spec.ts). Separate
   # service so the main runtime's registry stays writable for every other spec.
   runtime-readonly:
-    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.10.0
+    image: ghcr.io/multiagentcoordinationprotocol/macp-runtime:0.11.0
     ports:
       - '50052:50051'
     environment:
       MACP_ALLOW_INSECURE: '1'
+      MACP_RUNTIME_ID: macp-control-plane-test-readonly
       MACP_POLICIES_DIR: /policies
     volumes:
       - ./test/fixtures/policies-readonly:/policies:ro
@@ -75,6 +79,7 @@ services:
       - '50051:50051'
     environment:
       MACP_ALLOW_INSECURE: '1'
+      MACP_RUNTIME_ID: macp-control-plane-test-src
     profiles:
       - with-runtime-src
     healthcheck:

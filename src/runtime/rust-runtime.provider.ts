@@ -309,6 +309,13 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnMod
         const metadata = buildMetadata(creds.metadata);
         const streamMethod = getClientMethod(this.client, 'StreamSession');
         grpcCall = streamMethod.call(this.client, metadata);
+        if (ended) {
+          // abort() ran while credentials were resolving, before there was a call to cancel.
+          // Cancel now: an uncancelled StreamSession keeps its HTTP/2 stream (and so the
+          // channel's socket) open after shutdown, which hangs the process.
+          grpcCall.cancel();
+          return;
+        }
 
         grpcCall.on('data', (chunk: any) => {
           const receivedAt = new Date().toISOString();
@@ -440,6 +447,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnMod
             }
           },
           async return(): Promise<IteratorResult<RawRuntimeEvent>> {
+            // Mark ended too, so a launch() still resolving credentials cancels the call it creates.
+            ended = true;
             if (grpcCall) {
               try {
                 grpcCall.cancel();

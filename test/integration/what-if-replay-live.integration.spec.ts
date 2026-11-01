@@ -27,7 +27,8 @@ import { waitFor } from '../helpers/wait-for';
  *   {"token":"agent-alpha-token","sender":"agent-alpha"}
  *   {"token":"agent-beta-token","sender":"agent-beta"}
  * The CP never sends (observer invariant); the raw agent client plays macp-sdk's role.
- * Verified against the released image `macp-runtime:0.10.0`, both retention settings.
+ * Verified against the released image `macp-runtime:0.10.0`, both retention settings; CI's
+ * `live-runtime` job runs it against `macp-runtime:0.11.0` with `MACP_COMPACT_TERMINAL_LOGS=0`.
  */
 const RUNTIME_ADDRESS = process.env.RUNTIME_ADDRESS ?? '127.0.0.1:50051';
 const BUYER = { token: 'agent-alpha-token', sender: 'agent-alpha' };

@@ -4,7 +4,7 @@ import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { decisionHappyScript } from '../fixtures/decision-mode';
 import { testRuntimeKind } from '../helpers/runtime-kind';
 import { waitFor } from '../helpers/wait-for';
-import { trustedKeysFromJwks, verifyReceipt } from '../helpers/receipt-verifier';
+import { trustedKeysFromJwks, verifyReceipt } from 'macp-sdk-typescript';
 import { AppException } from '../../src/errors/app-exception';
 import { ErrorCode } from '../../src/errors/error-codes';
 

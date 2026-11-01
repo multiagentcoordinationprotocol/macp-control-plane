@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { verifyReceipt, trustedKeysFromJwks } from '../../test/helpers/receipt-verifier';
+import { trustedKeysFromJwks, verifyReceipt } from 'macp-sdk-typescript';
 
 // RFC-MACP-0013 Appendix A receipt vectors and the A.5 example receipt/key set, copied verbatim
-// from the spec repo (schemas/conformance/receipt/, examples/discovery/). They hold the test-only
+// from the spec repo (schemas/conformance/receipt/, examples/discovery/). They hold the SDK's
 // verifier honest, so the receipt-route tests that use it prove something.
 const FIXTURES = join(__dirname, '../../test/fixtures/receipts');
 const read = (p: string) => JSON.parse(readFileSync(p, 'utf8'));
@@ -20,7 +20,7 @@ const vectors: Vector[] = readdirSync(join(FIXTURES, 'vectors'))
   .sort()
   .map((f) => read(join(FIXTURES, 'vectors', f)));
 
-describe('test-only receipt verifier vs the RFC-MACP-0013 receipt vectors', () => {
+describe('macp-sdk-typescript verifyReceipt (the verifier the receipt-route tests use) vs the RFC-MACP-0013 receipt vectors', () => {
   it('has all twelve vectors', () => {
     expect(vectors).toHaveLength(12);
   });

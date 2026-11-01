@@ -15,6 +15,7 @@ import { TraceService } from '../telemetry/trace.service';
 import { classifyRuntimeVersion, TESTED_RUNTIME_RANGE } from '../runtime/runtime-version';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
+import { RuntimeSessionHandle } from '../contracts/runtime';
 import { RunManagerService } from './run-manager.service';
 import { StreamConsumerService } from './stream-consumer.service';
 
@@ -65,6 +66,12 @@ export class RunExecutorService implements OnModuleDestroy {
   private readonly logger = new Logger(RunExecutorService.name);
   /** Set on shutdown so fire-and-forget pollForOpenSession loops stop touching a closing runtime/DB. */
   private shuttingDown = false;
+  /**
+   * StreamSession handles opened by execute() and not yet handed to StreamConsumerService.
+   * subscribeSession opens the call eagerly; a shutdown landing between subscribe and
+   * streamConsumer.start would otherwise leave it open (and the process alive).
+   */
+  private readonly unownedHandles = new Set<RuntimeSessionHandle>();
 
   constructor(
     private readonly runManager: RunManagerService,
@@ -378,19 +385,37 @@ export class RunExecutorService implements OnModuleDestroy {
 
       // Subscribe read-only — never writes.
       const handle = alreadyResolved ? undefined : provider.subscribeSession({ runId, runtimeSessionId: sessionId });
+      if (handle) this.unownedHandles.add(handle);
 
-      const run = await this.runManager.markRunning(runId, sessionId, snapshot.state);
-      const subscriberId = snapshot.initiator ?? '';
+      let run: Awaited<ReturnType<RunManagerService['markRunning']>>;
+      try {
+        run = await this.runManager.markRunning(runId, sessionId, snapshot.state);
+        // Shutdown landed during markRunning and has already aborted the handle. Handing the
+        // dead handle on would let the consumer treat its end as a disconnect and resubscribe
+        // after shutdown. Leave the run non-terminal; run-recovery resumes it on restart.
+        if (this.shuttingDown) return;
+        const subscriberId = snapshot.initiator ?? '';
 
-      await this.streamConsumer.start({
-        runId,
-        execution: request,
-        runtimeKind: request.runtime.kind,
-        runtimeSessionId: sessionId,
-        subscriberId,
-        sessionHandle: handle,
-        pollOnly: alreadyResolved
-      });
+        // start() takes ownership of the handle (or aborts it when it cannot).
+        await this.streamConsumer.start({
+          runId,
+          execution: request,
+          runtimeKind: request.runtime.kind,
+          runtimeSessionId: sessionId,
+          subscriberId,
+          sessionHandle: handle,
+          pollOnly: alreadyResolved
+        });
+      } catch (err) {
+        try {
+          handle?.abort();
+        } catch {
+          /* keep the original error */
+        }
+        throw err;
+      } finally {
+        if (handle) this.unownedHandles.delete(handle);
+      }
 
       if (run.traceId) {
         const artifact = await this.artifactService.register({
@@ -442,6 +467,8 @@ export class RunExecutorService implements OnModuleDestroy {
 
   onModuleDestroy(): void {
     this.shuttingDown = true;
+    for (const handle of this.unownedHandles) handle.abort();
+    this.unownedHandles.clear();
   }
 
   private async pollForOpenSession(
