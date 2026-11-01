@@ -15,8 +15,12 @@ export function drizzleRowSchema(table: Table, description?: string): { schema: 
     let schema: SchemaObject;
     switch (column.dataType) {
       case 'string':
+        // timestamp(mode: 'string') passes Postgres's own text through (`2026-11-01 12:34:56.789+00`),
+        // which is not RFC 3339, so no `format: date-time`.
         schema =
-          column.columnType === 'PgTimestampString' ? { type: 'string', format: 'date-time' } : { type: 'string' };
+          column.columnType === 'PgTimestampString'
+            ? { type: 'string', description: 'Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.' }
+            : { type: 'string' };
         if (column.columnType === 'PgUUID') schema.format = 'uuid';
         if (column.enumValues?.length) schema.enum = [...column.enumValues];
         break;

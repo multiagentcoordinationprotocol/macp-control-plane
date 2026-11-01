@@ -72,7 +72,7 @@ export const LITERAL_COMPONENTS = {
   RunIdsRequest: { type: 'object', required: ['runIds'], properties: { runIds: strings } },
   PolicyRegistrationRequest: {
     type: 'object',
-    required: ['policyId', 'mode', 'description', 'rules'],
+    required: ['policyId', 'mode', 'rules'],
     properties: {
       policyId: str,
       mode: str,
@@ -117,7 +117,11 @@ export const LITERAL_COMPONENTS = {
       data: { type: 'array', items: { $ref: '#/components/schemas/CanonicalEventRecord' } },
       total: int,
       limit: int,
-      nextCursor: { ...int, description: 'seq of the last event returned; absent when there is no more.' }
+      nextCursor: {
+        ...int,
+        description:
+          'seq of the last event returned, to pass as afterSeq. It can be present on the last page; stop when `data` is empty.'
+      }
     }
   },
   RunTraceSummary: {
@@ -205,6 +209,7 @@ export const LITERAL_COMPONENTS = {
       }
     }
   },
+  StreamComplete: { type: 'object', required: ['runId'], properties: { runId: str } },
   Heartbeat: { type: 'object', required: ['ts'], properties: { ts: { type: 'string', format: 'date-time' } } }
 } satisfies Record<string, SchemaObject>;
 

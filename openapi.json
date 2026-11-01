@@ -76,7 +76,7 @@
         "description": "A row of `runArtifacts` as stored (src/db/schema.ts).",
         "properties": {
           "createdAt": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "type": "string"
           },
           "id": {
@@ -141,7 +141,7 @@
             "type": "string"
           },
           "createdAt": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "type": "string"
           },
           "details": {},
@@ -359,7 +359,7 @@
         "description": "A row of `runEventsCanonical` as stored (src/db/schema.ts).",
         "properties": {
           "createdAt": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "type": "string"
           },
           "data": {},
@@ -408,7 +408,7 @@
             "type": "string"
           },
           "ts": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "type": "string"
           },
           "type": {
@@ -447,7 +447,7 @@
             "type": "integer"
           },
           "nextCursor": {
-            "description": "seq of the last event returned; absent when there is no more.",
+            "description": "seq of the last event returned, to pass as afterSeq. It can be present on the last page; stop when `data` is empty.",
             "type": "integer"
           },
           "total": {
@@ -1440,7 +1440,7 @@
         "description": "A row of `runOutboundMessages` as stored (src/db/schema.ts).",
         "properties": {
           "acceptedAt": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "nullable": true,
             "type": "string"
           },
@@ -1449,7 +1449,7 @@
             "type": "string"
           },
           "createdAt": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "type": "string"
           },
           "errorMessage": {
@@ -1482,7 +1482,7 @@
             "type": "string"
           },
           "updatedAt": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "type": "string"
           }
         },
@@ -1690,7 +1690,6 @@
         "required": [
           "policyId",
           "mode",
-          "description",
           "rules"
         ],
         "type": "object"
@@ -1968,16 +1967,16 @@
         "description": "A row of `runs` as stored (src/db/schema.ts).",
         "properties": {
           "archivedAt": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "nullable": true,
             "type": "string"
           },
           "createdAt": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "type": "string"
           },
           "endedAt": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "nullable": true,
             "type": "string"
           },
@@ -2024,7 +2023,7 @@
             "type": "string"
           },
           "startedAt": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "nullable": true,
             "type": "string"
           },
@@ -2037,7 +2036,7 @@
             "type": "string"
           },
           "updatedAt": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "type": "string"
           }
         },
@@ -2869,6 +2868,17 @@
         ],
         "type": "object"
       },
+      "StreamComplete": {
+        "properties": {
+          "runId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "type": "object"
+      },
       "TimelineProjection": {
         "properties": {
           "latestSeq": {
@@ -3087,7 +3097,7 @@
             "type": "boolean"
           },
           "createdAt": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "type": "string"
           },
           "events": {},
@@ -3099,7 +3109,7 @@
             "type": "string"
           },
           "updatedAt": {
-            "format": "date-time",
+            "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "type": "string"
           },
           "url": {
@@ -3937,7 +3947,7 @@
                 }
               }
             },
-            "description": ""
+            "description": "With scenarioRef, rows are selected column by column and omit `createdAt`."
           },
           "401": {
             "content": {
@@ -5440,7 +5450,7 @@
                 }
               }
             },
-            "description": "With format=jsonl the body is the same bundle as JSONL text."
+            "description": "With format=jsonl the body is the same bundle as JSONL text (sent as text/html by Express)."
           },
           "401": {
             "content": {
@@ -6425,7 +6435,7 @@
                 }
               }
             },
-            "description": "Server-sent events. `snapshot` first (unless includeSnapshot=false), then `canonical_event` (id = seq; a backfilled event is the stored row, a live one the normalized event), `heartbeat` every heartbeatMs. Resume with Last-Event-ID or afterSeq."
+            "description": "Server-sent events. `snapshot` first (unless includeSnapshot=false) and again whenever the projection changes; `canonical_event` (id = seq; a backfilled event is the stored row, a live one the normalized event); `heartbeat` every heartbeatMs; `complete` when the run ends (Redis stream hub only). Resume with Last-Event-ID or afterSeq."
           },
           "401": {
             "content": {
@@ -6472,6 +6482,9 @@
                 "$ref": "#/components/schemas/CanonicalEventRecord"
               }
             ]
+          },
+          "complete": {
+            "$ref": "#/components/schemas/StreamComplete"
           },
           "heartbeat": {
             "$ref": "#/components/schemas/Heartbeat"
@@ -7553,7 +7566,12 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WebhookRecord"
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/WebhookRecord"
+                    }
+                  ],
+                  "nullable": true
                 }
               }
             },

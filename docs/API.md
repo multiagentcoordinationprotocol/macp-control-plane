@@ -5,7 +5,7 @@ The machine-readable description of every route is [`openapi.json`](../openapi.j
 When `NODE_ENV=development` the same file is served at `/docs` (Swagger UI) and `/docs-json` (raw). It is not served in production.
 
 Conventions in the document:
-- `components.schemas` mixes three sources: the `@ApiProperty` DTOs in `src/dto/`, TS interfaces such as `RunStateProjection` (from `src/contracts/control-plane.ts` and service view types, listed in `src/openapi/schemas.ts`), and `*Record` schemas, which are database rows exactly as `src/db/schema.ts` stores them.
+- `components.schemas` mixes three sources: the `@ApiProperty` DTOs in `src/dto/`, TS interfaces such as `RunStateProjection` (from `src/contracts/control-plane.ts` and service view types, listed in `src/openapi/schemas.ts`), and `*Record` schemas, which are database rows as `src/db/schema.ts` defines them (timestamps are Postgres `timestamptz` text such as `2026-11-01 12:34:56.789+00`, not RFC 3339; `GET /events?scenarioRef=` rows omit `createdAt`).
 - Every operation has a `default` `ErrorResponse`; authenticated ones also list `401`, and all list `429`.
 - SSE operations (`GET /runs/{id}/stream`, `GET /runs/{id}/replay/stream`) declare `text/event-stream` and map each event name to its payload schema in `x-macp-sse-events`.
 

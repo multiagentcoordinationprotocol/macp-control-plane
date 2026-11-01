@@ -197,15 +197,17 @@ export class RunsController {
   @ApiProduces('text/event-stream')
   @ApiOkResponse({
     description:
-      'Server-sent events. `snapshot` first (unless includeSnapshot=false), then `canonical_event` (id = seq; ' +
-      'a backfilled event is the stored row, a live one the normalized event), `heartbeat` every heartbeatMs. ' +
+      'Server-sent events. `snapshot` first (unless includeSnapshot=false) and again whenever the projection ' +
+      'changes; `canonical_event` (id = seq; a backfilled event is the stored row, a live one the normalized ' +
+      'event); `heartbeat` every heartbeatMs; `complete` when the run ends (Redis stream hub only). ' +
       'Resume with Last-Event-ID or afterSeq.',
     content: SSE_CONTENT
   })
   @ApiExtension(SSE_EVENTS_EXTENSION, {
     snapshot: ref('RunStateProjection'),
     canonical_event: { oneOf: [ref('CanonicalEvent'), ref('CanonicalEventRecord')] },
-    heartbeat: ref('Heartbeat')
+    heartbeat: ref('Heartbeat'),
+    complete: ref('StreamComplete')
   })
   streamRun(
     @Param('id', new ParseUUIDPipe()) id: string,

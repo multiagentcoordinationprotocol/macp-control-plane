@@ -13,7 +13,10 @@ export class EventsController {
   @ApiOperation({
     summary: 'Cross-run canonical events with filters (§4.1).'
   })
-  @ApiOkResponse({ schema: ref('CanonicalEventRecordCursorPage') })
+  @ApiOkResponse({
+    description: 'With scenarioRef, rows are selected column by column and omit `createdAt`.',
+    schema: ref('CanonicalEventRecordCursorPage')
+  })
   async listEvents(@Query(new ValidationPipe({ transform: true, whitelist: true })) query: ListCrossRunEventsQueryDto) {
     const { data, total } = await this.eventRepository.listCanonicalFiltered({
       runId: query.runId,

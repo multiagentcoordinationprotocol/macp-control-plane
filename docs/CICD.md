@@ -25,7 +25,7 @@ test → integration-test (postgres:16 service on 5433, mock runtime)
 test → live-runtime (matrix: signed | unsigned receipts; macp-runtime:0.12.0 via test/scripts/start-live-runtime.sh; decision-receipt-live + what-if-replay-live)
 ```
 
-- **openapi**: `npm run openapi:check` regenerates `openapi.json` from the controllers (Nest preview mode, no database or runtime) and fails on any byte difference. Fix with `npm run openapi:export` and commit. A `package.json` version bump needs it too, since `info.version` follows it.
+- **openapi**: `npm run openapi:check` regenerates `openapi.json` from the controllers (Nest preview mode, no database or runtime) and fails on any byte difference. Fix with `npm run openapi:export` and commit. A `package.json` version bump needs it too, since `info.version` follows it, and so can a Dependabot bump of `@nestjs/swagger`, `typescript` or `ts-json-schema-generator` (the generators' output can shift).
 - **Concurrency**: superseded PR runs are cancelled; `main` pushes never are (a killed docker job could leave a partial `latest` tag).
 - **Node version** comes from `.nvmrc` everywhere (`node-version-file`) — one place to bump.
 - **Coverage** is reported in the job step-summary and uploaded as an artifact; there is deliberately no blocking threshold.

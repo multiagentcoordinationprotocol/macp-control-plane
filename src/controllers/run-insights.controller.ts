@@ -22,7 +22,7 @@ export class RunInsightsController {
   @ApiOperation({ summary: 'Export a full run bundle (run, session, projection, events, artifacts).' })
   @ApiOkResponse({
     type: RunBundleExportDto,
-    description: 'With format=jsonl the body is the same bundle as JSONL text.'
+    description: 'With format=jsonl the body is the same bundle as JSONL text (sent as text/html by Express).'
   })
   async exportRun(
     @Param('id', new ParseUUIDPipe()) id: string,

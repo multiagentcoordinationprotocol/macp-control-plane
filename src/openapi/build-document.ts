@@ -15,7 +15,7 @@ import type {
   PathItemObject,
   SchemaObject
 } from '@nestjs/swagger/dist/interfaces/open-api-spec.interface';
-import { join } from 'path';
+import { join, posix } from 'path';
 import { createGenerator } from 'ts-json-schema-generator';
 import { AppModule } from '../app.module';
 import { IS_PUBLIC_KEY } from '../auth/public.decorator';
@@ -159,7 +159,8 @@ export function generatedComponents(rootDir: string): { schemas: Record<string, 
   const schemas: Record<string, SchemaObject> = {};
   const files = Object.keys(GENERATED_TYPES);
   const generator = createGenerator({
-    path: files.length === 1 ? join(rootDir, files[0]) : join(rootDir, `{${files.join(',')}}`),
+    path:
+      files.length === 1 ? join(rootDir, files[0]) : posix.join(rootDir.split('\\').join('/'), `{${files.join(',')}}`),
     tsconfig: join(rootDir, 'tsconfig.json'),
     skipTypeCheck: true,
     additionalProperties: true,
@@ -319,7 +320,7 @@ export function buildOpenApiDocument(
     op.responses.default ??= errorResponse('Any other error; branch on `errorCode` when present.');
   }
 
-  document.tags = [...(document.tags ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+  document.tags = [...(document.tags ?? [])].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   problems.push(...danglingRefs(document).map((r) => `dangling $ref ${r}`));
   return { document: sortKeys(document) as OpenAPIObject, problems };
 }

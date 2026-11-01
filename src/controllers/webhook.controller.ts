@@ -54,7 +54,7 @@ export class WebhookController {
   @ApiBody({ type: UpdateWebhookDto })
   @ApiOkResponse({
     description: 'The updated subscription; an empty body when the id is unknown.',
-    schema: ref('WebhookRecord')
+    schema: { allOf: [ref('WebhookRecord')], nullable: true }
   })
   async updateWebhook(
     @Param('id', new ParseUUIDPipe()) id: string,
