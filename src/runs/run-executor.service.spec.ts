@@ -645,6 +645,63 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
   // execute() observer flow (tested indirectly via launch)
   // =========================================================================
   describe('execute (via launch)', () => {
+    const openSession = () =>
+      mockProvider.getSession.mockResolvedValue({
+        sessionId: 'sess-h',
+        state: 'SESSION_STATE_OPEN',
+        mode: 'decision',
+        initiator: 'agent-1'
+      });
+
+    // subscribeSession opens its StreamSession call eagerly. Until StreamConsumerService takes the
+    // handle, RunExecutor owns it and must abort it, or it keeps the runtime socket open past shutdown.
+    it('aborts a subscribed handle when shutdown lands before the stream consumer takes it', async () => {
+      const handle = makeReadOnlyHandle();
+      mockProvider.subscribeSession.mockReturnValue(handle);
+      openSession();
+      let releaseMarkRunning!: () => void;
+      mockRunManager.markRunning.mockReturnValue(
+        new Promise((r) => (releaseMarkRunning = () => r(makeRun({ status: 'running' }))))
+      );
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-h' }));
+
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 100));
+      expect(mockProvider.subscribeSession).toHaveBeenCalled();
+      expect(handle.abort).not.toHaveBeenCalled();
+
+      service.onModuleDestroy();
+      expect(handle.abort).toHaveBeenCalledTimes(1);
+      releaseMarkRunning();
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    it('aborts the subscribed handle when markRunning fails', async () => {
+      const handle = makeReadOnlyHandle();
+      mockProvider.subscribeSession.mockReturnValue(handle);
+      openSession();
+      mockRunManager.markRunning.mockRejectedValue(new Error('db down'));
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-f' }));
+
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 100));
+      expect(handle.abort).toHaveBeenCalled();
+      expect(mockStreamConsumer.start).not.toHaveBeenCalled();
+    });
+
+    it('leaves the handle alone once the stream consumer has taken it', async () => {
+      const handle = makeReadOnlyHandle();
+      mockProvider.subscribeSession.mockReturnValue(handle);
+      openSession();
+      mockRunManager.createRun.mockResolvedValue(makeRun({ id: 'run-o' }));
+
+      await service.launch(makeRunDescriptor());
+      await new Promise((r) => setTimeout(r, 100));
+      expect(mockStreamConsumer.start).toHaveBeenCalledWith(expect.objectContaining({ sessionHandle: handle }));
+      service.onModuleDestroy();
+      expect(handle.abort).not.toHaveBeenCalled();
+    });
+
     it('marks run failed when runtime mode is not supported', async () => {
       mockProvider.initialize.mockResolvedValue({
         selectedProtocolVersion: '1.0',

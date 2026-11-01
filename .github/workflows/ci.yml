@@ -138,6 +138,9 @@ jobs:
   live-runtime:
     runs-on: ubuntu-latest
     needs: [test]
+    # Both legs finish in ~2 min; a hang (e.g. an uncancelled gRPC stream keeping jest alive)
+    # must fail fast, not burn the 6 h default.
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: read

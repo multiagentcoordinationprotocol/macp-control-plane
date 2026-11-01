@@ -111,6 +111,20 @@ describe('RustRuntimeProvider.subscribeSession — passive-subscribe frame (RFC-
     runtimeSessionId: 'sess-abc'
   };
 
+  it('cancels the call when abort() ran while credentials were still resolving', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream);
+
+    const handle = provider.subscribeSession(baseReq);
+    handle.abort(); // before launch() has created the call
+    await new Promise((r) => setImmediate(r));
+
+    // The call was still created (launch was already past its guard), so it must be cancelled,
+    // not left open: an uncancelled StreamSession keeps the channel's socket alive after close().
+    expect(stream.cancel).toHaveBeenCalled();
+    expect(stream.write).not.toHaveBeenCalled();
+  });
+
   it('writes a single passive-subscribe frame with afterSequence=0 (default) and keeps the write side open', async () => {
     const stream = makeFakeStream();
     const { provider } = makeProvider(() => stream);
