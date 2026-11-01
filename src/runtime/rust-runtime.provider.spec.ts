@@ -125,6 +125,18 @@ describe('RustRuntimeProvider.subscribeSession — passive-subscribe frame (RFC-
     expect(stream.write).not.toHaveBeenCalled();
   });
 
+  it('cancels the call when the events iterator was returned while credentials were still resolving', async () => {
+    const stream = makeFakeStream();
+    const { provider } = makeProvider(() => stream);
+
+    const handle = provider.subscribeSession(baseReq);
+    await handle.events[Symbol.asyncIterator]().return!(); // e.g. an idle timeout, before launch()
+    await new Promise((r) => setImmediate(r));
+
+    expect(stream.cancel).toHaveBeenCalled();
+    expect(stream.write).not.toHaveBeenCalled();
+  });
+
   it('writes a single passive-subscribe frame with afterSequence=0 (default) and keeps the write side open', async () => {
     const stream = makeFakeStream();
     const { provider } = makeProvider(() => stream);

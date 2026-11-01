@@ -41,11 +41,11 @@ export class StreamConsumerService implements OnModuleDestroy {
   private readonly logger = new Logger(StreamConsumerService.name);
   private readonly active = new Map<string, ActiveStream>();
   /**
-   * True while onModuleDestroy runs: a start() that lands mid-sweep must not register a stream
+   * Non-zero while onModuleDestroy runs: a start() that lands mid-sweep must not register a stream
    * nobody will abort. Scoped to the sweep, not sticky, because the integration harness calls
    * onModuleDestroy between tests and then reuses the service.
    */
-  private shuttingDown = false;
+  private sweeps = 0;
 
   constructor(
     private readonly runtimeRegistry: RuntimeProviderRegistry,
@@ -60,11 +60,11 @@ export class StreamConsumerService implements OnModuleDestroy {
   ) {}
 
   async onModuleDestroy(): Promise<void> {
-    this.shuttingDown = true;
+    this.sweeps += 1; // a counter, so overlapping sweeps keep the window open until the last ends
     try {
       await this.abortAllAndDrain();
     } finally {
-      this.shuttingDown = false;
+      this.sweeps -= 1;
     }
   }
 
@@ -131,10 +131,9 @@ export class StreamConsumerService implements OnModuleDestroy {
     // subscribeSession opens its StreamSession call eagerly, so a handle this method does not
     // take ownership of must be aborted here: an uncancelled call keeps its HTTP/2 stream, and so
     // the runtime channel's socket, open past client.close(), and the process never exits.
-    // - Already streaming this run (RunExecutor and session discovery both start it when
-    //   discovery is on).
+    // - Already streaming this run (a duplicate start from another path, e.g. run recovery).
     // - Shutting down: onModuleDestroy is sweeping `active`, so nothing would abort it.
-    if (this.active.has(params.runId) || this.shuttingDown) {
+    if (this.active.has(params.runId) || this.sweeps > 0) {
       params.sessionHandle?.abort();
       return;
     }

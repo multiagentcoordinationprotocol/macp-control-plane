@@ -674,6 +674,9 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       expect(handle.abort).toHaveBeenCalledTimes(1);
       releaseMarkRunning();
       await new Promise((r) => setTimeout(r, 20));
+      // The dead handle must not reach the consumer, which would resubscribe after shutdown.
+      expect(mockStreamConsumer.start).not.toHaveBeenCalled();
+      expect(mockRunManager.markFailed).not.toHaveBeenCalled(); // left for run-recovery
     });
 
     it('aborts the subscribed handle when markRunning fails', async () => {

@@ -447,6 +447,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit, OnMod
             }
           },
           async return(): Promise<IteratorResult<RawRuntimeEvent>> {
+            // Mark ended too, so a launch() still resolving credentials cancels the call it creates.
+            ended = true;
             if (grpcCall) {
               try {
                 grpcCall.cancel();

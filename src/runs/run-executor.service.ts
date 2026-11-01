@@ -390,6 +390,10 @@ export class RunExecutorService implements OnModuleDestroy {
       let run: Awaited<ReturnType<RunManagerService['markRunning']>>;
       try {
         run = await this.runManager.markRunning(runId, sessionId, snapshot.state);
+        // Shutdown landed during markRunning and has already aborted the handle. Handing the
+        // dead handle on would let the consumer treat its end as a disconnect and resubscribe
+        // after shutdown. Leave the run non-terminal; run-recovery resumes it on restart.
+        if (this.shuttingDown) return;
         const subscriberId = snapshot.initiator ?? '';
 
         // start() takes ownership of the handle (or aborts it when it cannot).
@@ -403,7 +407,11 @@ export class RunExecutorService implements OnModuleDestroy {
           pollOnly: alreadyResolved
         });
       } catch (err) {
-        handle?.abort();
+        try {
+          handle?.abort();
+        } catch {
+          /* keep the original error */
+        }
         throw err;
       } finally {
         if (handle) this.unownedHandles.delete(handle);
