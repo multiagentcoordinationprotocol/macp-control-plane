@@ -32,6 +32,6 @@ export function toWebhookView(row: WebhookRow): WebhookView {
     active: row.active,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    hasSecret: typeof row.secret === 'string' && row.secret.length > 0
+    hasSecret: row.secret.length > 0
   };
 }
