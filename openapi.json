@@ -768,8 +768,9 @@
             "type": "array"
           },
           "secret": {
-            "description": "Secret used for HMAC-SHA256 signature verification",
-            "type": "string"
+            "description": "Secret used for HMAC-SHA256 signature verification. Write-only: never returned; responses carry `hasSecret` instead.",
+            "type": "string",
+            "writeOnly": true
           },
           "url": {
             "description": "URL to receive webhook POST requests",
@@ -2994,8 +2995,9 @@
             "type": "array"
           },
           "secret": {
-            "description": "HMAC-SHA256 signing secret",
-            "type": "string"
+            "description": "HMAC-SHA256 signing secret. Write-only: never returned; responses carry `hasSecret` instead.",
+            "type": "string",
+            "writeOnly": true
           },
           "url": {
             "description": "Webhook delivery URL",
@@ -3090,8 +3092,8 @@
         ],
         "type": "object"
       },
-      "WebhookRecord": {
-        "description": "A row of `webhooks` as stored (src/db/schema.ts).",
+      "WebhookView": {
+        "description": "A webhook subscription as the API returns it (#140).\n\nThe HMAC signing secret is write-only: it is accepted on create and update, used to sign deliveries, and never returned. `hasSecret` says whether one is stored.",
         "properties": {
           "active": {
             "type": "boolean"
@@ -3100,12 +3102,19 @@
             "description": "Postgres timestamptz text, e.g. `2026-11-01 12:34:56.789+00`.",
             "type": "string"
           },
-          "events": {},
+          "events": {
+            "description": "Event types the subscription receives. Empty = all events.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "hasSecret": {
+            "description": "True when a signing secret is stored. The secret itself is never returned.",
+            "type": "boolean"
+          },
           "id": {
             "format": "uuid",
-            "type": "string"
-          },
-          "secret": {
             "type": "string"
           },
           "updatedAt": {
@@ -3120,10 +3129,10 @@
           "id",
           "url",
           "events",
-          "secret",
           "active",
           "createdAt",
-          "updatedAt"
+          "updatedAt",
+          "hasSecret"
         ],
         "type": "object"
       },
@@ -7381,7 +7390,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/WebhookRecord"
+                    "$ref": "#/components/schemas/WebhookView"
                   },
                   "type": "array"
                 }
@@ -7443,7 +7452,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WebhookRecord"
+                  "$ref": "#/components/schemas/WebhookView"
                 }
               }
             },
@@ -7568,7 +7577,7 @@
                 "schema": {
                   "allOf": [
                     {
-                      "$ref": "#/components/schemas/WebhookRecord"
+                      "$ref": "#/components/schemas/WebhookView"
                     }
                   ],
                   "nullable": true

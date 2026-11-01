@@ -63,6 +63,9 @@ describe('Webhook Delivery (integration)', () => {
       body: { url: receiver.url, events, secret },
     })) as any;
     expect(webhook.id).toBeDefined();
+    // #140: the signing secret is write-only.
+    expect(webhook).not.toHaveProperty('secret');
+    expect(webhook.hasSecret).toBe(true);
     return webhook;
   }
 
@@ -77,6 +80,19 @@ describe('Webhook Delivery (integration)', () => {
     );
     return runId;
   }
+
+  it('GET /webhooks never returns the signing secret (#140)', async () => {
+    const created = await registerWebhook(['run.completed'], 'list-check-secret');
+    const listed = (await ctx.client.request('GET', '/webhooks')) as any[];
+    const mine = listed.find((w) => w.id === created.id);
+    expect(mine).toBeDefined();
+    for (const w of listed) {
+      expect(w).not.toHaveProperty('secret');
+      expect(typeof w.hasSecret).toBe('boolean');
+    }
+    expect(mine.hasSecret).toBe(true);
+    expect(JSON.stringify(listed)).not.toContain('list-check-secret');
+  });
 
   it('wildcard webhook receives run.started and run.completed with X-MACP-Event header', async () => {
     await registerWebhook([]);
@@ -163,6 +179,8 @@ describe('Webhook Delivery (integration)', () => {
         body: { active: false },
       })) as any;
       expect(patched.active).toBe(false);
+      expect(patched).not.toHaveProperty('secret');
+      expect(patched.hasSecret).toBe(true);
 
       const control = (await ctx.client.request('POST', '/webhooks', {
         body: { url: controlReceiver.url, events: [], secret: 'control-secret' },
