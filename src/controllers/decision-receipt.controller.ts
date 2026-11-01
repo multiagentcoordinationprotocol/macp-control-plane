@@ -1,7 +1,16 @@
 import { Controller, Get, Param, ParseUUIDPipe, Res } from '@nestjs/common';
-import { ApiOperation, ApiProduces, ApiTags } from '@nestjs/swagger';
+import {
+  ApiConflictResponse,
+  ApiNotFoundResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiProduces,
+  ApiResponse,
+  ApiTags
+} from '@nestjs/swagger';
 import type { Response } from 'express';
 import { DecisionReceiptService } from '../receipts/decision-receipt.service';
+import { ref } from '../openapi/schemas';
 
 /** Media type of a JWK Set (RFC 7517 §8.5.1). */
 export const JWK_SET_MEDIA_TYPE = 'application/jwk-set+json';
@@ -21,6 +30,10 @@ export class DecisionReceiptController {
       'predates 0.11; 409 RECEIPT_UNAVAILABLE when the session is not RESOLVED by a Commitment; 404 ' +
       'RUN_NOT_FOUND / NOT_FOUND (no session yet, or the runtime does not know it).'
   })
+  @ApiOkResponse({ schema: ref('DecisionReceiptView') })
+  @ApiNotFoundResponse({ description: 'RUN_NOT_FOUND or NOT_FOUND.', schema: ref('ErrorResponse') })
+  @ApiConflictResponse({ description: 'RECEIPT_UNAVAILABLE.', schema: ref('ErrorResponse') })
+  @ApiResponse({ status: 501, description: 'DECISION_RECEIPT_UNSUPPORTED.', schema: ref('ErrorResponse') })
   async getReceipt(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.receipts.getReceipt(id);
   }
@@ -35,6 +48,19 @@ export class DecisionReceiptController {
       'has none. Cacheable for a short TTL (`Cache-Control: private, max-age=<=60`). 501 ' +
       'DECISION_RECEIPT_UNSUPPORTED when the runtime predates 0.11.'
   })
+  @ApiOkResponse({
+    description: 'A JWK Set (RFC 7517).',
+    content: {
+      [JWK_SET_MEDIA_TYPE]: {
+        schema: {
+          type: 'object',
+          required: ['keys'],
+          properties: { keys: { type: 'array', items: { type: 'object' } } }
+        }
+      }
+    }
+  })
+  @ApiResponse({ status: 501, description: 'DECISION_RECEIPT_UNSUPPORTED.', schema: ref('ErrorResponse') })
   async getReceiptKeys(@Res({ passthrough: true }) res: Response): Promise<string> {
     const { jwksJson, maxAgeSeconds } = await this.receipts.getReceiptKeys();
     res.setHeader('Content-Type', `${JWK_SET_MEDIA_TYPE}; charset=utf-8`);

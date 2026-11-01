@@ -83,6 +83,26 @@ jobs:
           path: coverage/
           retention-days: 7
 
+  # #112: openapi.json is generated from the controllers and committed. Regenerate it (no database or
+  # runtime needed: Nest preview mode) and fail on any byte difference. Fix: npm run openapi:export.
+  openapi:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+          scope: '@multiagentcoordinationprotocol'
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: npm run openapi:check
+
   integration-test:
     runs-on: ubuntu-latest
     needs: [test]
@@ -280,7 +300,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test, check-env-secrets, conventions]
+    needs: [lint, typecheck, test, openapi, check-env-secrets, conventions]
     permissions:
       contents: read
       packages: read

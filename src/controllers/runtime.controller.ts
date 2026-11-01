@@ -1,6 +1,6 @@
 import { PolicyRulesValidatorService } from '../policy/policy-rules-validator.service';
 import { BadRequestException, Body, Controller, Delete, Get, HttpStatus, Param, Post, Query } from '@nestjs/common';
-import { ApiBody, ApiOkResponse, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { ApiBody, ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { AppConfigService } from '../config/app-config.service';
 import { AppException } from '../errors/app-exception';
 import { ErrorCode } from '../errors/error-codes';
@@ -16,6 +16,7 @@ import {
 import { macpErrorCodeOf } from '../runtime/grpc-helpers';
 import { RuntimeCapabilitiesService } from '../runtime/runtime-capabilities.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
+import { ref } from '../openapi/schemas';
 import { DEFAULT_POLICY_SCHEMA_VERSION, POLICY_SCHEMA_VERSIONS, PolicySchemaVersion } from '../contracts/runtime';
 
 @ApiTags('runtime')
@@ -57,6 +58,7 @@ export class RuntimeController {
       '`POST /runs/:id/what-if`, `capabilities.decisionReceipt.getDecisionReceipt` for ' +
       '`GET /runs/:id/receipt` and `GET /runtime/receipt-keys`. Absent flags mean unsupported.'
   })
+  @ApiOkResponse({ schema: ref('RuntimeCapabilitiesResult') })
   async getCapabilities() {
     const init = await this.runtimeCapabilities.refresh(this.runtimeRegistry.get(this.config.runtimeKind));
     return {
@@ -78,8 +80,8 @@ export class RuntimeController {
 
   @Post('policies')
   @ApiOperation({ summary: 'Register a governance policy with the runtime.' })
-  @ApiBody({ description: 'Policy descriptor with rules' })
-  @ApiOkResponse({ type: RuntimeRegisterPolicyResultDto })
+  @ApiBody({ description: 'Policy descriptor with rules', schema: ref('PolicyRegistrationRequest') })
+  @ApiCreatedResponse({ type: RuntimeRegisterPolicyResultDto })
   async registerPolicy(
     @Body()
     body: {

@@ -10,10 +10,18 @@ import {
   Post,
   ValidationPipe
 } from '@nestjs/common';
-import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBody,
+  ApiCreatedResponse,
+  ApiNoContentResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags
+} from '@nestjs/swagger';
 import { CreateWebhookDto } from '../dto/webhook.dto';
 import { UpdateWebhookDto } from '../dto/update-webhook.dto';
 import { WebhookService } from '../webhooks/webhook.service';
+import { arrayOf, ref } from '../openapi/schemas';
 
 @ApiTags('webhooks')
 @Controller('webhooks')
@@ -23,6 +31,7 @@ export class WebhookController {
   @Post()
   @ApiOperation({ summary: 'Register a new webhook subscription.' })
   @ApiBody({ type: CreateWebhookDto })
+  @ApiCreatedResponse({ schema: ref('WebhookRecord') })
   async createWebhook(
     @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CreateWebhookDto
   ) {
@@ -35,6 +44,7 @@ export class WebhookController {
 
   @Get()
   @ApiOperation({ summary: 'List all webhook subscriptions.' })
+  @ApiOkResponse({ schema: arrayOf('WebhookRecord') })
   async listWebhooks() {
     return this.webhookService.list();
   }
@@ -42,6 +52,10 @@ export class WebhookController {
   @Patch(':id')
   @ApiOperation({ summary: 'Update a webhook subscription (URL, events, active toggle).' })
   @ApiBody({ type: UpdateWebhookDto })
+  @ApiOkResponse({
+    description: 'The updated subscription; an empty body when the id is unknown.',
+    schema: { allOf: [ref('WebhookRecord')], nullable: true }
+  })
   async updateWebhook(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) body: UpdateWebhookDto
@@ -52,6 +66,7 @@ export class WebhookController {
   @Delete(':id')
   @HttpCode(204)
   @ApiOperation({ summary: 'Remove a webhook subscription.' })
+  @ApiNoContentResponse({ description: 'Removed (also when the id is unknown).' })
   async deleteWebhook(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.webhookService.remove(id);
   }

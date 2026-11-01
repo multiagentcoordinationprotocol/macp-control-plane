@@ -1,6 +1,7 @@
 import { Controller, Get, Param, ParseUUIDPipe } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CommitmentVerificationService } from '../verification/commitment-verification.service';
+import { ref } from '../openapi/schemas';
 
 @ApiTags('runs')
 @Controller('runs')
@@ -15,6 +16,7 @@ export class VerificationController {
       'RFC-MACP-0013 §6.1 verifier on the bytes, and checks the projected decision matches. ' +
       '`status` is `pending` until the run has a Commitment.'
   })
+  @ApiOkResponse({ schema: ref('RunVerification') })
   async getVerification(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.verification.verify(id);
   }

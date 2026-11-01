@@ -1,7 +1,8 @@
 import { Controller, Get, Query, ValidationPipe } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuditService } from '../audit/audit.service';
 import { ListAuditQueryDto } from '../dto/list-audit-query.dto';
+import { ref } from '../openapi/schemas';
 
 @ApiTags('audit')
 @Controller('audit')
@@ -10,6 +11,7 @@ export class AuditController {
 
   @Get()
   @ApiOperation({ summary: 'List audit log entries with optional filtering.' })
+  @ApiOkResponse({ schema: ref('AuditLogPage') })
   async listAuditLogs(@Query(new ValidationPipe({ transform: true, whitelist: true })) query: ListAuditQueryDto) {
     return this.auditService.list({
       actor: query.actor,

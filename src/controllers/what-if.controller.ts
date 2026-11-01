@@ -1,7 +1,8 @@
 import { Body, Controller, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, ValidationPipe } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiConflictResponse, ApiOkResponse, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { WhatIfReplayRequestDto } from '../dto/what-if-replay.dto';
 import { WhatIfReplayService } from '../what-if/what-if-replay.service';
+import { ref } from '../openapi/schemas';
 
 @ApiTags('runs')
 @Controller('runs')
@@ -18,6 +19,9 @@ export class WhatIfController {
       '501 WHAT_IF_REPLAY_UNSUPPORTED when the runtime predates 0.10; 409 HISTORY_UNAVAILABLE when ' +
       "the runtime compacted the ended session's log."
   })
+  @ApiOkResponse({ schema: ref('WhatIfReplayView') })
+  @ApiConflictResponse({ description: 'HISTORY_UNAVAILABLE.', schema: ref('ErrorResponse') })
+  @ApiResponse({ status: 501, description: 'WHAT_IF_REPLAY_UNSUPPORTED.', schema: ref('ErrorResponse') })
   async replay(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))

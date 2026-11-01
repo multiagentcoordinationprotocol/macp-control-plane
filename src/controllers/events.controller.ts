@@ -1,7 +1,8 @@
 import { Controller, Get, Query, ValidationPipe } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ListCrossRunEventsQueryDto } from '../dto/list-events-query.dto';
 import { EventRepository } from '../storage/event.repository';
+import { ref } from '../openapi/schemas';
 
 @ApiTags('events')
 @Controller('events')
@@ -11,6 +12,10 @@ export class EventsController {
   @Get()
   @ApiOperation({
     summary: 'Cross-run canonical events with filters (§4.1).'
+  })
+  @ApiOkResponse({
+    description: 'With scenarioRef, rows are selected column by column and omit `createdAt`.',
+    schema: ref('CanonicalEventRecordCursorPage')
   })
   async listEvents(@Query(new ValidationPipe({ transform: true, whitelist: true })) query: ListCrossRunEventsQueryDto) {
     const { data, total } = await this.eventRepository.listCanonicalFiltered({

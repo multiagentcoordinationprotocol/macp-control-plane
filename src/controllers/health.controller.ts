@@ -1,5 +1,5 @@
 import { Controller, Get, HttpStatus, Res } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiOperation, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Public } from '../auth/public.decorator';
 import { DatabaseService } from '../db/database.service';
@@ -7,6 +7,7 @@ import { AppConfigService } from '../config/app-config.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { RustRuntimeProvider } from '../runtime/rust-runtime.provider';
 import { StreamConsumerService } from '../runs/stream-consumer.service';
+import { ref } from '../openapi/schemas';
 
 @ApiTags('health')
 @Controller()
@@ -26,6 +27,7 @@ export class HealthController {
   // probe by timing out. Orchestrators that need "can serve" use /readyz.
   @Get('healthz')
   @ApiOperation({ summary: 'Liveness probe. Always 200 while the process is up; `ok` is informational.' })
+  @ApiOkResponse({ schema: ref('Liveness') })
   async healthz() {
     let dbOk = true;
     try {
@@ -41,6 +43,8 @@ export class HealthController {
   @ApiOperation({
     summary: 'Readiness probe checking Postgres and runtime connectivity. 503 with the same body when ok is false.'
   })
+  @ApiOkResponse({ schema: ref('Readiness') })
+  @ApiServiceUnavailableResponse({ description: 'Not ready; same body with ok=false.', schema: ref('Readiness') })
   async readyz(@Res({ passthrough: true }) res: Response) {
     let dbOk = false;
     try {
