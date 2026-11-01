@@ -24,7 +24,9 @@
     "drizzle:generate": "drizzle-kit generate",
     "drizzle:migrate": "drizzle-kit migrate",
     "drizzle:studio": "drizzle-kit studio",
-    "dev:link-protos": "cd ../multiagentcoordinationprotocol/packages/proto-npm && npm link && cd - && npm link @multiagentcoordinationprotocol/proto"
+    "dev:link-protos": "cd ../multiagentcoordinationprotocol/packages/proto-npm && npm link && cd - && npm link @multiagentcoordinationprotocol/proto",
+    "openapi:export": "ts-node scripts/openapi-export.ts",
+    "openapi:check": "ts-node scripts/openapi-export.ts --check"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.0",
@@ -74,6 +76,7 @@
     "prettier": "^3.5.3",
     "supertest": "^7.0.0",
     "ts-jest": "^29.3.4",
+    "ts-json-schema-generator": "2.9.0",
     "ts-loader": "^9.5.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"

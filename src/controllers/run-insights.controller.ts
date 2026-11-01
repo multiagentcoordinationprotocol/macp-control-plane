@@ -1,12 +1,13 @@
 import { Body, Controller, Get, Header, Param, ParseUUIDPipe, Post, Query, Res, ValidationPipe } from '@nestjs/common';
 import type { Response } from 'express';
-import { ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBody, ApiCreatedResponse, ApiOkResponse, ApiOperation, ApiProduces, ApiTags } from '@nestjs/swagger';
 import { CompareRunsDto } from '../dto/compare-runs.dto';
 import { ExportRunQueryDto } from '../dto/export-run-query.dto';
 import { RunBundleExportDto, RunComparisonResultDto } from '../dto/run-responses.dto';
 import { RunInsightsService } from '../insights/run-insights.service';
 import { RunExecutorService } from '../runs/run-executor.service';
 import { RunManagerService } from '../runs/run-manager.service';
+import { ref } from '../openapi/schemas';
 
 @ApiTags('runs')
 @Controller('runs')
@@ -19,7 +20,10 @@ export class RunInsightsController {
 
   @Get(':id/export')
   @ApiOperation({ summary: 'Export a full run bundle (run, session, projection, events, artifacts).' })
-  @ApiOkResponse({ type: RunBundleExportDto })
+  @ApiOkResponse({
+    type: RunBundleExportDto,
+    description: 'With format=jsonl the body is the same bundle as JSONL text.'
+  })
   async exportRun(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Query(new ValidationPipe({ transform: true, whitelist: true })) query: ExportRunQueryDto
@@ -42,6 +46,11 @@ export class RunInsightsController {
   @Get(':id/export/stream')
   @ApiOperation({ summary: 'Stream export as JSONL (newline-delimited JSON).' })
   @Header('Content-Type', 'application/x-ndjson')
+  @ApiProduces('application/x-ndjson')
+  @ApiOkResponse({
+    description: 'One JSON object per line.',
+    content: { 'application/x-ndjson': { schema: { type: 'string' } } }
+  })
   async streamExport(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Query(new ValidationPipe({ transform: true, whitelist: true })) query: ExportRunQueryDto,
@@ -60,7 +69,7 @@ export class RunInsightsController {
   @Post('compare')
   @ApiOperation({ summary: 'Compare two runs side-by-side.' })
   @ApiBody({ type: CompareRunsDto })
-  @ApiOkResponse({ type: RunComparisonResultDto })
+  @ApiCreatedResponse({ type: RunComparisonResultDto })
   async compareRuns(
     @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CompareRunsDto
   ) {
@@ -69,6 +78,8 @@ export class RunInsightsController {
 
   @Post('batch/cancel')
   @ApiOperation({ summary: 'Cancel multiple runs in batch.' })
+  @ApiBody({ schema: ref('RunIdsRequest') })
+  @ApiCreatedResponse({ schema: ref('BatchCancelResult') })
   async batchCancel(@Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }) {
     const results = await Promise.allSettled(body.runIds.map((id) => this.runExecutor.cancel(id, 'batch cancel')));
     return results.map((result, index) => ({
@@ -85,6 +96,8 @@ export class RunInsightsController {
 
   @Post('batch/export')
   @ApiOperation({ summary: 'Export multiple runs in batch.' })
+  @ApiBody({ schema: ref('RunIdsRequest') })
+  @ApiCreatedResponse({ type: [RunBundleExportDto] })
   async batchExport(@Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }) {
     return Promise.all(
       body.runIds.map((id) => this.insightsService.exportRun(id, { includeCanonical: true, includeRaw: false }))
@@ -93,6 +106,8 @@ export class RunInsightsController {
 
   @Post('batch/archive')
   @ApiOperation({ summary: 'Archive multiple runs in batch.' })
+  @ApiBody({ schema: ref('RunIdsRequest') })
+  @ApiCreatedResponse({ schema: ref('BatchArchiveResult') })
   async batchArchive(@Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }) {
     const results = await Promise.allSettled(body.runIds.map((id) => this.runManager.archiveRun(id)));
     return results.map((result, index) => ({
@@ -109,6 +124,8 @@ export class RunInsightsController {
 
   @Post('batch/delete')
   @ApiOperation({ summary: 'Delete multiple terminal runs in batch.' })
+  @ApiBody({ schema: ref('RunIdsRequest') })
+  @ApiCreatedResponse({ schema: ref('BatchDeleteResult') })
   async batchDelete(@Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }) {
     const results = await Promise.allSettled(body.runIds.map((id) => this.runManager.deleteRun(id)));
     return results.map((result, index) => ({

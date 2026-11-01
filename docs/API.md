@@ -1,6 +1,13 @@
 # MACP Control Plane — API Reference
 
-The generated OpenAPI schema is exposed at `/docs` (Swagger UI) and `/docs-json` (raw schema) when `NODE_ENV=development`.
+The machine-readable description of every route is [`openapi.json`](../openapi.json) at the repository root (OpenAPI 3.0), generated from the controllers and committed. Regenerate it with `npm run openapi:export` after changing a route, a response decorator, or the `package.json` version; CI's `openapi` job runs `npm run openapi:check` and fails on any difference. No database or runtime is needed.
+
+When `NODE_ENV=development` the same file is served at `/docs` (Swagger UI) and `/docs-json` (raw). It is not served in production.
+
+Conventions in the document:
+- `components.schemas` mixes three sources: the `@ApiProperty` DTOs in `src/dto/`, TS interfaces such as `RunStateProjection` (from `src/contracts/control-plane.ts` and service view types, listed in `src/openapi/schemas.ts`), and `*Record` schemas, which are database rows exactly as `src/db/schema.ts` stores them.
+- Every operation has a `default` `ErrorResponse`; authenticated ones also list `401`, and all list `429`.
+- SSE operations (`GET /runs/{id}/stream`, `GET /runs/{id}/replay/stream`) declare `text/event-stream` and map each event name to its payload schema in `x-macp-sse-events`.
 
 ## Authentication
 

@@ -1,12 +1,12 @@
 import 'reflect-metadata';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import * as express from 'express';
 import { AppModule } from './app.module';
 import { PinoLogger } from './common/pino-logger';
 import { AppConfigService } from './config/app-config.service';
 import { runMigrations } from './db/migrate';
+import { setupApiDocs } from './openapi/serve-docs';
 import { GlobalExceptionFilter } from './errors/exception.filter';
 import { startTelemetry, stopTelemetry } from './telemetry/telemetry';
 
@@ -35,16 +35,7 @@ async function bootstrap() {
     })
   );
 
-  if (config.isDevelopment) {
-    const swagger = new DocumentBuilder()
-      .setTitle('MACP Control Plane')
-      .setDescription('Scenario-agnostic execution and observability plane for the MACP runtime')
-      .setVersion('0.1.0')
-      .addBearerAuth()
-      .build();
-    const document = SwaggerModule.createDocument(app, swagger);
-    SwaggerModule.setup('docs', app, document);
-  }
+  setupApiDocs(app, config.isDevelopment);
 
   app.enableShutdownHooks();
 

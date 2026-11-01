@@ -16,7 +16,8 @@
 ```
 lint ─┐
 typecheck ─┤
-test (unit + coverage) ─┼→ build → docker (every PR: build-only; main: push to GHCR + Trivy CRITICAL gate)
+test (unit + coverage) ─┤
+openapi (openapi.json is current) ─┼→ build → docker (every PR: build-only; main: push to GHCR + Trivy CRITICAL gate)
 audit (npm audit, prod deps, high+) ─┤
 check-env-secrets ─┤
 conventions (CLAUDE.md grep sweeps) ─┘
@@ -24,6 +25,7 @@ test → integration-test (postgres:16 service on 5433, mock runtime)
 test → live-runtime (matrix: signed | unsigned receipts; macp-runtime:0.12.0 via test/scripts/start-live-runtime.sh; decision-receipt-live + what-if-replay-live)
 ```
 
+- **openapi**: `npm run openapi:check` regenerates `openapi.json` from the controllers (Nest preview mode, no database or runtime) and fails on any byte difference. Fix with `npm run openapi:export` and commit. A `package.json` version bump needs it too, since `info.version` follows it.
 - **Concurrency**: superseded PR runs are cancelled; `main` pushes never are (a killed docker job could leave a partial `latest` tag).
 - **Node version** comes from `.nvmrc` everywhere (`node-version-file`) — one place to bump.
 - **Coverage** is reported in the job step-summary and uploaded as an artifact; there is deliberately no blocking threshold.
@@ -32,7 +34,7 @@ test → live-runtime (matrix: signed | unsigned receipts; macp-runtime:0.12.0 v
 
 ## Releases
 
-1. Bump `version` in `package.json` (the release workflow warns on tag/package.json drift).
+1. Bump `version` in `package.json` (the release workflow warns on tag/package.json drift) and run `npm run openapi:export` in the same commit.
 2. `git tag v0.6.0 && git push origin v0.6.0`
 3. The workflow builds the image, scans it with Trivy (`CRITICAL`, `ignore-unfixed`) **before** anything reaches the registry, then pushes a multi-arch (`linux/amd64` + `linux/arm64`, arm64 via QEMU) image as `v0.6.0`, `v0.6`, `0.6.0`, `0.6`, and `latest` (pre-release tags like `v0.6.0-rc.1` skip `latest` and are marked pre-release), and creates a GitHub Release with generated notes.
 

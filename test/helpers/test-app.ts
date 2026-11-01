@@ -63,7 +63,8 @@ const TEST_DB_URL =
  *   - "remote" — uses real RustRuntimeProvider, expects runtime at RUNTIME_ADDRESS
  */
 export async function createTestApp(
-  script?: RuntimeScript
+  script?: RuntimeScript,
+  options: { beforeListen?: (app: INestApplication) => void } = {}
 ): Promise<TestAppContext> {
   const runtimeMode = (process.env.INTEGRATION_RUNTIME ?? 'mock') as
     | 'mock'
@@ -138,6 +139,7 @@ export async function createTestApp(
     })
   );
 
+  options.beforeListen?.(app);
   await app.listen(0);
   const url = await app.getUrl();
 

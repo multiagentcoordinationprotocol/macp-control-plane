@@ -1,11 +1,12 @@
 import { Controller, Get, HttpCode, HttpException, HttpStatus, Post, Query } from '@nestjs/common';
-import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiOperation, ApiQuery, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import { RustRuntimeProvider } from '../runtime/rust-runtime.provider';
 import { CIRCUIT_BREAKER_OPEN_MESSAGE } from '../runtime/circuit-breaker';
 import { RunRepository } from '../storage/run.repository';
 import { AppException } from '../errors/app-exception';
 import { ErrorCode } from '../errors/error-codes';
 import { RuntimeListSessionsResult } from '../contracts/runtime';
+import { ref } from '../openapi/schemas';
 
 @ApiTags('admin')
 @Controller('admin')
@@ -18,6 +19,7 @@ export class AdminController {
   @Post('circuit-breaker/reset')
   @HttpCode(200)
   @ApiOperation({ summary: 'Manually reset the circuit breaker to CLOSED state.' })
+  @ApiOkResponse({ schema: ref('CircuitBreakerReset') })
   resetCircuitBreaker() {
     this.rustRuntime.resetCircuitBreaker();
     return { status: 'ok', state: 'CLOSED' };
@@ -32,6 +34,7 @@ export class AdminController {
     description: 'Named window; events before the cutoff are excluded.'
   })
   @ApiQuery({ name: 'since', required: false, description: 'ISO-8601 timestamp cutoff (overrides window).' })
+  @ApiOkResponse({ schema: ref('CircuitBreakerHistory') })
   getCircuitBreakerHistory(@Query('window') window?: string, @Query('since') since?: string) {
     const cutoff = since ?? windowToIso(window);
     return {
@@ -44,6 +47,11 @@ export class AdminController {
   @ApiOperation({
     summary:
       'Drift detection (read-only): diff the live runtime session list against locally-tracked active runs. Does not auto-reconcile.'
+  })
+  @ApiOkResponse({ schema: ref('RuntimeSessionDrift') })
+  @ApiServiceUnavailableResponse({
+    description: 'CIRCUIT_BREAKER_OPEN, or the runtime is unreachable.',
+    schema: ref('ErrorResponse')
   })
   async getRuntimeSessionDrift() {
     let result: RuntimeListSessionsResult;

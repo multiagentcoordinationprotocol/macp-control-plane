@@ -2,6 +2,7 @@ import { Controller, Get, Query, ValidationPipe } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { DashboardOverviewDto, DashboardOverviewQueryDto } from '../dto/dashboard-overview.dto';
 import { DashboardService } from '../dashboard/dashboard.service';
+import { ref } from '../openapi/schemas';
 
 @ApiTags('dashboard')
 @Controller('dashboard')
@@ -28,6 +29,7 @@ export class DashboardController {
 
   @Get('agents/metrics')
   @ApiOperation({ summary: 'Aggregated per-agent metrics from canonical events.' })
+  @ApiOkResponse({ schema: ref('AgentMetrics') })
   async getAgentMetrics() {
     return this.dashboardService.getAgentMetrics();
   }

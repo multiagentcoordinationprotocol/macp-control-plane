@@ -7,6 +7,7 @@ import { RunEventService } from '../events/run-event.service';
 import { MetricsService } from '../metrics/metrics.service';
 import { ProjectionService } from '../projection/projection.service';
 import { RunManagerService } from '../runs/run-manager.service';
+import { arrayOf, ref } from '../openapi/schemas';
 
 @ApiTags('observability')
 @Controller()
@@ -21,6 +22,7 @@ export class ObservabilityController {
 
   @Get('runs/:id/traces')
   @ApiOperation({ summary: 'Fetch trace summary for a run, including run status and scenario reference (§4.4).' })
+  @ApiOkResponse({ schema: ref('RunTraceSummary') })
   async getTraces(@Param('id', new ParseUUIDPipe()) id: string) {
     const run = await this.runManager.getRun(id);
     const state = await this.projectionService.get(id);
@@ -34,6 +36,7 @@ export class ObservabilityController {
 
   @Get('runs/:id/artifacts')
   @ApiOperation({ summary: 'List artifacts linked to a run.' })
+  @ApiOkResponse({ schema: arrayOf('ArtifactRecord') })
   async getArtifacts(@Param('id', new ParseUUIDPipe()) id: string) {
     await this.runManager.getRun(id);
     return this.artifactService.list(id);
@@ -42,7 +45,7 @@ export class ObservabilityController {
   @Post('runs/:id/artifacts')
   @ApiOperation({ summary: 'Create an artifact linked to a run.' })
   @ApiBody({ type: CreateArtifactDto })
-  @ApiCreatedResponse({ description: 'Artifact created.' })
+  @ApiCreatedResponse({ description: 'Artifact created.', schema: ref('Artifact') })
   async createArtifact(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })) body: CreateArtifactDto
