@@ -17,7 +17,7 @@ import { waitFor } from '../helpers/wait-for';
  * pointing at the same file (tokens as in what-if-replay-live.integration.spec.ts).
  *
  * `EXPECT_DECISION_RECEIPTS=signed|unsigned` (CI's `live-runtime` job runs one leg of each against
- * `macp-runtime:0.11.0`) makes the spec strict: the runtime MUST advertise
+ * `macp-runtime:0.12.0`) makes the spec strict: the runtime MUST advertise
  * `decisionReceipt.getDecisionReceipt` with that `signed` value, and every test runs. Unset, a
  * runtime that does not advertise the capability makes every test return early with a warning
  * (Jest cannot skip after an async probe), so the spec stays usable against older runtimes.

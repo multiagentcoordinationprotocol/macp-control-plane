@@ -700,6 +700,25 @@ describe('StreamConsumerService', () => {
       expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
     });
 
+    it('treats a terminal FAILED_PRECONDITION coded HISTORY_UNAVAILABLE as a gap on its code alone (runtime v0.12.0)', async () => {
+      // 0.12.0 ends the stream with this status; the message is deliberately
+      // reworded here so only the registry code can match.
+      const coded = codedStatus(9, 'HISTORY_UNAVAILABLE', 'resume point no longer retained');
+      const handle1 = makeHandle([envelope('m1')], coded);
+      const mockProvider = {
+        subscribeSession: jest.fn(),
+        getSession: jest.fn().mockResolvedValue({ state: 'SESSION_STATE_RESOLVED' })
+      };
+      runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+      const marker = newMarker();
+      await (service as any).consumeLoop(marker, { ...baseParams, sessionHandle: handle1 });
+
+      expect(marker.historyGap).toBe(true);
+      expect(mockProvider.subscribeSession).not.toHaveBeenCalled();
+      expect(runManager.markCompleted).toHaveBeenCalledWith('run-1');
+    });
+
     it('still emits session.stream.gap when STREAM_RESUME_ENABLED is false (gap check now runs before the resume-flag check, issue #69)', async () => {
       (config as any).streamResumeEnabled = false;
       const gapError = Object.assign(new Error('session history before ordinal 5 was compacted'), { code: 9 });

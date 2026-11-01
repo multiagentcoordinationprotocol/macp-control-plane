@@ -321,25 +321,33 @@ export class StreamConsumerService implements OnModuleDestroy {
   private static readonly COMPACTED_HISTORY_RE = /history before ordinal \d+ was compacted/i;
 
   /**
-   * Fallback: detect a compacted resume point on the *terminal* stream-error
-   * path. No released runtime ends the stream for it — v0.9.0 sends the inline
-   * `INVALID_ENVELOPE` frame below, v0.5–0.8 downgrade the FAILED_PRECONDITION
-   * to an inline frame (0.8.8 server.rs:614-629), and v0.4 had no compaction
-   * notice — so this only matters for a proxy or other non-runtime peer that
-   * surfaces the rejection as a status.
-   * Resubscribing from 0 after this would double-ingest history (the CP has no
-   * message-id dedup), so callers degrade to poll-only instead.
+   * Detect a compacted resume point on the *terminal* stream-error path.
+   * Runtime v0.12.0 ends the stream for it (RFC-MACP-0006 §3.2): gRPC
+   * `FAILED_PRECONDITION` with `macp-error-code: HISTORY_UNAVAILABLE` and
+   * `macp-error-details-bin` = `{"lowest_available_sequence":N}`, the status
+   * message keeping the compacted-history sentence. The registry code alone is
+   * enough, so gap detection on this path no longer depends on the wording.
+   * v0.9.0–v0.11.x send the inline `INVALID_ENVELOPE` frame instead (see
+   * `isCompactedHistoryInlineError`), v0.5–0.8 downgrade the
+   * FAILED_PRECONDITION to an inline frame (0.8.8 server.rs:614-629), and v0.4
+   * had no compaction notice; the sentence match below still covers a proxy or
+   * other non-runtime peer that surfaces the rejection as a status.
+   * Resubscribing after this would fail the same way, and from 0 would
+   * double-ingest history (the CP has no message-id dedup), so callers degrade
+   * to poll-only instead.
    *
    * `code === 9` (FAILED_PRECONDITION) counts only on an **uncoded** status: a
    * runtime that stamps `macp-error-code` maps several unrelated registry codes
-   * onto FAILED_PRECONDITION, so a coded status is a gap only when its text is
-   * the compacted-history sentence.
+   * onto FAILED_PRECONDITION, so a coded status is a gap only when its code is
+   * `HISTORY_UNAVAILABLE` or its text is the compacted-history sentence.
    */
   private isCompactedHistoryTerminalError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
     if (StreamConsumerService.COMPACTED_HISTORY_RE.test(message)) return true;
+    const macpCode = macpErrorCodeOf(error);
+    if (macpCode === 'HISTORY_UNAVAILABLE') return true;
     const code = (error as { code?: number })?.code;
-    return code === 9 /* grpc FAILED_PRECONDITION */ && macpErrorCodeOf(error) === undefined;
+    return code === 9 /* grpc FAILED_PRECONDITION */ && macpCode === undefined;
   }
 
   /**
@@ -408,11 +416,11 @@ export class StreamConsumerService implements OnModuleDestroy {
     // unless STREAM_RESUME_ENABLED is off, or the runtime reports the resume
     // point was compacted away, in which case we emit a `session.stream.gap`
     // and fall through to poll-only (resubscribing from 0 would re-ingest
-    // history — the CP has no message-id dedup). Since runtime 0.9.0 that
-    // report is a non-terminal inline frame coded `INVALID_ENVELOPE` (the
-    // registry code, carried in `macp-error-code`) and identified by its
-    // compacted-history sentence; an uncoded terminal FAILED_PRECONDITION is
-    // only a fallback for non-runtime peers. See
+    // history — the CP has no message-id dedup). Runtime 0.12.0 reports it by
+    // ending the stream with FAILED_PRECONDITION coded `HISTORY_UNAVAILABLE`;
+    // 0.9.0–0.11.x sent a non-terminal inline frame coded `INVALID_ENVELOPE`
+    // and identified by its compacted-history sentence; an uncoded terminal
+    // FAILED_PRECONDITION is a fallback for non-runtime peers. See
     // isCompactedHistoryInlineError / isCompactedHistoryTerminalError.
     let handle = params.sessionHandle;
     marker.handle = handle;
@@ -425,13 +433,14 @@ export class StreamConsumerService implements OnModuleDestroy {
             if (marker.aborted) return;
 
             // Inline compacted-history detection (live-finding follow-up to T7).
-            // The runtime does NOT end the stream for a compacted resume
-            // point: it sends a non-terminal inline `MACPError` frame and
-            // leaves the bidi stream open (v0.9.0: `StreamFailure::Inline`,
+            // Runtimes 0.5–0.11 do NOT end the stream for a compacted resume
+            // point: they send a non-terminal inline `MACPError` frame and
+            // leave the bidi stream open (v0.9.0: `StreamFailure::Inline`,
             // server.rs:584-590, code `INVALID_ENVELOPE`). The `catch` below —
-            // which drives gap detection for a genuine stream error — never
-            // runs for this case, so it has to be detected here, before we
-            // normalize the frame.
+            // which drives gap detection for a genuine stream error, and is
+            // where a 0.12.0 runtime's terminal `HISTORY_UNAVAILABLE` lands —
+            // never runs for this case, so it has to be detected here, before
+            // we normalize the frame.
             //
             // The only distinguishing signal is the human sentence "session
             // history before ordinal {N} was compacted; resume with
