@@ -3,6 +3,23 @@ import { WebhookService } from '../webhooks/webhook.service';
 import { CreateWebhookDto } from '../dto/webhook.dto';
 import { UpdateWebhookDto } from '../dto/update-webhook.dto';
 
+// A stored row, as the repository returns it: the signing secret included.
+const storedRow = (overrides: Record<string, unknown> = {}) => ({
+  id: 'b3f1c1de-0000-4000-8000-000000000001',
+  url: 'https://example.com/hook',
+  events: ['run.completed'],
+  secret: 'stored-signing-key',
+  active: true,
+  createdAt: '2026-11-01 12:00:00+00',
+  updatedAt: '2026-11-01 12:00:00+00',
+  ...overrides
+});
+
+const expectNoSecret = (body: unknown) => {
+  expect(body).not.toHaveProperty('secret');
+  expect(JSON.stringify(body)).not.toContain('stored-signing-key');
+};
+
 describe('WebhookController', () => {
   let controller: WebhookController;
   let mockWebhookService: {
@@ -77,6 +94,45 @@ describe('WebhookController', () => {
         url: 'https://example.com/new-hook',
         active: false
       });
+    });
+  });
+
+  describe('responses never carry the signing secret (#140)', () => {
+    const body: CreateWebhookDto = { url: 'https://example.com/hook', events: ['run.completed'], secret: 's3cret' };
+
+    it('createWebhook returns the view, without secret and with hasSecret', async () => {
+      mockWebhookService.register.mockResolvedValue(storedRow());
+      const res = await controller.createWebhook(body);
+      expectNoSecret(res);
+      expect(res).toEqual({
+        id: 'b3f1c1de-0000-4000-8000-000000000001',
+        url: 'https://example.com/hook',
+        events: ['run.completed'],
+        active: true,
+        createdAt: '2026-11-01 12:00:00+00',
+        updatedAt: '2026-11-01 12:00:00+00',
+        hasSecret: true
+      });
+    });
+
+    it('listWebhooks strips secret from every row', async () => {
+      mockWebhookService.list.mockResolvedValue([storedRow(), storedRow({ id: 'other', secret: '' })]);
+      const res = await controller.listWebhooks();
+      expect(res).toHaveLength(2);
+      res.forEach(expectNoSecret);
+      expect(res.map((w) => w.hasSecret)).toEqual([true, false]);
+    });
+
+    it('updateWebhook strips secret, also when the update sets a new one', async () => {
+      mockWebhookService.update.mockResolvedValue(storedRow({ active: false }));
+      const res = await controller.updateWebhook('wh-1', { secret: 'stored-signing-key', active: false });
+      expectNoSecret(res);
+      expect(res).toMatchObject({ active: false, hasSecret: true });
+    });
+
+    it('updateWebhook keeps the empty body for an unknown id', async () => {
+      mockWebhookService.update.mockResolvedValue(null);
+      await expect(controller.updateWebhook('wh-1', { active: false })).resolves.toBeNull();
     });
   });
 

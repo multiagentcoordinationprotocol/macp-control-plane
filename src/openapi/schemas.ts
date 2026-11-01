@@ -21,7 +21,8 @@ export const GENERATED_TYPES = {
   'src/what-if/what-if-replay.service.ts': ['WhatIfReplayView'],
   'src/receipts/decision-receipt.service.ts': ['DecisionReceiptView'],
   'src/runtime/circuit-breaker.ts': ['CircuitBreakerStateChange'],
-  'src/contracts/runtime.ts': ['RuntimeSessionSnapshot']
+  'src/contracts/runtime.ts': ['RuntimeSessionSnapshot'],
+  'src/webhooks/webhook-view.ts': ['WebhookView']
 } as const;
 
 /** Component name -> exported Drizzle table in `src/db/schema.ts`. */
@@ -30,8 +31,7 @@ export const ROW_TABLES = {
   CanonicalEventRecord: 'runEventsCanonical',
   ArtifactRecord: 'runArtifacts',
   AuditLogRecord: 'auditLog',
-  OutboundMessageRecord: 'runOutboundMessages',
-  WebhookRecord: 'webhooks'
+  OutboundMessageRecord: 'runOutboundMessages'
 } as const;
 
 const str: SchemaObject = { type: 'string' };

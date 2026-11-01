@@ -757,6 +757,8 @@ The control plane forwards the body to `runtime.RegisterPolicy` after the closed
 
 ## Webhooks
 
+The signing `secret` is write-only. It is accepted on create and update and used to sign deliveries (`X-MACP-Signature`, HMAC-SHA256), but no response returns it. Every webhook response is `{ id, url, events, active, createdAt, updatedAt, hasSecret }`, where `hasSecret` is `true` when a secret is stored. Keep your own copy of the secret when you register.
+
 ### `POST /webhooks`
 Register a webhook. Body: `{ "url": "https://...", "events": ["run.completed"], "secret": "hmac-secret" }`
 

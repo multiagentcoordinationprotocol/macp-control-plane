@@ -12,7 +12,11 @@ export class CreateWebhookDto {
   @IsString({ each: true })
   events?: string[];
 
-  @ApiProperty({ description: 'Secret used for HMAC-SHA256 signature verification' })
+  @ApiProperty({
+    description:
+      'Secret used for HMAC-SHA256 signature verification. Write-only: never returned; responses carry `hasSecret` instead.',
+    writeOnly: true
+  })
   @IsString()
   secret!: string;
 }

@@ -13,7 +13,10 @@ export class UpdateWebhookDto {
   @IsString({ each: true })
   events?: string[];
 
-  @ApiPropertyOptional({ description: 'HMAC-SHA256 signing secret' })
+  @ApiPropertyOptional({
+    description: 'HMAC-SHA256 signing secret. Write-only: never returned; responses carry `hasSecret` instead.',
+    writeOnly: true
+  })
   @IsOptional()
   @IsString()
   secret?: string;
