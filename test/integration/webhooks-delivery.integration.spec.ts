@@ -94,6 +94,47 @@ describe('Webhook Delivery (integration)', () => {
     expect(JSON.stringify(listed)).not.toContain('list-check-secret');
   });
 
+  describe('blank signing secret is rejected (#143)', () => {
+    const auth = { Authorization: 'Bearer test-key-integration' };
+
+    it.each([
+      ['an empty', ''],
+      ['a whitespace-only', '  \t '],
+    ])('POST /webhooks with %s secret is 400 and stores nothing', async (_label, secret) => {
+      const res = await ctx.client.requestNoAuth('POST', '/webhooks', {
+        headers: auth,
+        body: { url: receiver.url, events: [], secret },
+      });
+      expect(res.status).toBe(400);
+      expect(await ctx.client.request('GET', '/webhooks')).toEqual([]);
+    });
+
+    it('PATCH /webhooks/:id with an empty secret is 400; omitting it still works', async () => {
+      const created = await registerWebhook(['run.completed'], 'patch-check-secret');
+
+      const rejected = await ctx.client.requestNoAuth('PATCH', `/webhooks/${created.id}`, {
+        headers: auth,
+        body: { secret: '' },
+      });
+      expect(rejected.status).toBe(400);
+
+      const ok = await ctx.client.requestNoAuth('PATCH', `/webhooks/${created.id}`, {
+        headers: auth,
+        body: { active: false },
+      });
+      expect(ok.status).toBe(200);
+      expect(ok.body).toMatchObject({ active: false, hasSecret: true });
+
+      const rotated = await ctx.client.requestNoAuth('PATCH', `/webhooks/${created.id}`, {
+        headers: auth,
+        body: { secret: 'rotated-secret' },
+      });
+      expect(rotated.status).toBe(200);
+      expect(rotated.body).toMatchObject({ hasSecret: true });
+      expect(rotated.body).not.toHaveProperty('secret');
+    });
+  });
+
   it('wildcard webhook receives run.started and run.completed with X-MACP-Event header', async () => {
     await registerWebhook([]);
     const runId = await runToCompletion();
