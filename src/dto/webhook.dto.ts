@@ -1,4 +1,4 @@
-import { IsArray, IsOptional, IsString, IsUrl } from 'class-validator';
+import { IsArray, IsNotEmpty, IsOptional, IsString, IsUrl, Matches } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateWebhookDto {
@@ -18,5 +18,8 @@ export class CreateWebhookDto {
     writeOnly: true
   })
   @IsString()
+  // #143: an empty key makes the HMAC signature computable by anyone.
+  @IsNotEmpty()
+  @Matches(/\S/, { message: 'secret must not be blank' })
   secret!: string;
 }
