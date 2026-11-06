@@ -12,6 +12,14 @@ export interface WebhookPayload {
   data?: Record<string, unknown>;
 }
 
+/** error_message recorded on a delivery skipped because its webhook has no usable secret (#145). */
+export const SKIPPED_NO_SECRET_MESSAGE = 'skipped: webhook has no signing secret';
+
+/** An empty or whitespace-only HMAC key makes every signature computable by anyone (#143, #145). */
+function hasUsableSecret(secret: string): boolean {
+  return secret.trim() !== '';
+}
+
 @Injectable()
 export class WebhookService implements OnModuleDestroy {
   private readonly logger = new Logger(WebhookService.name);
@@ -81,7 +89,7 @@ export class WebhookService implements OnModuleDestroy {
           runId: payload.runId,
           payload: payload as unknown as Record<string, unknown>
         });
-        this.track(this.deliverWithTracking(delivery.id, webhook.url, webhook.secret, payload));
+        this.track(this.deliverWithTracking(delivery.id, webhook.id, webhook.url, webhook.secret, payload));
       }
     } catch (err) {
       this.logger.warn(
@@ -99,25 +107,42 @@ export class WebhookService implements OnModuleDestroy {
       this.track(
         this.deliverWithTracking(
           delivery.id,
+          webhook.id,
           webhook.url,
           webhook.secret,
           delivery.payload as unknown as WebhookPayload,
           delivery.attempts
         )
       );
-      retried++;
+      // A blank-secret skip (#145) closes the delivery out; it is not a retry.
+      if (hasUsableSecret(webhook.secret)) retried++;
     }
     return retried;
   }
 
   private async deliverWithTracking(
     deliveryId: string,
+    webhookId: string,
     url: string,
     secret: string,
     payload: WebhookPayload,
     startAttempt = 0
   ): Promise<void> {
     const maxAttempts = 3;
+
+    // #145: rows stored before #144 may carry an empty or blank secret. An HMAC
+    // over an empty key is computable by anyone, so never send such a delivery.
+    // Record it as a terminal failure (no retries) and log the webhook id only.
+    if (!hasUsableSecret(secret)) {
+      this.logger.warn(
+        `webhook ${webhookId} has no signing secret; skipping delivery ${deliveryId} (set a secret via PATCH /webhooks/${webhookId})`
+      );
+      if (await this.markFailedSafe(deliveryId, maxAttempts, SKIPPED_NO_SECRET_MESSAGE)) {
+        this.instrumentation.webhookDeliveriesTotal.inc({ status: 'skipped' });
+      }
+      return;
+    }
+
     const body = JSON.stringify(payload);
     const signature = createHmac('sha256', secret).update(body).digest('hex');
 

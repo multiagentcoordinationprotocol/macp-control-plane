@@ -135,6 +135,35 @@ describe('Webhook Delivery (integration)', () => {
     });
   });
 
+  it('PATCH /webhooks/:id with a null secret is 400, not 500 (#145)', async () => {
+    const created = await registerWebhook(['run.completed'], 'null-check-secret');
+    const res = await ctx.client.requestNoAuth('PATCH', `/webhooks/${created.id}`, {
+      headers: { Authorization: 'Bearer test-key-integration' },
+      body: { secret: null },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('a webhook stored with an empty secret (pre-#144 row) is never delivered to (#145)', async () => {
+    // The API can no longer store a blank secret, so simulate a legacy row directly.
+    const created = await registerWebhook(['run.completed'], 'to-be-blanked');
+    const db = ctx.module.get(DatabaseService);
+    await db.pool.query({ text: "UPDATE webhooks SET secret = '' WHERE id = $1", values: [created.id] });
+
+    await runToCompletion();
+
+    const row = await waitFor(
+      async () => {
+        const rows = await deliveryRows(created.id);
+        return rows.find((r: any) => r.status === 'failed') ?? null;
+      },
+      { timeoutMs: 10000, label: 'skipped delivery row' },
+    );
+    expect(row.attempts).toBe(3);
+    expect(String(row.error_message)).toContain('no signing secret');
+    expect(receiver.requests.length).toBe(0);
+  });
+
   it('wildcard webhook receives run.started and run.completed with X-MACP-Event header', async () => {
     await registerWebhook([]);
     const runId = await runToCompletion();
