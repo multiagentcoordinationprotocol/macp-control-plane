@@ -3,7 +3,7 @@ import { createHmac } from 'node:crypto';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { WebhookDeliveryRepository } from './webhook-delivery.repository';
 import { WebhookRepository } from './webhook.repository';
-import { WebhookPayload, WebhookService } from './webhook.service';
+import { SKIPPED_NO_SECRET_MESSAGE, WebhookPayload, WebhookService } from './webhook.service';
 
 describe('WebhookService', () => {
   let service: WebhookService;
@@ -360,6 +360,64 @@ describe('WebhookService', () => {
       // Advance further — no additional calls
       await jest.advanceTimersByTimeAsync(10000);
       expect(fetchSpy).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  // ─── #145: webhooks stored with an empty secret ────────────────────
+
+  describe('webhook without a usable signing secret (#145)', () => {
+    it.each([
+      ['an empty', ''],
+      ['a whitespace-only', ' \t ']
+    ])('fireEvent skips delivery for %s secret and records it as failed', async (_label, secret) => {
+      const warnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+      webhookRepository.listActive.mockResolvedValue([makeWebhook({ id: 'wh-blank', secret })] as any);
+      deliveryRepository.create.mockResolvedValue(makeDelivery({ id: 'del-blank', webhookId: 'wh-blank' }) as any);
+
+      await service.fireEvent(samplePayload);
+      await jest.advanceTimersByTimeAsync(10_000);
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      // Terminal failure (attempt 3) so retryPending never picks it up again.
+      expect(deliveryRepository.markFailed).toHaveBeenCalledTimes(1);
+      expect(deliveryRepository.markFailed).toHaveBeenCalledWith('del-blank', 3, SKIPPED_NO_SECRET_MESSAGE);
+      expect(deliveryRepository.markDelivered).not.toHaveBeenCalled();
+      expect(instrumentation.webhookDeliveriesTotal.inc).toHaveBeenCalledWith({ status: 'skipped' });
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('wh-blank'));
+    });
+
+    it('retryPending skips a pending delivery whose webhook has an empty secret', async () => {
+      jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+      deliveryRepository.listPending.mockResolvedValue([
+        makeDelivery({ id: 'del-old', webhookId: 'wh-blank', attempts: 1 })
+      ] as any);
+      webhookRepository.findById.mockResolvedValue(makeWebhook({ id: 'wh-blank', secret: '' }) as any);
+
+      const retried = await service.retryPending();
+      await jest.advanceTimersByTimeAsync(10_000);
+
+      expect(retried).toBe(0);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(deliveryRepository.markFailed).toHaveBeenCalledWith('del-old', 3, SKIPPED_NO_SECRET_MESSAGE);
+    });
+
+    it('still delivers to other matching webhooks that have a secret', async () => {
+      jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+      webhookRepository.listActive.mockResolvedValue([
+        makeWebhook({ id: 'wh-blank', secret: '' }),
+        makeWebhook({ id: 'wh-ok', url: 'https://example.com/ok' })
+      ] as any);
+      deliveryRepository.create
+        .mockResolvedValueOnce(makeDelivery({ id: 'del-blank', webhookId: 'wh-blank' }) as any)
+        .mockResolvedValueOnce(makeDelivery({ id: 'del-ok', webhookId: 'wh-ok' }) as any);
+
+      await service.fireEvent(samplePayload);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy).toHaveBeenCalledWith('https://example.com/ok', expect.anything());
+      expect(deliveryRepository.markDelivered).toHaveBeenCalledWith('del-ok', 200);
+      expect(deliveryRepository.markFailed).toHaveBeenCalledWith('del-blank', 3, SKIPPED_NO_SECRET_MESSAGE);
     });
   });
 

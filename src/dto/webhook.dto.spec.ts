@@ -40,6 +40,11 @@ describe('webhook DTOs reject a blank signing secret (#143)', () => {
       await expect(validate(UpdateWebhookDto, { secret })).rejects.toBeInstanceOf(BadRequestException);
     });
 
+    // #145: `{"secret": null}` used to skip validation and hit the NOT NULL column (500).
+    it('rejects a null secret with 400', async () => {
+      await expect(validate(UpdateWebhookDto, { secret: null })).rejects.toBeInstanceOf(BadRequestException);
+    });
+
     it('accepts an update without a secret', async () => {
       await expect(validate(UpdateWebhookDto, { active: false })).resolves.toMatchObject({ active: false });
     });
