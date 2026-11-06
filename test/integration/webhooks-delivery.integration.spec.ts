@@ -144,6 +144,15 @@ describe('Webhook Delivery (integration)', () => {
     expect(res.status).toBe(400);
   });
 
+  it.each(['url', 'events', 'active'])('PATCH /webhooks/:id with a null %s is 400, not 500 (#147)', async (field) => {
+    const created = await registerWebhook(['run.completed'], `null-check-${field}`);
+    const res = await ctx.client.requestNoAuth('PATCH', `/webhooks/${created.id}`, {
+      headers: { Authorization: 'Bearer test-key-integration' },
+      body: { [field]: null },
+    });
+    expect(res.status).toBe(400);
+  });
+
   it('a webhook stored with an empty secret (pre-#144 row) is never delivered to (#145)', async () => {
     // The API can no longer store a blank secret, so simulate a legacy row directly.
     const created = await registerWebhook(['run.completed'], 'to-be-blanked');

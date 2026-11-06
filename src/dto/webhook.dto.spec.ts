@@ -45,6 +45,11 @@ describe('webhook DTOs reject a blank signing secret (#143)', () => {
       await expect(validate(UpdateWebhookDto, { secret: null })).rejects.toBeInstanceOf(BadRequestException);
     });
 
+    // #147: the same 500 for the other optional fields.
+    it.each(['url', 'events', 'active'])('rejects a null %s with 400', async (field) => {
+      await expect(validate(UpdateWebhookDto, { [field]: null })).rejects.toBeInstanceOf(BadRequestException);
+    });
+
     it('accepts an update without a secret', async () => {
       await expect(validate(UpdateWebhookDto, { active: false })).resolves.toMatchObject({ active: false });
     });

@@ -1,14 +1,21 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsBoolean, IsNotEmpty, IsOptional, IsString, IsUrl, Matches, ValidateIf } from 'class-validator';
+import { IsArray, IsBoolean, IsNotEmpty, IsString, IsUrl, Matches, ValidateIf } from 'class-validator';
+
+// `@IsOptional` also skips validation for `null`, letting e.g. `{"url": null}`
+// reach the update and fail there (500). Only an absent key may skip (#145, #147).
+const presentIn =
+  <K extends keyof UpdateWebhookDto>(key: K) =>
+  (o: UpdateWebhookDto) =>
+    o[key] !== undefined;
 
 export class UpdateWebhookDto {
   @ApiPropertyOptional({ description: 'Webhook delivery URL' })
-  @IsOptional()
+  @ValidateIf(presentIn('url'))
   @IsUrl()
   url?: string;
 
   @ApiPropertyOptional({ description: 'Event types to subscribe to', type: [String] })
-  @IsOptional()
+  @ValidateIf(presentIn('events'))
   @IsArray()
   @IsString({ each: true })
   events?: string[];
@@ -17,9 +24,7 @@ export class UpdateWebhookDto {
     description: 'HMAC-SHA256 signing secret. Write-only: never returned; responses carry `hasSecret` instead.',
     writeOnly: true
   })
-  // #145: `@IsOptional` would also skip validation for `null`, letting
-  // `{"secret": null}` reach the NOT NULL column (500). Only an absent key skips.
-  @ValidateIf((o: UpdateWebhookDto) => o.secret !== undefined)
+  @ValidateIf(presentIn('secret'))
   @IsString()
   // #143: when present, the secret must be non-blank (an empty HMAC key is forgeable).
   @IsNotEmpty()
@@ -27,7 +32,7 @@ export class UpdateWebhookDto {
   secret?: string;
 
   @ApiPropertyOptional({ description: 'Enable or disable the webhook' })
-  @IsOptional()
+  @ValidateIf(presentIn('active'))
   @IsBoolean()
   active?: boolean;
 }
