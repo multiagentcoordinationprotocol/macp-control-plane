@@ -3,7 +3,7 @@
  * macp-runtime v0.13.0). A version outside this range is not rejected — it only
  * produces a warning so operators notice a mismatched runtime early.
  */
-export const TESTED_RUNTIME_RANGE = { min: [0, 8, 0], maxExclusive: [0, 14, 0] } as const;
+export const TESTED_RUNTIME_RANGE = { min: [0, 8, 0], maxExclusive: [0, 15, 0] } as const;
 
 export type RuntimeVersionStatus = 'tested' | 'untested' | 'unknown';
 
