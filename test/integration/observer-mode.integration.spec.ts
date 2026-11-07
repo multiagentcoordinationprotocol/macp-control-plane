@@ -5,6 +5,7 @@ import { taskHappyScript, taskModeRequest } from '../fixtures/task-mode';
 import { quorumReachedScript, quorumModeRequest } from '../fixtures/quorum-mode';
 import { handoffAcceptScript, handoffModeRequest } from '../fixtures/handoff-mode';
 import { waitFor } from '../helpers/wait-for';
+import { isRealRuntime } from '../helpers/real-runtime-gate';
 
 /**
  * Observer-mode end-to-end (direct-agent-auth CP-13).
@@ -14,7 +15,9 @@ import { waitFor } from '../helpers/wait-for';
  * envelope-emission HTTP endpoints. Agents (simulated here by the mock) drive
  * the session entirely via their own gRPC connection.
  */
-describe('Observer mode — end-to-end projection (integration)', () => {
+// Mock-only: every test needs a run driven by ScriptedMockRuntimeProvider events, which a
+// real runtime (INTEGRATION_RUNTIME=docker|remote) has no agents to emit; skip rather than time out.
+(isRealRuntime ? describe.skip : describe)('Observer mode — end-to-end projection (integration)', () => {
   const cases = [
     {
       name: 'decision',

@@ -11,6 +11,11 @@ const isRealRuntime =
   process.env.INTEGRATION_RUNTIME === 'docker' ||
   process.env.INTEGRATION_RUNTIME === 'remote';
 
+// Mock-only: these depend on events the ScriptedMockRuntimeProvider scripts. A real
+// runtime (INTEGRATION_RUNTIME=docker|remote) has no agents to emit them, so the run
+// never binds or completes; skip there rather than time out.
+const itMock = isRealRuntime ? it.skip : it;
+
 describe('Run Lifecycle (integration, observer mode)', () => {
   let ctx: TestAppContext;
 
@@ -102,7 +107,7 @@ describe('Run Lifecycle (integration, observer mode)', () => {
     expect(state).toHaveProperty('timeline');
   });
 
-  it('transitions queued → starting → binding_session → running → completed without control-plane Send', async () => {
+  itMock('transitions queued → starting → binding_session → running → completed without control-plane Send', async () => {
     const { runId } = await ctx.client.createRun(decisionModeRequest());
 
     const run = await waitFor(
