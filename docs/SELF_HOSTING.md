@@ -10,12 +10,31 @@ control plane's contract for that stack: which image to pull, which env it needs
 
 | Tag | Moves? | Use |
 |-----|--------|-----|
-| `0.7.1` / `v0.7.1` | never | **pin this** in compose |
-| `0.7` / `v0.7` | on each patch release | tracks fixes within a minor |
+| `0.8.0` / `v0.8.0` | never | **pin this** in compose |
+| `0.8` / `v0.8` | on each patch release | tracks fixes within a minor |
 | `latest` | on every release | not for compose |
 | `sha-<short>` | never | a specific `main` commit (CI build, not a release) |
 
 Release tags are cut by [release.yml](../.github/workflows/release.yml) (Trivy-gated before push). See [CICD.md](CICD.md#releases).
+
+### Upgrading to 0.8.0
+
+0.8.0 tightens auth. Check these before you move a pin from 0.7.x:
+
+- **`AUTH_API_KEYS` is required** unless `NODE_ENV` is explicitly `development` or `test`. An empty value
+  used to open the API when `NODE_ENV` was unset; now the guard fails closed, and production still refuses
+  to start. The image sets `NODE_ENV=production`, so compose must set `AUTH_API_KEYS`.
+- **`GET /metrics` needs the API key** (`Authorization: Bearer <key>`). Point Prometheus scrapers at it with
+  a key. `/healthz` and `/readyz` stay public.
+- **`MACP_AUTH_SERVICE_API_KEY`**: if you set `MACP_AUTH_SERVICE_URL` (JWT mint, hosted only), also set this
+  to one of the auth-service's `TOKEN_ISSUER_KEYS`. Without it a production auth-service answers 401 and
+  the CP falls back to `RUNTIME_BEARER_TOKEN` (a warning is logged at start). Self-host compose leaves both unset.
+- **Tests read `TEST_DATABASE_URL` only** (default `postgres://postgres:postgres@localhost:5433/macp_control_plane_test`).
+  The integration helpers refuse a database whose name lacks `test` or that equals `DATABASE_URL`.
+- **Runtime:** tested range is `>=0.8.0 <0.15.0`, absorbed through macp-runtime 0.14.0.
+- **Cancel** now marks a run cancelled only after the runtime accepts; a refusal returns the mapped runtime
+  error (e.g. `403 FORBIDDEN`) and leaves the run unchanged.
+- Authenticated requests are throttled per API key plus the console's `X-MACP-Client-IP`.
 
 ## Boot behaviour
 
@@ -80,7 +99,7 @@ That trades disk for replayability. The CP needs no setting; it reads the capabi
 
 ```yaml
 control-plane:
-  image: ghcr.io/multiagentcoordinationprotocol/macp-control-plane:0.7.1
+  image: ghcr.io/multiagentcoordinationprotocol/macp-control-plane:0.8.0
   environment:
     DATABASE_URL: postgres://postgres:postgres@postgres:5432/macp_control_plane
     AUTH_API_KEYS: ${CP_API_KEYS:-dev-key-1}
