@@ -198,6 +198,11 @@ docker build --secret id=npm_token,env=GITHUB_TOKEN -t macp-control-plane .
 **Test DB connection fails:**
 - Start test postgres: `docker compose -f docker-compose.test.yml up -d postgres-test`
 - Test DB uses port 5433 (not 5432) to avoid conflict with dev DB
+- The suite reads `TEST_DATABASE_URL` only (default: the 5433 test DB), never `DATABASE_URL`
+
+**`Refusing to run integration tests against …`:**
+- The guard in `test/helpers/test-db-url.ts` stopped the suite before it could truncate a real database.
+- `TEST_DATABASE_URL` must name a database containing `test` and must not be the same database as `DATABASE_URL`. Unset it to use the docker-compose.test.yml default.
 
 **Real runtime tests fail with `InvalidPayload`:**
 - Use `payloadEnvelope` with proto encoding instead of plain `payload`

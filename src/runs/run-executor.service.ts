@@ -7,7 +7,7 @@ import { RunEventService } from '../events/run-event.service';
 import { StreamHubService } from '../events/stream-hub.service';
 import { AppException } from '../errors/app-exception';
 import { ErrorCode } from '../errors/error-codes';
-import { macpErrorCodeOf } from '../runtime/grpc-helpers';
+import { MACP_ERROR_REGISTRY, macpErrorCodeOf } from '../runtime/grpc-helpers';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 import { MACP_ATTR, MACP_CP_ATTR } from '../telemetry/semconv';
@@ -15,7 +15,7 @@ import { TraceService } from '../telemetry/trace.service';
 import { classifyRuntimeVersion, TESTED_RUNTIME_RANGE } from '../runtime/runtime-version';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
-import { RuntimeSessionHandle } from '../contracts/runtime';
+import { RuntimeAck, RuntimeSessionHandle } from '../contracts/runtime';
 import { RunManagerService } from './run-manager.service';
 import { StreamConsumerService } from './stream-consumer.service';
 
@@ -24,6 +24,23 @@ export const MAX_SESSION_ID_BYTES = 128;
 
 export const SESSION_ID_RULE =
   'session.sessionId must be at most 128 bytes and a lowercase UUID v4/v7 or a base64url token of 22+ chars';
+
+/**
+ * Cancel/Suspend/ResumeSession refusals normally arrive as a gRPC status, which the provider
+ * already maps to an `AppException`. A runtime may instead answer with a negative Ack carrying an
+ * error; treat that as the same refusal (mapped through the error-code registry) so local run
+ * state never advances past what the runtime accepted.
+ */
+export function assertControlAccepted(ack: RuntimeAck | undefined, method: string): void {
+  if (!ack || ack.ok || !ack.error) return;
+  const code = ack.error.code;
+  const mapping =
+    code && Object.prototype.hasOwnProperty.call(MACP_ERROR_REGISTRY, code) ? MACP_ERROR_REGISTRY[code] : undefined;
+  const message = ack.error.message || `runtime ${method} refused${code ? ` (${code})` : ''}`;
+  const metadata: Record<string, unknown> = code ? { macpErrorCode: code } : {};
+  if (mapping) throw new AppException(mapping.code, message, mapping.http, metadata);
+  throw new AppException(ErrorCode.INTERNAL_ERROR, message, 502, metadata);
+}
 
 /** 8-4-4-4-12 hex, either case — the only 36-char-with-`-` form `uuid::Uuid::parse_str` accepts. */
 const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -177,6 +194,10 @@ export class RunExecutorService implements OnModuleDestroy {
    * Option B (scenario opt-in, `metadata.cancellationDelegated: true`): call
    * `provider.cancelSession()` directly with the control-plane's own identity.
    *
+   * Either way the run is marked cancelled only after the cancel is accepted (callback 2xx, or
+   * the runtime acking CancelSession). A refusal surfaces as the mapped error — e.g. the runtime's
+   * FORBIDDEN → HTTP 403 — and leaves the run's state unchanged.
+   *
    * See direct-agent-auth.md §Cancellation design.
    */
   async cancel(runId: string, reason?: string) {
@@ -191,18 +212,17 @@ export class RunExecutorService implements OnModuleDestroy {
 
     if (delegated) {
       // Option B: scenario policy delegates cancellation authority to the control-plane.
+      // The run is marked cancelled only once the runtime accepts CancelSession. A refusal
+      // (e.g. FORBIDDEN under an initiator-only policy) propagates as the mapped runtime error
+      // and leaves the run untouched — otherwise the control plane would show `cancelled` while
+      // the runtime session stays OPEN.
       const provider = this.runtimeRegistry.get(run.runtimeKind);
-      try {
-        await provider.cancelSession({
-          runId,
-          runtimeSessionId: run.runtimeSessionId,
-          reason
-        });
-      } catch (cancelError) {
-        this.logger.warn(
-          `cancelSession failed for run ${runId} (proceeding with local cancel): ${cancelError instanceof Error ? cancelError.message : String(cancelError)}`
-        );
-      }
+      const result = await provider.cancelSession({
+        runId,
+        runtimeSessionId: run.runtimeSessionId,
+        reason
+      });
+      assertControlAccepted(result?.ack, 'CancelSession');
     } else if (cancelCallback?.url) {
       // Option A: proxy UI cancel to the initiator agent's local callback.
       await this.invokeCancelCallback(runId, cancelCallback, reason);
@@ -267,7 +287,8 @@ export class RunExecutorService implements OnModuleDestroy {
     }
 
     const provider = this.runtimeRegistry.get(run.runtimeKind);
-    await provider.suspendSession({ runId, runtimeSessionId: run.runtimeSessionId, reason });
+    const result = await provider.suspendSession({ runId, runtimeSessionId: run.runtimeSessionId, reason });
+    assertControlAccepted(result?.ack, 'SuspendSession');
 
     return this.runManager.markSuspended(runId);
   }
@@ -286,7 +307,8 @@ export class RunExecutorService implements OnModuleDestroy {
     }
 
     const provider = this.runtimeRegistry.get(run.runtimeKind);
-    await provider.resumeSession({ runId, runtimeSessionId: run.runtimeSessionId, reason });
+    const result = await provider.resumeSession({ runId, runtimeSessionId: run.runtimeSessionId, reason });
+    assertControlAccepted(result?.ack, 'ResumeSession');
 
     return this.runManager.markResumed(runId);
   }

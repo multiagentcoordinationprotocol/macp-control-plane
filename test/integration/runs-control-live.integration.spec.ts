@@ -17,8 +17,8 @@ import { RunDescriptor } from '../../src/contracts/control-plane';
  * are the only way to drive these transitions. Until now they were proven only against the scripted
  * mock (runs-suspend-resume and runs-cancel's Option B case are mock-only), so nothing checked that
  * the runtime accepts them from the control plane's identity, or that a cancel reaches the runtime
- * rather than only marking the run cancelled locally (the Option B path swallows a CancelSession
- * failure and proceeds).
+ * rather than only marking the run cancelled locally (the Option B path used to swallow a
+ * CancelSession failure and mark the run cancelled anyway).
  *
  * The runtime authorizes all three RPCs like a Commitment: the initiator, or the roles a bound
  * policy's `commitment.authority` delegates (macp-runtime src/server.rs `cancel_session` /
@@ -26,7 +26,8 @@ import { RunDescriptor } from '../../src/contracts/control-plane';
  *  - with a policy whose `designated_roles` names the control plane, the round trip succeeds and the
  *    runtime's own `GetSession` state follows each step;
  *  - under `policy.default` (initiator-only) the runtime answers FORBIDDEN, which the control plane
- *    maps to HTTP 403 and leaves the run `running`.
+ *    maps to HTTP 403 and leaves the run `running` — for cancel too, even with
+ *    `cancellationDelegated: true`.
  *
  * Identities match signal-auth-live: on the docker-compose runtime (dev auth) the bearer value is
  * the sender and the control plane's is `RUNTIME_DEV_AGENT_ID`; with `INTEGRATION_RUNTIME=remote`
@@ -200,13 +201,13 @@ describeWithRealRuntime('Run suspend / resume / cancel against a live macp-runti
     const cancelled = (await ctx.client.cancelRun(runId, 'live cancel')) as { status?: string; statusCode?: number };
     expect(cancelled.statusCode).toBeUndefined();
     expect(cancelled.status).toBe('cancelled');
-    // Option B swallows a CancelSession failure, so the run's status alone proves nothing: the
-    // runtime's own state must be terminal.
+    // The run's status alone proves nothing about the runtime: its own state must be terminal.
     expect(await runtimeState(sessionId)).toBe('SESSION_STATE_CANCELLED');
   }, 60000);
 
   it('answers 403 FORBIDDEN and leaves the run running when no policy delegates authority (initiator-only default)', async () => {
-    const { runId, sessionId } = await openRun('policy.default');
+    // cancellationDelegated routes cancel to CancelSession (Option B) so the runtime gets to refuse it.
+    const { runId, sessionId } = await openRun('policy.default', { cancellationDelegated: true });
 
     const res = await ctx.client.requestNoAuth('POST', `/runs/${runId}/suspend`, {
       headers: { Authorization: 'Bearer test-key-integration' },
@@ -217,6 +218,19 @@ describeWithRealRuntime('Run suspend / resume / cancel against a live macp-runti
 
     const run = (await ctx.client.getRun(runId)) as { status?: string };
     expect(run.status).toBe('running');
+    expect(await runtimeState(sessionId)).toBe('SESSION_STATE_OPEN');
+
+    // The runtime refuses CancelSession the same way; the run must NOT be marked cancelled while
+    // the runtime session stays OPEN.
+    const cancel = await ctx.client.requestNoAuth('POST', `/runs/${runId}/cancel`, {
+      headers: { Authorization: 'Bearer test-key-integration' },
+      body: { reason: 'not delegated' }
+    });
+    expect(cancel.status).toBe(403);
+    expect(cancel.body).toMatchObject({ errorCode: 'FORBIDDEN' });
+
+    const afterCancel = (await ctx.client.getRun(runId)) as { status?: string };
+    expect(afterCancel.status).toBe('running');
     expect(await runtimeState(sessionId)).toBe('SESSION_STATE_OPEN');
   }, 60000);
 });

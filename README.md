@@ -152,6 +152,7 @@ npm test                   # unit tests (Jest, colocated *.spec.ts)
 npm run test:cov           # with coverage
 docker compose -f docker-compose.test.yml up -d postgres-test
 npm run test:integration   # integration tests (real NestJS app + PostgreSQL on 5433, scripted mock runtime)
+                           # truncates TEST_DATABASE_URL only (default: the 5433 test DB); never DATABASE_URL
 ```
 
 See [docs/INTEGRATION.md § Running Integration Tests](docs/INTEGRATION.md#running-integration-tests) for runtime modes (`mock` / `docker` / `remote`).

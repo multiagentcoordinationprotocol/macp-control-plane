@@ -277,6 +277,16 @@ npm run test:integration
 INTEGRATION_RUNTIME=remote RUNTIME_ADDRESS=127.0.0.1:50051 npm run test:integration
 ```
 
+The suite TRUNCATEs every table between specs, so it talks only to `TEST_DATABASE_URL`
+(default `postgres://postgres:postgres@localhost:5433/macp_control_plane_test`, the
+`postgres-test` service above). `DATABASE_URL` — which `.env` and Doppler `dev` point at the
+dev database on 5432 — is never a fallback. Global setup refuses to start (and the helpers
+refuse to truncate) when `TEST_DATABASE_URL`'s database name lacks `test`, or when it is the
+same database (host, port, name) as `DATABASE_URL`. So
+`doppler run -p macp-control-plane -c dev -- npm run test:integration` is safe: Doppler `dev`
+carries `TEST_DATABASE_URL` pointing at the 5433 test database. The guard lives in
+`test/helpers/test-db-url.ts` and its spec runs in the unit suite.
+
 `stream-resume-live.integration.spec.ts` additionally needs a hand-managed local
 runtime it can restart: `INTEGRATION_RUNTIME=remote`, `MACP_RUNTIME_AUTH_TOKENS_FILE`
 pointing at a tokens file (see the spec header for the contents), and a built binary
