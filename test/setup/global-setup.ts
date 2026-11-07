@@ -1,7 +1,6 @@
 import { execSync } from 'node:child_process';
 import { Client } from 'pg';
-
-const TEST_DB_URL = process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5433/macp_control_plane_test';
+import { testDatabaseUrl } from '../helpers/test-db-url';
 
 function startCommand(needPostgres: boolean, needRuntime: boolean): string {
   if (needPostgres && needRuntime) {
@@ -58,6 +57,11 @@ function cleanupAfterFailedSetup(needPostgres: boolean, needRuntime: boolean): v
 }
 
 export default async function globalSetup(): Promise<void> {
+  // Resolve + guard the test database before starting anything: the suite truncates every table,
+  // so a TEST_DATABASE_URL that names a real database (or the caller's DATABASE_URL) fails here.
+  // Also stashes the caller's DATABASE_URL for the helpers' same-database check.
+  const TEST_DB_URL = testDatabaseUrl();
+
   // Lowercased so `INTEGRATION_RUNTIME=Docker`/`DOCKER` still starts the
   // runtime container — this must agree with `test/helpers/real-runtime-gate.ts`
   // treating anything-but-`mock` (case-insensitively) as "a real runtime is in
@@ -126,7 +130,7 @@ export default async function globalSetup(): Promise<void> {
     throw err;
   }
 
-  // Store the DB URL for tests to pick up
+  // The app under test reads DATABASE_URL; point it at the guarded test database.
   process.env.DATABASE_URL = TEST_DB_URL;
 
   console.log('Integration test global setup complete.');

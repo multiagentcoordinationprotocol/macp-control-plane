@@ -1,5 +1,11 @@
 import { BadRequestException, Logger } from '@nestjs/common';
-import { isValidSessionId, MAX_SESSION_ID_BYTES, RunExecutorService, SESSION_ID_RULE } from './run-executor.service';
+import {
+  assertControlAccepted,
+  isValidSessionId,
+  MAX_SESSION_ID_BYTES,
+  RunExecutorService,
+  SESSION_ID_RULE
+} from './run-executor.service';
 import { RunManagerService } from './run-manager.service';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
@@ -499,6 +505,59 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       expect(mockRunManager.markCancelled).toHaveBeenCalledWith('run-1');
     });
 
+    it('Option B: leaves the run untouched and surfaces the runtime error when CancelSession is refused', async () => {
+      const run = makeRun({
+        status: 'running',
+        runtimeSessionId: 'sess-1',
+        metadata: { executionRequest: makeRunDescriptor(), cancellationDelegated: true }
+      });
+      mockRunManager.getRun.mockResolvedValue(run);
+      const forbidden = new AppException(
+        ErrorCode.FORBIDDEN,
+        'only the session initiator or policy-delegated roles can cancel',
+        403
+      );
+      mockProvider.cancelSession.mockRejectedValueOnce(forbidden);
+
+      await expect(service.cancel('run-1', 'not delegated')).rejects.toBe(forbidden);
+      expect(mockRunManager.markCancelled).not.toHaveBeenCalled();
+      expect(mockStreamConsumer.stop).not.toHaveBeenCalled();
+      expect(mockStreamHub.complete).not.toHaveBeenCalled();
+    });
+
+    it('Option B: treats a negative CancelSession ack as a refusal (mapped through the registry)', async () => {
+      mockRunManager.getRun.mockResolvedValue(
+        makeRun({
+          status: 'running',
+          runtimeSessionId: 'sess-1',
+          metadata: { executionRequest: makeRunDescriptor(), cancellationDelegated: true }
+        })
+      );
+      mockProvider.cancelSession.mockResolvedValueOnce({
+        ack: { ok: false, sessionState: 'SESSION_STATE_OPEN', error: { code: 'FORBIDDEN', message: 'nope' } }
+      });
+
+      await expect(service.cancel('run-1')).rejects.toMatchObject({ errorCode: ErrorCode.FORBIDDEN });
+      expect(mockRunManager.markCancelled).not.toHaveBeenCalled();
+    });
+
+    it('Option A: leaves the run untouched when the cancel callback fails', async () => {
+      const fetchSpy = jest
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce({ ok: false, status: 403 } as unknown as Response);
+      mockRunManager.getRun.mockResolvedValue(
+        makeRun({
+          status: 'running',
+          runtimeSessionId: 'sess-1',
+          metadata: { executionRequest: makeRunDescriptor(), cancelCallback: { url: 'http://agent/cancel' } }
+        })
+      );
+
+      await expect(service.cancel('run-1')).rejects.toThrow(AppException);
+      expect(mockRunManager.markCancelled).not.toHaveBeenCalled();
+      fetchSpy.mockRestore();
+    });
+
     it('rejects when neither cancelCallback nor delegation is configured', async () => {
       const run = makeRun({
         status: 'running',
@@ -558,6 +617,25 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       expect(mockRunManager.markSuspended).toHaveBeenCalledWith('run-1');
     });
 
+    it('leaves the run running and surfaces the runtime error when SuspendSession is refused', async () => {
+      mockRunManager.getRun.mockResolvedValue(makeRun({ status: 'running', runtimeSessionId: 'sess-1' }));
+      const forbidden = new AppException(ErrorCode.FORBIDDEN, 'not delegated', 403);
+      mockProvider.suspendSession.mockRejectedValueOnce(forbidden);
+
+      await expect(service.suspend('run-1')).rejects.toBe(forbidden);
+      expect(mockRunManager.markSuspended).not.toHaveBeenCalled();
+    });
+
+    it('treats a negative SuspendSession ack as a refusal', async () => {
+      mockRunManager.getRun.mockResolvedValue(makeRun({ status: 'running', runtimeSessionId: 'sess-1' }));
+      mockProvider.suspendSession.mockResolvedValueOnce({
+        ack: { ok: false, sessionState: 'SESSION_STATE_OPEN', error: { code: 'FORBIDDEN', message: 'nope' } }
+      });
+
+      await expect(service.suspend('run-1')).rejects.toMatchObject({ errorCode: ErrorCode.FORBIDDEN });
+      expect(mockRunManager.markSuspended).not.toHaveBeenCalled();
+    });
+
     it('rejects when the run is not running', async () => {
       mockRunManager.getRun.mockResolvedValue(makeRun({ status: 'suspended', runtimeSessionId: 'sess-1' }));
       await expect(service.suspend('run-1')).rejects.toThrow(BadRequestException);
@@ -582,6 +660,15 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
         reason: 'continuing'
       });
       expect(mockRunManager.markResumed).toHaveBeenCalledWith('run-1');
+    });
+
+    it('leaves the run suspended and surfaces the runtime error when ResumeSession is refused', async () => {
+      mockRunManager.getRun.mockResolvedValue(makeRun({ status: 'suspended', runtimeSessionId: 'sess-1' }));
+      const forbidden = new AppException(ErrorCode.FORBIDDEN, 'not delegated', 403);
+      mockProvider.resumeSession.mockRejectedValueOnce(forbidden);
+
+      await expect(service.resume('run-1')).rejects.toBe(forbidden);
+      expect(mockRunManager.markResumed).not.toHaveBeenCalled();
     });
 
     it('rejects when the run is not suspended', async () => {
@@ -1045,5 +1132,51 @@ describe('RunExecutorService (observer mode, direct-agent-auth)', () => {
       expect(executor.updateContext).toBeUndefined();
       expect(executor.retryKickoff).toBeUndefined();
     });
+  });
+});
+
+describe('assertControlAccepted', () => {
+  const base = { duplicate: false, messageId: '', sessionId: 's', acceptedAtUnixMs: 0 } as const;
+
+  it('accepts an ok ack, a missing ack, and a negative ack without an error', () => {
+    expect(() => assertControlAccepted(undefined, 'CancelSession')).not.toThrow();
+    expect(() =>
+      assertControlAccepted({ ...base, ok: true, sessionState: 'SESSION_STATE_CANCELLED' }, 'CancelSession')
+    ).not.toThrow();
+    expect(() =>
+      assertControlAccepted({ ...base, ok: false, sessionState: 'SESSION_STATE_OPEN' }, 'CancelSession')
+    ).not.toThrow();
+  });
+
+  it('maps a registry code to its HTTP status', () => {
+    try {
+      assertControlAccepted(
+        {
+          ...base,
+          ok: false,
+          sessionState: 'SESSION_STATE_OPEN',
+          error: { code: 'SESSION_NOT_OPEN', message: 'closed' }
+        },
+        'CancelSession'
+      );
+      throw new Error('expected a throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AppException);
+      expect((err as AppException).getStatus()).toBe(409);
+      expect((err as AppException).errorCode).toBe(ErrorCode.SESSION_NOT_OPEN);
+    }
+  });
+
+  it('maps an unknown code to 502', () => {
+    try {
+      assertControlAccepted(
+        { ...base, ok: false, sessionState: 'SESSION_STATE_OPEN', error: { code: 'WHO_KNOWS', message: '' } },
+        'ResumeSession'
+      );
+      throw new Error('expected a throw');
+    } catch (err) {
+      expect((err as AppException).getStatus()).toBe(502);
+      expect((err as AppException).message).toMatch(/ResumeSession refused \(WHO_KNOWS\)/);
+    }
   });
 });

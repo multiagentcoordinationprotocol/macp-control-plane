@@ -17,6 +17,7 @@ import {
 } from './scripted-mock-runtime.provider';
 import { TestClient } from './test-client';
 import { truncateAll } from './test-db';
+import { testDatabaseUrl } from './test-db-url';
 import { DatabaseService } from '../../src/db/database.service';
 
 export interface TestAppContext {
@@ -50,9 +51,8 @@ const DEFAULT_SCRIPT: RuntimeScript = {
   ]
 };
 
-const TEST_DB_URL =
-  process.env.DATABASE_URL ??
-  'postgres://postgres:postgres@localhost:5433/macp_control_plane_test';
+// Guarded: throws unless TEST_DATABASE_URL names the throwaway test database (test-db-url.ts).
+const TEST_DB_URL = testDatabaseUrl();
 
 /**
  * Boot a real NestJS application for integration testing.

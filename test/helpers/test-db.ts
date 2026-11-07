@@ -1,8 +1,5 @@
 import { Pool } from 'pg';
-
-const TEST_DB_URL =
-  process.env.DATABASE_URL ??
-  'postgres://postgres:postgres@localhost:5433/macp_control_plane_test';
+import { testDatabaseUrl } from './test-db-url';
 
 /**
  * Truncate all tables to ensure clean state between test suites.
@@ -10,7 +7,10 @@ const TEST_DB_URL =
  * Retries on deadlock since background async operations may still be settling.
  */
 export async function truncateAll(pool?: Pool): Promise<void> {
-  const p = pool ?? new Pool({ connectionString: TEST_DB_URL });
+  // Guarded even when a pool is passed in: never truncate unless the configured target is the
+  // test database (see test-db-url.ts).
+  const url = testDatabaseUrl();
+  const p = pool ?? new Pool({ connectionString: url });
   const ownPool = !pool;
 
   const maxRetries = 3;
@@ -55,7 +55,7 @@ export async function truncateAll(pool?: Pool): Promise<void> {
  */
 export function createTestPool(): Pool {
   return new Pool({
-    connectionString: TEST_DB_URL,
+    connectionString: testDatabaseUrl(),
     max: 5
   });
 }

@@ -70,6 +70,12 @@ export interface RuntimeScript {
   decisionReceipt?: string | Error;
   /** `getReceiptKeys()` JWK Set JSON text, or an error it throws instead. Unset → throws. */
   receiptKeys?: string | Error;
+  /**
+   * Errors the control RPCs throw instead of acking — e.g. a FORBIDDEN `AppException` to mimic
+   * a runtime refusing CancelSession under an initiator-only policy. A refused call leaves the
+   * mock's session state unchanged, as the real runtime does.
+   */
+  controlRefusals?: Partial<Record<'cancel' | 'suspend' | 'resume', Error>>;
 }
 
 /**
@@ -267,6 +273,7 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
   }
 
   async cancelSession(req: RuntimeCancelSessionRequest): Promise<RuntimeCancelResult> {
+    if (this.script.controlRefusals?.cancel) throw this.script.controlRefusals.cancel;
     // macp-proto 0.1.3: CancelSession now terminates the session as CANCELLED
     // (previously surfaced as EXPIRED/RESOLVED).
     this.sessionState = 'SESSION_STATE_CANCELLED';
@@ -274,11 +281,13 @@ export class ScriptedMockRuntimeProvider implements RuntimeProvider {
   }
 
   async suspendSession(req: RuntimeSuspendSessionRequest): Promise<RuntimeSuspendResult> {
+    if (this.script.controlRefusals?.suspend) throw this.script.controlRefusals.suspend;
     this.sessionState = 'SESSION_STATE_SUSPENDED';
     return { ack: this.makeAck(req.runtimeSessionId) };
   }
 
   async resumeSession(req: RuntimeResumeSessionRequest): Promise<RuntimeResumeResult> {
+    if (this.script.controlRefusals?.resume) throw this.script.controlRefusals.resume;
     this.sessionState = 'SESSION_STATE_OPEN';
     return { ack: this.makeAck(req.runtimeSessionId) };
   }

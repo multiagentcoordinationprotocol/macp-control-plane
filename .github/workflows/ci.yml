@@ -142,7 +142,7 @@ jobs:
       - name: Run integration tests
         env:
           CI: true
-          DATABASE_URL: postgres://postgres:postgres@localhost:5433/macp_control_plane_test
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5433/macp_control_plane_test
           NODE_ENV: development
           AUTH_API_KEYS: test-key-ci
           OTEL_ENABLED: false
@@ -206,7 +206,7 @@ jobs:
       - name: Run live-runtime specs
         env:
           CI: true
-          DATABASE_URL: postgres://postgres:postgres@localhost:5433/macp_control_plane_test
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5433/macp_control_plane_test
           NODE_ENV: development
           OTEL_ENABLED: false
           LOG_LEVEL: warn
