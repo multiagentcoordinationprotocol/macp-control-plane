@@ -4053,6 +4053,16 @@
             },
             "description": ""
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid API key."
+          },
           "429": {
             "content": {
               "application/json": {
@@ -4074,7 +4084,6 @@
             "description": "Any other error; branch on `errorCode` when present."
           }
         },
-        "security": [],
         "summary": "Prometheus metrics for the control-plane process (text exposition format).",
         "tags": [
           "metrics"

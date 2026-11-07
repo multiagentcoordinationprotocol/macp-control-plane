@@ -7,7 +7,7 @@ import { AppConfigService } from '../config/app-config.service';
 describe('AuthGuard', () => {
   let guard: AuthGuard;
   let mockReflector: { getAllAndOverride: jest.Mock };
-  let mockConfig: { authApiKeys: string[] };
+  let mockConfig: { authApiKeys: string[]; authMayBeDisabled: boolean };
   let mockRequest: Record<string, any>;
 
   function createExecutionContext(request: Record<string, any>): ExecutionContext {
@@ -32,7 +32,8 @@ describe('AuthGuard', () => {
       getAllAndOverride: jest.fn().mockReturnValue(false)
     };
     mockConfig = {
-      authApiKeys: ['test-api-key-12345678']
+      authApiKeys: ['test-api-key-12345678'],
+      authMayBeDisabled: true
     };
     mockRequest = {
       headers: {}
@@ -112,6 +113,49 @@ describe('AuthGuard', () => {
     const result = guard.canActivate(context);
 
     expect(result).toBe(true);
+  });
+
+  it('refuses every request when no API keys are configured and auth may not be disabled', () => {
+    mockConfig.authApiKeys = [];
+    mockConfig.authMayBeDisabled = false;
+    mockRequest.headers.authorization = 'any-token';
+    const context = createExecutionContext(mockRequest);
+
+    expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
+  });
+
+  // =========================================================================
+  // Constant-time comparison, multiple keys
+  // =========================================================================
+  it('accepts any of several configured keys', () => {
+    mockConfig.authApiKeys = ['first-key-aaaaaaaa', 'second-key-bbbbbbbb'];
+    mockRequest.headers.authorization = 'Bearer second-key-bbbbbbbb';
+
+    expect(guard.canActivate(createExecutionContext(mockRequest))).toBe(true);
+  });
+
+  it('rejects a prefix or extension of a valid key', () => {
+    for (const token of ['test-api-key-1234567', 'test-api-key-123456789', 'TEST-API-KEY-12345678']) {
+      mockRequest.headers.authorization = `Bearer ${token}`;
+      expect(() => guard.canActivate(createExecutionContext(mockRequest))).toThrow('Invalid authorization token');
+    }
+  });
+
+  it('compares with crypto.timingSafeEqual against every configured key', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const crypto = require('node:crypto');
+    const spy = jest.spyOn(crypto, 'timingSafeEqual');
+    try {
+      mockConfig.authApiKeys = ['first-key-aaaaaaaa', 'second-key-bbbbbbbb', 'third-key-cccccccc'];
+      mockRequest.headers.authorization = 'Bearer first-key-aaaaaaaa';
+
+      guard.canActivate(createExecutionContext(mockRequest));
+
+      // No early exit on the first match: all three keys are compared.
+      expect(spy).toHaveBeenCalledTimes(3);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   // =========================================================================

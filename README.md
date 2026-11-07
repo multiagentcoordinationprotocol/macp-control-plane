@@ -58,7 +58,7 @@ These endpoints return **410 Gone**. Agents emit envelopes via the SDKs directly
 ### Observability
 - `GET /runs/:id/traces`, `/runs/:id/artifacts`, `/runs/:id/metrics`
 - `GET /dashboard/overview`, `/dashboard/agents/metrics`
-- `GET /healthz`, `/readyz`, `/metrics`, `/docs` (dev only)
+- `GET /healthz`, `/readyz` (no auth), `/metrics` (API key), `/docs` (dev only)
 
 ## Request shape
 

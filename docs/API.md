@@ -11,7 +11,7 @@ Conventions in the document:
 
 ## Authentication
 
-All endpoints except health probes and metrics require authentication.
+All endpoints except the health probes (`/healthz`, `/readyz`) require authentication, `/metrics` included. Keys are compared in constant time. An empty `AUTH_API_KEYS` disables auth only when `NODE_ENV` is `development` or `test`; anywhere else startup fails and the guard refuses every request.
 
 ```bash
 # API key auth
@@ -20,7 +20,7 @@ curl -H 'Authorization: Bearer <api-key>' http://localhost:3001/runs
 # Dev mode: leave AUTH_API_KEYS empty to disable auth
 ```
 
-Rate limit: 100 requests per 60 seconds per client. Payload limit: 1MB.
+Rate limit: `THROTTLE_LIMIT` (default 100) requests per `THROTTLE_TTL_MS` (default 60 s), bucketed per API key, and per end-user IP when an authenticated caller sends `X-MACP-Client-IP` (the hosted ui-console proxy does). The header is ignored on unauthenticated requests. Payload limit: 1MB.
 
 ### Upstream runtime auth (observer identity)
 
@@ -847,7 +847,7 @@ silently-empty diff.
 
 ---
 
-## Health (Public, no auth)
+## Health and metrics
 
 ### `GET /healthz`
 Liveness probe: `{ "ok": boolean, "service": "macp-control-plane" }`. **Always 200** while the process answers; `ok` (Postgres reachable, no pool error) is informational.
@@ -856,7 +856,7 @@ Liveness probe: `{ "ok": boolean, "service": "macp-control-plane" }`. **Always 2
 Readiness probe: `{ "ok", "database", "runtime": { "ok", "runtimeKind", "detail"? }, "streamConsumer", "circuitBreaker" }`. **200 when `ok`, 503 when not** — same body either way.
 
 ### `GET /metrics`
-Prometheus metrics (text format).
+Prometheus metrics (text format). **Requires the API key** (`Authorization: Bearer <key>`); the probes above do not.
 
 ---
 

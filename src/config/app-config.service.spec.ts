@@ -215,6 +215,23 @@ describe('AppConfigService', () => {
       expect(config.runtimeUseDevHeader).toBe(false);
     });
 
+    it.each([
+      ['development', true],
+      ['test', true],
+      ['production', false],
+      ['staging', false]
+    ])('authMayBeDisabled is %s -> %s', (env, expected) => {
+      process.env.NODE_ENV = env;
+      expect(new AppConfigService().authMayBeDisabled).toBe(expected);
+    });
+
+    it('authMayBeDisabled is false when NODE_ENV is unset, even though isDevelopment defaults to true', () => {
+      delete process.env.NODE_ENV;
+      const config = new AppConfigService();
+      expect(config.isDevelopment).toBe(true);
+      expect(config.authMayBeDisabled).toBe(false);
+    });
+
     it('should respect explicit RUNTIME_ALLOW_INSECURE even in production', () => {
       process.env.NODE_ENV = 'production';
       process.env.RUNTIME_ALLOW_INSECURE = 'true';

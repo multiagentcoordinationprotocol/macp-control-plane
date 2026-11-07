@@ -54,6 +54,30 @@ describe('ThrottleByUserGuard', () => {
       expect(result).toBe('192.168.1.1');
     });
 
+    it('keys an authenticated request on actorId plus the forwarded client IP', async () => {
+      const req = { actorId: 'console-...', ip: '10.0.0.1', headers: { 'x-macp-client-ip': '203.0.113.7' } };
+
+      expect(await (guard as any).getTracker(req)).toBe('console-...|203.0.113.7');
+    });
+
+    it('accepts an IPv6 forwarded client IP', async () => {
+      const req = { actorId: 'k', headers: { 'x-macp-client-ip': '2001:db8::1' } };
+
+      expect(await (guard as any).getTracker(req)).toBe('k|2001:db8::1');
+    });
+
+    it('ignores the client-IP header on an unauthenticated request', async () => {
+      const req = { ip: '10.0.0.1', headers: { 'x-macp-client-ip': '203.0.113.7' } };
+
+      expect(await (guard as any).getTracker(req)).toBe('10.0.0.1');
+    });
+
+    it('ignores a client-IP header that is not an IP literal', async () => {
+      const req = { actorId: 'k', headers: { 'x-macp-client-ip': 'evil|bucket' } };
+
+      expect(await (guard as any).getTracker(req)).toBe('k');
+    });
+
     it('falls back to ip when actorId is undefined', async () => {
       const req = { actorId: undefined, ip: '172.16.0.1' };
 

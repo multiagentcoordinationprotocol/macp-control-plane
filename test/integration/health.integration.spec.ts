@@ -44,7 +44,8 @@ describe('Health Probes (integration)', () => {
     const readyRes = await noAuthClient.requestNoAuth('GET', '/readyz');
     expect(readyRes.status).toBe(200);
 
+    // /metrics is not a probe: it needs the API key like every other route.
     const metricsRes = await noAuthClient.requestNoAuth('GET', '/metrics');
-    expect(metricsRes.status).toBe(200);
+    expect(metricsRes.status).toBe(401);
   });
 });

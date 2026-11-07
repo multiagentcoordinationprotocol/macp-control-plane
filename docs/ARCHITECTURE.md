@@ -376,6 +376,6 @@ The pipeline (lint → typecheck → tests → audit/scans → build → Docker)
 
 ## Operating alongside runtime v0.5.0
 
-- **Runtime metrics**: the control-plane exposes its own Prometheus metrics at `GET /metrics` (prom-client, `@Public()`). The runtime independently exposes its own Prometheus endpoint via `MACP_METRICS_ADDR` (e.g. `MACP_METRICS_ADDR=0.0.0.0:9464`). Scrape both to cover the CP and the runtime — nothing in the CP scrapes the runtime for you. For local debugging you can expose `9464` from the runtime container.
+- **Runtime metrics**: the control-plane exposes its own Prometheus metrics at `GET /metrics` (prom-client; requires the API key, so scrapers send `Authorization: Bearer <key>`). The runtime independently exposes its own Prometheus endpoint via `MACP_METRICS_ADDR` (e.g. `MACP_METRICS_ADDR=0.0.0.0:9464`). Scrape both to cover the CP and the runtime — nothing in the CP scrapes the runtime for you. For local debugging you can expose `9464` from the runtime container.
 - **JWT algorithms**: runtime v0.5.0 removed **HS256** from the default JWT algorithm allowlist (RS256/ES256 only). The CP mints RS256 tokens via the auth-service, so no CP change is needed. Deployments that intentionally use shared-secret HS256 tokens against the runtime must opt in explicitly with `MACP_AUTH_JWT_ALGS=HS256` on the **runtime** side.
 - **Dev-mode startup**: runtime v0.5.0 refuses to start without `MACP_ALLOW_INSECURE=1`, and the published image no longer bakes it in — set it explicitly for local/dev/test runtimes.
