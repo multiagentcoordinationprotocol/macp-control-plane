@@ -153,6 +153,12 @@ export class AppConfigService implements OnModuleInit {
    */
   readonly authServiceUrl = process.env.MACP_AUTH_SERVICE_URL ?? '';
   readonly authServiceTimeoutMs = readNumber('MACP_AUTH_SERVICE_TIMEOUT_MS', 5000);
+  /**
+   * Shared token-issuer key the auth-service requires on `POST /tokens` (one of
+   * its `TOKEN_ISSUER_KEYS`), sent as `Authorization: Bearer <key>`. Empty sends
+   * no header, which only an auth-service with no keys (dev/test) accepts.
+   */
+  readonly authServiceApiKey = (process.env.MACP_AUTH_SERVICE_API_KEY ?? '').trim();
   readonly authTokenTtlSeconds = readNumber('MACP_AUTH_TOKEN_TTL_SECONDS', 3600);
   readonly authTokenSender = process.env.MACP_AUTH_TOKEN_SENDER ?? 'macp-control-plane';
   /**
@@ -282,6 +288,14 @@ export class AppConfigService implements OnModuleInit {
     if (!this.runtimeBearerToken && !this.authServiceUrl && this.runtimeUseDevHeader) {
       throw new Error(
         'RUNTIME_BEARER_TOKEN (or MACP_AUTH_SERVICE_URL) must be set in production; the RUNTIME_USE_DEV_HEADER dev-bearer fallback is not permitted'
+      );
+    }
+
+    // Warn (don't fail): a production auth-service refuses POST /tokens without its
+    // token-issuer key, so every mint would 401 and fall back to the static bearer.
+    if (this.authServiceUrl && !this.authServiceApiKey) {
+      this.logger.warn(
+        'Production start: MACP_AUTH_SERVICE_URL is set but MACP_AUTH_SERVICE_API_KEY is not. A production auth-service rejects unauthenticated mints (401).'
       );
     }
 

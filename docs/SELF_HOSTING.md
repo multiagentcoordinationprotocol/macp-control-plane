@@ -48,7 +48,7 @@ Useful optional variables:
 | `LOG_LEVEL` | `info` | |
 | `DB_POOL_MAX` | `20` | Must be ≥ 2 |
 
-Leave these **unset** in compose: `MACP_AUTH_SERVICE_URL` (JWT mint; hosted only), `STREAM_HUB_STRATEGY`/`REDIS_URL`
+Leave these **unset** in compose: `MACP_AUTH_SERVICE_URL` and `MACP_AUTH_SERVICE_API_KEY` (JWT mint; hosted only — if you do set the URL, the API key must be one of the auth-service's `TOKEN_ISSUER_KEYS`), `STREAM_HUB_STRATEGY`/`REDIS_URL`
 (single instance is fine; a `memory` warning is logged), `OTEL_*`, `RUNTIME_USE_DEV_HEADER` (deprecated; the
 dev-bearer fallback is refused in production, so use `RUNTIME_BEARER_TOKEN`). The full list is in
 [`.env.example`](../.env.example).

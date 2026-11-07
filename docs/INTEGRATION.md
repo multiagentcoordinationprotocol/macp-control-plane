@@ -69,7 +69,7 @@ Per-gRPC-call credential resolution uses a three-step fallback chain:
 
 | Mode | Trigger | Control-plane env vars |
 | --- | --- | --- |
-| **JWT mint (preferred)** | `MACP_AUTH_SERVICE_URL` set | `MACP_AUTH_SERVICE_URL`, `MACP_AUTH_SERVICE_TIMEOUT_MS` (5000), `MACP_AUTH_TOKEN_TTL_SECONDS` (3600), `MACP_AUTH_TOKEN_SENDER` (`control-plane`) |
+| **JWT mint (preferred)** | `MACP_AUTH_SERVICE_URL` set | `MACP_AUTH_SERVICE_URL`, `MACP_AUTH_SERVICE_API_KEY` (token-issuer key, sent as `Authorization: Bearer`), `MACP_AUTH_SERVICE_TIMEOUT_MS` (5000), `MACP_AUTH_TOKEN_TTL_SECONDS` (3600), `MACP_AUTH_TOKEN_SENDER` (`control-plane`) |
 | **Static Bearer** | JWT disabled or mint failed | `RUNTIME_BEARER_TOKEN` |
 | **Dev bearer** *(deprecated, local only)* | `RUNTIME_USE_DEV_HEADER=true` | `RUNTIME_DEV_AGENT_ID` (`control-plane`) sent as `Authorization: Bearer <id>` — runtime v0.5.0 removed the `x-macp-agent-id` header |
 

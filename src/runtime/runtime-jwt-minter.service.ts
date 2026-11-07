@@ -88,7 +88,11 @@ export class RuntimeJwtMinterService {
     try {
       response = await fetch(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          // The auth-service's shared token-issuer key (TOKEN_ISSUER_KEYS there).
+          ...(this.config.authServiceApiKey ? { authorization: `Bearer ${this.config.authServiceApiKey}` } : {})
+        },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(this.config.authServiceTimeoutMs)
       });
