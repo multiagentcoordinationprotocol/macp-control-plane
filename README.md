@@ -103,11 +103,33 @@ Response: `{ "runId": "<uuid>", "sessionId": "<uuid>", "status": "queued", "trac
 Node 20 (`.nvmrc`) and npm 10+ (see `engines` in package.json).
 
 ```bash
-cp .env.example .env
 npm install
-npm run drizzle:migrate
-npm run start:dev
+doppler setup --project macp-control-plane --config dev   # once per checkout
+doppler run -- npm run drizzle:migrate
+doppler run -- npm run start:dev
 ```
+
+Doppler is the source of truth for configuration (see [Secrets and configuration](#secrets-and-configuration-doppler)). Without Doppler access, `cp .env.example .env`, fill it in, and load it into your shell (`set -a; . ./.env; set +a`) before the same commands without `doppler run --`.
+
+### Secrets and configuration (Doppler)
+
+The Doppler project is `macp-control-plane`:
+
+| Config | Holds |
+|---|---|
+| `dev` | Local development values (the `.env` keys) |
+| `dev_personal` | Your own overrides of `dev` |
+| `stg` | `prd`'s non-secret config only; there is no Railway staging environment yet |
+| `prd` | The hosted control plane's Railway variables (project `macp-scenario-runner`, service `macp-control-plane`) |
+
+To change the hosted service, edit Doppler `macp-control-plane/prd`, then:
+
+```bash
+deploy/doppler-sync.sh           # dry run: key names, changed/unchanged
+deploy/doppler-sync.sh --apply   # push the changed keys, then redeploy
+```
+
+The script manages only the keys in [deploy/doppler-keys.txt](deploy/doppler-keys.txt). It never deletes a Railway variable and never touches a Railway reference (`${{service.VAR}}`) or a `RAILWAY_*` variable. It pipes values from Doppler to Railway without printing them, and refuses to run on a dirty tree. Railway holds no Doppler token.
 
 ### Docker
 
