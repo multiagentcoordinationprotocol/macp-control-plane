@@ -11,6 +11,8 @@
 #     test/integration/decision-receipt-live test/integration/what-if-replay-live
 # Clean up locally with `docker rm -f macp-live-runtime-<leg>` and remove <config-dir>.
 #
+# The control plane's token also carries can_manage_mode_registry, as the deployed one does: the
+# runtime gates RegisterPolicy/UnregisterPolicy on it, and runs-control-live registers a policy.
 # The signed leg generates a throwaway Ed25519 key in <config-dir>: a test fixture, never a deploy
 # key. MACP_RUNTIME_ID is set on both legs (required with a key; names the receipt issuer).
 # MACP_COMPACT_TERMINAL_LOGS=0 keeps resolved histories, so run what-if-replay-live with the same
@@ -27,7 +29,7 @@ case "$LEG" in signed | unsigned) ;; *) echo "leg must be signed or unsigned" >&
 mkdir -p "$DIR"
 cat >"$DIR/tokens.json" <<'TOKENS'
 [
-  {"token":"cp-observer-token","sender":"macp-control-plane","is_observer":true},
+  {"token":"cp-observer-token","sender":"macp-control-plane","is_observer":true,"can_manage_mode_registry":true},
   {"token":"agent-alpha-token","sender":"agent-alpha","can_start_sessions":true},
   {"token":"agent-beta-token","sender":"agent-beta"}
 ]

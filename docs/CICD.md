@@ -22,7 +22,7 @@ audit (npm audit, prod deps, high+) ─┤
 check-env-secrets ─┤
 conventions (CLAUDE.md grep sweeps) ─┘
 test → integration-test (postgres:16 service on 5433, mock runtime)
-test → live-runtime (matrix: signed | unsigned receipts; macp-runtime:0.14.0 via test/scripts/start-live-runtime.sh; decision-receipt-live + what-if-replay-live)
+test → live-runtime (matrix: signed | unsigned receipts; macp-runtime:0.14.0 via test/scripts/start-live-runtime.sh; decision-receipt-live + what-if-replay-live + runs-control-live)
 ```
 
 - **openapi**: `npm run openapi:check` regenerates `openapi.json` from the controllers (Nest preview mode, no database or runtime) and fails on any byte difference. Fix with `npm run openapi:export` and commit. A `package.json` version bump needs it too, since `info.version` follows it, and so can a Dependabot bump of `@nestjs/swagger`, `typescript` or `ts-json-schema-generator` (the generators' output can shift).
