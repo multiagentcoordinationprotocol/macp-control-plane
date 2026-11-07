@@ -2,6 +2,7 @@ import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { TestSSEClient } from '../helpers/sse-client';
 import { decisionModeRequest, decisionHappyScript } from '../fixtures/decision-mode';
 import { waitFor } from '../helpers/wait-for';
+import { isRealRuntime } from '../helpers/real-runtime-gate';
 
 /**
  * Replay endpoints: POST /runs/:id/replay (descriptor), GET /runs/:id/replay/stream
@@ -9,7 +10,9 @@ import { waitFor } from '../helpers/wait-for';
  *
  * One run is driven to completion in beforeAll and replayed by every test.
  */
-describe('Run Replay (integration)', () => {
+// Mock-only: every test needs a run driven by ScriptedMockRuntimeProvider events, which a
+// real runtime (INTEGRATION_RUNTIME=docker|remote) has no agents to emit; skip rather than time out.
+(isRealRuntime ? describe.skip : describe)('Run Replay (integration)', () => {
   let ctx: TestAppContext;
   let runId: string;
   let allEvents: any[];

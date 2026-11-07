@@ -3,6 +3,12 @@ import { decisionModeRequest, decisionHappyScript } from '../fixtures/decision-m
 import { waitFor } from '../helpers/wait-for';
 import { RunEventService } from '../../src/events/run-event.service';
 import { EventRepository } from '../../src/storage/event.repository';
+import { isRealRuntime } from '../helpers/real-runtime-gate';
+
+// Mock-only: these depend on events the ScriptedMockRuntimeProvider scripts. A real
+// runtime (INTEGRATION_RUNTIME=docker|remote) has no agents to emit them, so the run
+// never binds or completes; skip there rather than time out.
+const itMock = isRealRuntime ? it.skip : it;
 
 describe('Projection (integration, observer mode)', () => {
   let ctx: TestAppContext;
@@ -126,7 +132,7 @@ describe('Projection (integration, observer mode)', () => {
     expect(state.timeline.latestSeq).toBeGreaterThanOrEqual(lastEmittedSeq);
   });
 
-  it('projection tracks participant status from scripted events', async () => {
+  itMock('projection tracks participant status from scripted events', async () => {
     const { runId } = await ctx.client.createRun(decisionModeRequest());
 
     const state = await waitFor(
@@ -156,7 +162,7 @@ describe('Projection (integration, observer mode)', () => {
     expect(state.timeline.totalEvents).toBeGreaterThan(0);
   });
 
-  it('projection graph tracks message flow emitted by agents (via observer stream)', async () => {
+  itMock('projection graph tracks message flow emitted by agents (via observer stream)', async () => {
     const { runId } = await ctx.client.createRun(decisionModeRequest());
 
     const state = await waitFor(
@@ -171,7 +177,7 @@ describe('Projection (integration, observer mode)', () => {
     expect(state.graph).toHaveProperty('edges');
   });
 
-  it('projection rebuilds from canonical events', async () => {
+  itMock('projection rebuilds from canonical events', async () => {
     const { runId } = await ctx.client.createRun(decisionModeRequest());
 
     await waitFor(

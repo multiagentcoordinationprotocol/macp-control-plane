@@ -2,6 +2,12 @@ import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { TestSSEClient } from '../helpers/sse-client';
 import { decisionModeRequest, decisionHappyScript } from '../fixtures/decision-mode';
 import { waitFor } from '../helpers/wait-for';
+import { isRealRuntime } from '../helpers/real-runtime-gate';
+
+// Mock-only: these depend on events the ScriptedMockRuntimeProvider scripts. A real
+// runtime (INTEGRATION_RUNTIME=docker|remote) has no agents to emit them, so the run
+// never binds or completes; skip there rather than time out.
+const itMock = isRealRuntime ? it.skip : it;
 
 describe('Run SSE Streaming (integration)', () => {
   let ctx: TestAppContext;
@@ -77,7 +83,7 @@ describe('Run SSE Streaming (integration)', () => {
     }
   });
 
-  it('SSE events have sequential IDs for resume support', async () => {
+  itMock('SSE events have sequential IDs for resume support', async () => {
     const { runId } = await ctx.client.createRun(decisionModeRequest());
 
     const sse = new TestSSEClient(ctx.url, 'test-key-integration');
@@ -98,7 +104,7 @@ describe('Run SSE Streaming (integration)', () => {
     }
   });
 
-  it('reconnect with Last-Event-Id header replays only events with seq > N', async () => {
+  itMock('reconnect with Last-Event-Id header replays only events with seq > N', async () => {
     const { runId } = await ctx.client.createRun(decisionModeRequest());
 
     // Let the run finish so the full event log is persisted (and settled).
@@ -133,7 +139,7 @@ describe('Run SSE Streaming (integration)', () => {
     }
   });
 
-  it('afterSeq query param wins over Last-Event-Id header when both are present', async () => {
+  itMock('afterSeq query param wins over Last-Event-Id header when both are present', async () => {
     const { runId } = await ctx.client.createRun(decisionModeRequest());
 
     const events = await settledEvents(runId);

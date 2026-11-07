@@ -4,6 +4,12 @@ import { decisionModeRequest, decisionHappyScript } from '../fixtures/decision-m
 import { WebhookReceiver } from '../helpers/webhook-receiver';
 import { waitFor } from '../helpers/wait-for';
 import { DatabaseService } from '../../src/db/database.service';
+import { isRealRuntime } from '../helpers/real-runtime-gate';
+
+// Mock-only: these depend on events the ScriptedMockRuntimeProvider scripts. A real
+// runtime (INTEGRATION_RUNTIME=docker|remote) has no agents to emit them, so the run
+// never binds or completes; skip there rather than time out.
+const itMock = isRealRuntime ? it.skip : it;
 
 /**
  * Webhook delivery pipeline (outbox pattern + HMAC-SHA256 + retry).
@@ -153,7 +159,7 @@ describe('Webhook Delivery (integration)', () => {
     expect(res.status).toBe(400);
   });
 
-  it('a webhook stored with an empty secret (pre-#144 row) is never delivered to (#145)', async () => {
+  itMock('a webhook stored with an empty secret (pre-#144 row) is never delivered to (#145)', async () => {
     // The API can no longer store a blank secret, so simulate a legacy row directly.
     const created = await registerWebhook(['run.completed'], 'to-be-blanked');
     const db = ctx.module.get(DatabaseService);
@@ -173,7 +179,7 @@ describe('Webhook Delivery (integration)', () => {
     expect(receiver.requests.length).toBe(0);
   });
 
-  it('wildcard webhook receives run.started and run.completed with X-MACP-Event header', async () => {
+  itMock('wildcard webhook receives run.started and run.completed with X-MACP-Event header', async () => {
     await registerWebhook([]);
     const runId = await runToCompletion();
 
@@ -189,7 +195,7 @@ describe('Webhook Delivery (integration)', () => {
     }
   });
 
-  it('X-MACP-Signature is the HMAC-SHA256 of the exact received body', async () => {
+  itMock('X-MACP-Signature is the HMAC-SHA256 of the exact received body', async () => {
     const secret = 'sig-check-secret';
     await registerWebhook(['run.completed'], secret);
     await runToCompletion();
@@ -199,7 +205,7 @@ describe('Webhook Delivery (integration)', () => {
     expect(req.headers['x-macp-signature']).toBe(expected);
   });
 
-  it('records a delivered webhook_deliveries row with the response status', async () => {
+  itMock('records a delivered webhook_deliveries row with the response status', async () => {
     const webhook = await registerWebhook(['run.completed']);
     const runId = await runToCompletion();
 
@@ -215,7 +221,7 @@ describe('Webhook Delivery (integration)', () => {
     expect(row.response_status).toBe(200);
   });
 
-  it('retries after a 500 (1s backoff) and ends delivered', async () => {
+  itMock('retries after a 500 (1s backoff) and ends delivered', async () => {
     receiver.respondWith([500, 200]);
     const webhook = await registerWebhook(['run.completed']);
     await runToCompletion();
@@ -233,7 +239,7 @@ describe('Webhook Delivery (integration)', () => {
     expect(row.response_status).toBe(200);
   });
 
-  it("webhook filtered to ['run.completed'] receives only that event", async () => {
+  itMock("webhook filtered to ['run.completed'] receives only that event", async () => {
     await registerWebhook(['run.completed']);
     await runToCompletion();
 
@@ -247,7 +253,7 @@ describe('Webhook Delivery (integration)', () => {
     expect(receiver.requests.every((r) => r.headers['x-macp-event'] === 'run.completed')).toBe(true);
   });
 
-  it('webhook toggled active=false via PATCH receives nothing', async () => {
+  itMock('webhook toggled active=false via PATCH receives nothing', async () => {
     // Control webhook on a second receiver proves deliveries flow; the
     // deactivated webhook must stay silent for the same run.
     const controlReceiver = new WebhookReceiver();
@@ -278,7 +284,7 @@ describe('Webhook Delivery (integration)', () => {
     }
   });
 
-  it('always-500 receiver: delivery ends failed after 3 attempts', async () => {
+  itMock('always-500 receiver: delivery ends failed after 3 attempts', async () => {
     receiver.setDefaultStatus(500);
     const webhook = await registerWebhook(['run.completed']);
     await runToCompletion();

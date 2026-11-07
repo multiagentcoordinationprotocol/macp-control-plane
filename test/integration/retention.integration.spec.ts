@@ -4,6 +4,7 @@ import { decisionModeRequest, decisionHappyScript } from '../fixtures/decision-m
 import { waitFor } from '../helpers/wait-for';
 import { DataRetentionService } from '../../src/retention/data-retention.service';
 import { DatabaseService } from '../../src/db/database.service';
+import { isRealRuntime } from '../helpers/real-runtime-gate';
 
 /**
  * Data retention sweep (src/retention/data-retention.service.ts).
@@ -12,7 +13,9 @@ import { DatabaseService } from '../../src/db/database.service';
  * invoke it directly. TTL defaults to 30 days — rows are backdated 31 days via
  * raw SQL through the app's own pool.
  */
-describe('Data Retention (integration)', () => {
+// Mock-only: every test needs a run driven by ScriptedMockRuntimeProvider events, which a
+// real runtime (INTEGRATION_RUNTIME=docker|remote) has no agents to emit; skip rather than time out.
+(isRealRuntime ? describe.skip : describe)('Data Retention (integration)', () => {
   let ctx: TestAppContext;
 
   beforeAll(async () => {

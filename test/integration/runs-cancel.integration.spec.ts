@@ -1,6 +1,12 @@
 import { createTestApp, TestAppContext } from '../helpers/test-app';
 import { decisionModeRequest, decisionHappyScript } from '../fixtures/decision-mode';
 import { waitFor } from '../helpers/wait-for';
+import { isRealRuntime } from '../helpers/real-runtime-gate';
+
+// Mock-only: these depend on events the ScriptedMockRuntimeProvider scripts. A real
+// runtime (INTEGRATION_RUNTIME=docker|remote) has no agents to emit them, so the run
+// never binds or completes; skip there rather than time out.
+const itMock = isRealRuntime ? it.skip : it;
 
 /**
  * Observer-mode cancel flow (direct-agent-auth CP-8).
@@ -38,7 +44,7 @@ describe('Run Cancellation (integration, observer mode)', () => {
     expect(result.statusCode ?? 0).toBeGreaterThanOrEqual(400);
   });
 
-  it('Option B: cancels when metadata.cancellationDelegated=true', async () => {
+  itMock('Option B: cancels when metadata.cancellationDelegated=true', async () => {
     const request = decisionModeRequest({
       session: {
         ...decisionModeRequest().session,
