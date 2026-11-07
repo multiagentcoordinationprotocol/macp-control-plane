@@ -152,7 +152,8 @@ jobs:
           INTEGRATION_RUNTIME: mock
         run: npm run test:integration
 
-  # The describeWithAuthedRuntime specs (decision receipts, what-if replay) against the released
+  # The describeWithAuthedRuntime specs (decision receipts, what-if replay) plus runs-control-live
+  # (suspend/resume/cancel through the runtime's dedicated RPCs) against the released
   # runtime image, one leg per receipt-signing mode. EXPECT_DECISION_RECEIPTS makes the receipt spec
   # strict, so a runtime that stops advertising decision_receipt fails instead of returning early.
   live-runtime:
@@ -218,6 +219,7 @@ jobs:
         run: >-
           npx jest -c test/jest.integration.config.ts --runInBand --verbose
           test/integration/decision-receipt-live test/integration/what-if-replay-live
+          test/integration/runs-control-live
       - name: Runtime logs
         if: failure()
         run: docker logs macp-live-runtime-${{ matrix.receipts }}
