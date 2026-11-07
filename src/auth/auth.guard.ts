@@ -1,20 +1,21 @@
 import { CanActivate, ExecutionContext, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
 import { IS_PUBLIC_KEY } from './public.decorator';
 import { AppConfigService } from '../config/app-config.service';
 
-/** Per-process key: the MACs below exist only to give timingSafeEqual equal-length inputs. */
-const COMPARE_KEY = randomBytes(32);
-
 /**
- * Compares two secrets in constant time. Both sides go through HMAC-SHA256 first so the comparison is
- * over equal-length MACs: neither the content nor the length of a configured key leaks through
- * response timing. Nothing is stored; this is a comparison, not password hashing.
+ * Compares two secrets in constant time with crypto.timingSafeEqual. On a length mismatch it still
+ * runs one comparison (of the expected key against itself) so the work done is the same; only the
+ * key's length can leak, which reveals nothing useful about a high-entropy API key.
  */
 function constantTimeEquals(presented: string, expected: string): boolean {
-  const a = createHmac('sha256', COMPARE_KEY).update(presented).digest();
-  const b = createHmac('sha256', COMPARE_KEY).update(expected).digest();
+  const a = Buffer.from(presented, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  if (a.length !== b.length) {
+    timingSafeEqual(b, b);
+    return false;
+  }
   return timingSafeEqual(a, b);
 }
 
