@@ -45,6 +45,11 @@ export class AppConfigService implements OnModuleInit {
 
   readonly nodeEnv = process.env.NODE_ENV ?? 'development';
   readonly isDevelopment = this.nodeEnv === 'development';
+  /**
+   * An empty AUTH_API_KEYS disables auth only when NODE_ENV is EXPLICITLY development or test.
+   * Unlike `isDevelopment`, an unset NODE_ENV does not count, so a dropped NODE_ENV cannot open the API.
+   */
+  readonly authMayBeDisabled = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
 
   /** Read from package.json at startup */
   readonly clientVersion: string = (() => {

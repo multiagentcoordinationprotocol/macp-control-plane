@@ -7,7 +7,7 @@ import { AppConfigService } from '../config/app-config.service';
 describe('AuthGuard', () => {
   let guard: AuthGuard;
   let mockReflector: { getAllAndOverride: jest.Mock };
-  let mockConfig: { authApiKeys: string[] };
+  let mockConfig: { authApiKeys: string[]; authMayBeDisabled: boolean };
   let mockRequest: Record<string, any>;
 
   function createExecutionContext(request: Record<string, any>): ExecutionContext {
@@ -32,7 +32,8 @@ describe('AuthGuard', () => {
       getAllAndOverride: jest.fn().mockReturnValue(false)
     };
     mockConfig = {
-      authApiKeys: ['test-api-key-12345678']
+      authApiKeys: ['test-api-key-12345678'],
+      authMayBeDisabled: true
     };
     mockRequest = {
       headers: {}
@@ -114,32 +115,13 @@ describe('AuthGuard', () => {
     expect(result).toBe(true);
   });
 
-  it('refuses every request when no API keys are configured outside development/test', () => {
-    const previous = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'production';
-    try {
-      mockConfig.authApiKeys = [];
-      mockRequest.headers.authorization = 'any-token';
-      const context = createExecutionContext(mockRequest);
+  it('refuses every request when no API keys are configured and auth may not be disabled', () => {
+    mockConfig.authApiKeys = [];
+    mockConfig.authMayBeDisabled = false;
+    mockRequest.headers.authorization = 'any-token';
+    const context = createExecutionContext(mockRequest);
 
-      expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
-    } finally {
-      process.env.NODE_ENV = previous;
-    }
-  });
-
-  it('refuses when NODE_ENV is unset and no API keys are configured', () => {
-    const previous = process.env.NODE_ENV;
-    delete process.env.NODE_ENV;
-    try {
-      mockConfig.authApiKeys = [];
-      mockRequest.headers.authorization = 'any-token';
-      const context = createExecutionContext(mockRequest);
-
-      expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
-    } finally {
-      process.env.NODE_ENV = previous;
-    }
+    expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
   });
 
   // =========================================================================

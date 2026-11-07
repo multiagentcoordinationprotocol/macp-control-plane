@@ -15,17 +15,6 @@ function constantTimeEquals(presented: string, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
-/**
- * Auth may be switched off (no AUTH_API_KEYS) only when NODE_ENV is explicitly `development` or
- * `test`. Anywhere else an empty key list fails closed here, in addition to the production
- * fail-fast in AppConfigService.validate(), so a dropped NODE_ENV or AUTH_API_KEYS can never
- * silently open the API.
- */
-function authMayBeDisabled(): boolean {
-  const env = process.env.NODE_ENV;
-  return env === 'development' || env === 'test';
-}
-
 @Injectable()
 export class AuthGuard implements CanActivate {
   private readonly logger = new Logger(AuthGuard.name);
@@ -58,7 +47,10 @@ export class AuthGuard implements CanActivate {
 
     const validTokens = this.config.authApiKeys;
     if (validTokens.length === 0) {
-      if (!authMayBeDisabled()) {
+      // Auth may be switched off only when NODE_ENV is explicitly development/test (see
+      // AppConfigService.authMayBeDisabled). Anywhere else an empty key list fails closed here, in
+      // addition to the production fail-fast in AppConfigService.validate().
+      if (!this.config.authMayBeDisabled) {
         this.logger.error('No AUTH_API_KEYS configured outside development/test; refusing request');
         throw new UnauthorizedException('Invalid authorization token');
       }
