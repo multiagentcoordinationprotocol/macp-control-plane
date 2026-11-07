@@ -293,7 +293,7 @@ Entries are logged by `/implement` as phases land, and closed out by `/reconcile
   belongs with a decision about whether the live suite should run in CI at all, not with this phase.
 - **Blast radius if wrong:** Anyone running the whole suite against a live auth-configured runtime
   sees 8 confusing failures. Documented here and in the live spec's header.
-- **Status:** DEFERRED (2026-10-04) — still UNCONFIRMED by design. CI pins mock; settles when we decide whether `INTEGRATION_RUNTIME=remote` becomes a required CI check.
+- **Status:** DEFERRED (2026-10-04) — still UNCONFIRMED by design. CI pins mock; settles when we decide whether `INTEGRATION_RUNTIME=remote` becomes a required CI check. Separately, the unauthenticated compose runtime (`npm run test:integration:docker`) is no longer broken: its 29 mock-scripted-event timeouts across 8 specs are fixed by #151 (those tests now skip under `isRealRuntime`; 0 failures).
 
 ## P5 — follow-ups the ship gate raised, deliberately deferred to P6/P7
 - **Plan:** `plans/absorb-runtime-v0.7.0.md` (Phases 4/5)

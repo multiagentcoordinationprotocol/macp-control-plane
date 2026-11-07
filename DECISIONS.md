@@ -12,7 +12,7 @@ written by any phase, so every choice below remains reversible.
 | # | Entry | Note |
 |---|---|---|
 | 1 | P1 manual live-harness gate | Gate polarity matches `test-app.ts`; the spec fails loudly rather than passing vacuously |
-| 2 | P1 `workflow_dispatch` docker mode | Moot — that path is already broken upstream of this gate (see issues) |
+| 2 | P1 `workflow_dispatch` docker mode | Moot at v0.7.0 (path was broken upstream). Superseded: docker mode is fixed by #151 (mock-scripted specs skip against a real runtime; 0 failures) |
 | 3 | P1 host Docker/Postgres unrepaired | Overtaken; the residual defect is in the harness, not the host (see issues) |
 | 4 | P1 globalSetup bypass | Spec is still DB-free; bypass is moot now the suite runs on the isolated cluster |
 | 5 | P2 result-object signature | Re-verified **zero production callers**; interface-only, no HTTP surface |
