@@ -75,7 +75,7 @@ describe('OpenAPI document (#112)', () => {
       .filter((o) => Array.isArray(o.op.security) && o.op.security.length === 0)
       .map((o) => `${o.method} ${o.path}`)
       .sort();
-    expect(publicOps).toEqual(['GET /healthz', 'GET /metrics', 'GET /readyz']);
+    expect(publicOps).toEqual(['GET /healthz', 'GET /readyz']);
     expect(document.security).toEqual([{ bearer: [] }]);
     for (const { op } of operations(document)) {
       expect(op.responses.default).toBeDefined();

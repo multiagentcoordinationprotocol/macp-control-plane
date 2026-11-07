@@ -1,12 +1,12 @@
 import { Controller, Get, Res } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiProduces, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
-import { Public } from '../auth/public.decorator';
 import { InstrumentationService } from '../telemetry/instrumentation.service';
 
 @ApiTags('metrics')
+// Not @Public(): process and per-route counters are operational data, so /metrics needs the API key
+// like every other non-probe route. Scrapers send `Authorization: Bearer <key>`.
 @Controller()
-@Public()
 export class MetricsController {
   constructor(private readonly instrumentation: InstrumentationService) {}
 

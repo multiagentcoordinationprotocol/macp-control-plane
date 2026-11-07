@@ -114,6 +114,68 @@ describe('AuthGuard', () => {
     expect(result).toBe(true);
   });
 
+  it('refuses every request when no API keys are configured outside development/test', () => {
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      mockConfig.authApiKeys = [];
+      mockRequest.headers.authorization = 'any-token';
+      const context = createExecutionContext(mockRequest);
+
+      expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
+    } finally {
+      process.env.NODE_ENV = previous;
+    }
+  });
+
+  it('refuses when NODE_ENV is unset and no API keys are configured', () => {
+    const previous = process.env.NODE_ENV;
+    delete process.env.NODE_ENV;
+    try {
+      mockConfig.authApiKeys = [];
+      mockRequest.headers.authorization = 'any-token';
+      const context = createExecutionContext(mockRequest);
+
+      expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
+    } finally {
+      process.env.NODE_ENV = previous;
+    }
+  });
+
+  // =========================================================================
+  // Constant-time comparison, multiple keys
+  // =========================================================================
+  it('accepts any of several configured keys', () => {
+    mockConfig.authApiKeys = ['first-key-aaaaaaaa', 'second-key-bbbbbbbb'];
+    mockRequest.headers.authorization = 'Bearer second-key-bbbbbbbb';
+
+    expect(guard.canActivate(createExecutionContext(mockRequest))).toBe(true);
+  });
+
+  it('rejects a prefix or extension of a valid key', () => {
+    for (const token of ['test-api-key-1234567', 'test-api-key-123456789', 'TEST-API-KEY-12345678']) {
+      mockRequest.headers.authorization = `Bearer ${token}`;
+      expect(() => guard.canActivate(createExecutionContext(mockRequest))).toThrow('Invalid authorization token');
+    }
+  });
+
+  it('compares with crypto.timingSafeEqual against every configured key', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const crypto = require('node:crypto');
+    const spy = jest.spyOn(crypto, 'timingSafeEqual');
+    try {
+      mockConfig.authApiKeys = ['first-key-aaaaaaaa', 'second-key-bbbbbbbb', 'third-key-cccccccc'];
+      mockRequest.headers.authorization = 'Bearer first-key-aaaaaaaa';
+
+      guard.canActivate(createExecutionContext(mockRequest));
+
+      // No early exit on the first match: all three keys are compared.
+      expect(spy).toHaveBeenCalledTimes(3);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   // =========================================================================
   // Bearer token format
   // =========================================================================
