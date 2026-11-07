@@ -76,6 +76,34 @@ describe('RuntimeJwtMinterService', () => {
       expect(body.scopes.can_start_sessions).toBe(false);
       // Registry management stays off unless explicitly opted in.
       expect(body.scopes.can_manage_mode_registry).toBeUndefined();
+      // No token-issuer key configured → no Authorization header.
+      expect((init?.headers as Record<string, string>).authorization).toBeUndefined();
+    });
+
+    it('sends MACP_AUTH_SERVICE_API_KEY as a Bearer token-issuer key when configured', async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ token: 'jwt-k', sender: 'control-plane', expires_in_seconds: 3600 })
+      );
+      const minter = new RuntimeJwtMinterService({
+        ...baseConfig,
+        authServiceApiKey: 'issuer-key-1'
+      } as unknown as AppConfigService);
+
+      await expect(minter.getToken()).resolves.toBe('jwt-k');
+      const [, init] = fetchMock.mock.calls[0];
+      const headers = init?.headers as Record<string, string>;
+      expect(headers.authorization).toBe('Bearer issuer-key-1');
+      expect(headers['content-type']).toBe('application/json');
+    });
+
+    it('surfaces a 401 from an auth-service that rejects the token-issuer key', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'missing or invalid token-issuer key' }, 401));
+      const minter = new RuntimeJwtMinterService({
+        ...baseConfig,
+        authServiceApiKey: 'stale-key'
+      } as unknown as AppConfigService);
+
+      await expect(minter.getToken()).rejects.toThrow('auth-service returned 401');
     });
 
     it('requests can_manage_mode_registry when the operator opts in', async () => {

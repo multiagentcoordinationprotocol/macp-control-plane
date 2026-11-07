@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { AppConfigService } from './app-config.service';
 import packageJson from '../../package.json';
 
@@ -324,6 +325,30 @@ describe('AppConfigService', () => {
       const config = new AppConfigService();
       expect(() => config.onModuleInit()).not.toThrow();
       delete process.env.MACP_AUTH_SERVICE_URL;
+    });
+
+    it('warns (does not throw) in production when MACP_AUTH_SERVICE_URL is set without MACP_AUTH_SERVICE_API_KEY', () => {
+      process.env.MACP_AUTH_SERVICE_URL = 'https://auth.example.com';
+      delete process.env.MACP_AUTH_SERVICE_API_KEY;
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      const config = new AppConfigService();
+      expect(() => config.onModuleInit()).not.toThrow();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('MACP_AUTH_SERVICE_API_KEY is not'));
+      warn.mockRestore();
+      delete process.env.MACP_AUTH_SERVICE_URL;
+    });
+
+    it('reads MACP_AUTH_SERVICE_API_KEY (trimmed) and does not warn when it is set', () => {
+      process.env.MACP_AUTH_SERVICE_URL = 'https://auth.example.com';
+      process.env.MACP_AUTH_SERVICE_API_KEY = ' issuer-key ';
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      const config = new AppConfigService();
+      expect(config.authServiceApiKey).toBe('issuer-key');
+      config.onModuleInit();
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('MACP_AUTH_SERVICE_API_KEY'));
+      warn.mockRestore();
+      delete process.env.MACP_AUTH_SERVICE_URL;
+      delete process.env.MACP_AUTH_SERVICE_API_KEY;
     });
 
     it('should not throw when all production config is valid', () => {
