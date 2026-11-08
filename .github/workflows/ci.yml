@@ -379,3 +379,14 @@ jobs:
           severity: CRITICAL
           ignore-unfixed: true
           exit-code: '1'
+
+  doppler-sync:
+    name: Doppler sync script (offline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck and offline tests
+        run: |
+          shellcheck deploy/doppler-sync.sh
+          python3 deploy/test_doppler_sync.py
