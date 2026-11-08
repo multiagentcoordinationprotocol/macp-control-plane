@@ -402,6 +402,15 @@ async function restartRuntimeGracefully(): Promise<void> {
         `Expected the live macp-runtime 0.7.0 described in the phase brief to already be running.`
     );
   }
+  // Only ever signal the runtime binary itself. With INTEGRATION_RUNTIME=remote pointed at a
+  // container, the listener is Docker's port forwarder, and SIGINT there takes Docker down.
+  const command = execSync(`ps -p ${pid} -o comm=`, { encoding: 'utf8' }).trim();
+  if (path.basename(command) !== 'macp-runtime') {
+    throw new Error(
+      `the listener on 127.0.0.1:${RUNTIME_PORT} is "${command}" (pid ${pid}), not a local macp-runtime ` +
+        `binary; refusing to signal it. This spec restarts a hand-managed runtime, not a container.`
+    );
+  }
   process.kill(pid, 'SIGINT');
   await waitForProcessExit(pid, 20000);
   spawnRuntime();
